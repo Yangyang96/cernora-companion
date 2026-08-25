@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "FileEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_length": {
+          "minimum": 0,
+          "title": "Byte Length",
+          "type": "integer"
+        },
+        "media_type": {
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "media_type",
+        "byte_length",
+        "sha256"
+      ],
+      "title": "FileEntry",
+      "type": "object"
+    }
+  },
+  "$id": "https://cernora.example/schemas/completed-export-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "attempt_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Attempt Id",
+      "type": "string"
+    },
+    "experiment_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Experiment Id",
+      "type": "string"
+    },
+    "exporter_id": {
+      "const": "cernora-reference-exporter",
+      "title": "Exporter Id",
+      "type": "string"
+    },
+    "exporter_version": {
+      "const": "1",
+      "title": "Exporter Version",
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/FileEntry"
+      },
+      "minItems": 1,
+      "title": "Files",
+      "type": "array"
+    },
+    "lifecycle_outcome": {
+      "enum": [
+        "completed",
+        "behavioral-failure",
+        "timed-out",
+        "interrupted",
+        "infrastructure-start-failure",
+        "transient-provider-pre-terminal",
+        "runtime-pre-terminal-failure"
+      ],
+      "title": "Lifecycle Outcome",
+      "type": "string"
+    },
+    "post_candidate_tree_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Post Candidate Tree Sha256",
+      "type": "string"
+    },
+    "pre_candidate_tree_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Pre Candidate Tree Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "cernora.reference.completed-export/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_trial_id": {
+      "minLength": 1,
+      "title": "Source Trial Id",
+      "type": "string"
+    },
+    "test_authority_id": {
+      "enum": [
+        "tiny-calculator-test-runner",
+        "tiny-calculator-v2-test-runner"
+      ],
+      "title": "Test Authority Id",
+      "type": "string"
+    },
+    "test_authority_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Test Authority Sha256",
+      "type": "string"
+    },
+    "test_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Test Plan Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "attempt_id",
+    "lifecycle_outcome",
+    "exporter_id",
+    "exporter_version",
+    "source_trial_id",
+    "test_authority_id",
+    "test_authority_sha256",
+    "test_plan_sha256",
+    "pre_candidate_tree_sha256",
+    "post_candidate_tree_sha256",
+    "files"
+  ],
+  "title": "CompletedExportManifest",
+  "type": "object"
+}

@@ -1,0 +1,1 @@
+{"allowed_paths":["src/calc.py"],"protected_paths":["pyproject.toml","tests"],"schema_version":"cernora.reference.task/v1","task_id":"tiny-calculator-v2","task_version":"2","test_authority_id":"tiny-calculator-v2-test-runner","test_authority_version":"1"}

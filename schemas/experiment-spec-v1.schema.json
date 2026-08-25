@@ -1,0 +1,460 @@
+{
+  "$defs": {
+    "CernoraRelease": {
+      "additionalProperties": false,
+      "properties": {
+        "package_version": {
+          "const": "0.1.2",
+          "title": "Package Version",
+          "type": "string"
+        },
+        "wheel_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Wheel Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package_version",
+        "wheel_sha256"
+      ],
+      "title": "CernoraRelease",
+      "type": "object"
+    },
+    "ContainerContract": {
+      "additionalProperties": false,
+      "properties": {
+        "build_base_image": {
+          "minLength": 1,
+          "title": "Build Base Image",
+          "type": "string"
+        },
+        "image": {
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "platform": {
+          "const": "linux/arm64",
+          "title": "Platform",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image",
+        "build_base_image",
+        "platform"
+      ],
+      "title": "ContainerContract",
+      "type": "object"
+    },
+    "HarnessContract": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "name": {
+          "const": "harbor",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "const": "0.16.1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "configuration_sha256"
+      ],
+      "title": "HarnessContract",
+      "type": "object"
+    },
+    "Limits": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_setup_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Agent Setup Timeout Seconds",
+          "type": "integer"
+        },
+        "cpu_millis": {
+          "exclusiveMinimum": 0,
+          "title": "Cpu Millis",
+          "type": "integer"
+        },
+        "memory_mebibytes": {
+          "exclusiveMinimum": 0,
+          "title": "Memory Mebibytes",
+          "type": "integer"
+        },
+        "timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent_setup_timeout_seconds",
+        "timeout_seconds",
+        "memory_mebibytes",
+        "cpu_millis"
+      ],
+      "title": "Limits",
+      "type": "object"
+    },
+    "NetworkPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "provider_egress": {
+          "const": "required-allowed",
+          "title": "Provider Egress",
+          "type": "string"
+        },
+        "web_search": {
+          "title": "Web Search",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "provider_egress",
+        "web_search"
+      ],
+      "title": "NetworkPolicy",
+      "type": "object"
+    },
+    "ProfileAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "profile_id": {
+          "const": "cernora-reference-coding-v1",
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "const": "1.0.0",
+          "title": "Profile Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "authority_sha256"
+      ],
+      "title": "ProfileAuthority",
+      "type": "object"
+    },
+    "RetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "delay_seconds": {
+          "const": 10,
+          "title": "Delay Seconds",
+          "type": "integer"
+        },
+        "eligible_states": {
+          "items": {
+            "enum": [
+              "infrastructure-start-failure",
+              "transient-provider-pre-terminal"
+            ],
+            "type": "string"
+          },
+          "title": "Eligible States",
+          "type": "array"
+        },
+        "jitter": {
+          "title": "Jitter",
+          "type": "boolean"
+        },
+        "max_retries": {
+          "const": 1,
+          "title": "Max Retries",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_retries",
+        "delay_seconds",
+        "jitter",
+        "eligible_states"
+      ],
+      "title": "RetryPolicy",
+      "type": "object"
+    },
+    "RuntimeContract": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "model": {
+          "const": "gpt-5.6-terra",
+          "title": "Model",
+          "type": "string"
+        },
+        "name": {
+          "const": "codex",
+          "title": "Name",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "const": "medium",
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "version": {
+          "const": "0.148.0",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "configuration_sha256",
+        "model",
+        "reasoning_effort"
+      ],
+      "title": "RuntimeContract",
+      "type": "object"
+    },
+    "TaskContract": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "instruction_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Instruction Sha256",
+          "type": "string"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "protected_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Protected Paths",
+          "type": "array"
+        },
+        "task_id": {
+          "enum": [
+            "tiny-calculator-v1",
+            "tiny-calculator-v2"
+          ],
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_version": {
+          "enum": [
+            "1",
+            "2"
+          ],
+          "title": "Task Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "task_version",
+        "content_sha256",
+        "prompt_sha256",
+        "instruction_sha256",
+        "allowed_paths",
+        "protected_paths"
+      ],
+      "title": "TaskContract",
+      "type": "object"
+    },
+    "TestAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_id": {
+          "enum": [
+            "tiny-calculator-test-runner",
+            "tiny-calculator-v2-test-runner"
+          ],
+          "title": "Authority Id",
+          "type": "string"
+        },
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "authority_version": {
+          "const": "1",
+          "title": "Authority Version",
+          "type": "string"
+        },
+        "command": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "test_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Test Plan Sha256",
+          "type": "string"
+        },
+        "test_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Test Source Sha256",
+          "type": "string"
+        },
+        "working_directory": {
+          "const": "candidate",
+          "title": "Working Directory",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_id",
+        "authority_version",
+        "authority_sha256",
+        "test_plan_sha256",
+        "test_source_sha256",
+        "command",
+        "working_directory"
+      ],
+      "title": "TestAuthority",
+      "type": "object"
+    },
+    "WorkflowVersions": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "const": "cernora-reference-adapter/v1",
+          "title": "Adapter",
+          "type": "string"
+        },
+        "exporter": {
+          "const": "completed-export/v1",
+          "title": "Exporter",
+          "type": "string"
+        },
+        "report": {
+          "const": "cernora-reference-run-report/v1",
+          "title": "Report",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exporter",
+        "adapter",
+        "report"
+      ],
+      "title": "WorkflowVersions",
+      "type": "object"
+    }
+  },
+  "$id": "https://cernora.example/schemas/experiment-spec-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cernora": {
+      "$ref": "#/$defs/CernoraRelease"
+    },
+    "container": {
+      "$ref": "#/$defs/ContainerContract"
+    },
+    "experiment_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Experiment Id",
+      "type": "string"
+    },
+    "harness": {
+      "$ref": "#/$defs/HarnessContract"
+    },
+    "instruction_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Instruction Sha256",
+      "type": "string"
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits"
+    },
+    "network": {
+      "$ref": "#/$defs/NetworkPolicy"
+    },
+    "profile": {
+      "$ref": "#/$defs/ProfileAuthority"
+    },
+    "prompt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Prompt Sha256",
+      "type": "string"
+    },
+    "retry": {
+      "$ref": "#/$defs/RetryPolicy"
+    },
+    "runtime": {
+      "$ref": "#/$defs/RuntimeContract"
+    },
+    "schema_version": {
+      "const": "cernora.reference.experiment-spec/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "task": {
+      "$ref": "#/$defs/TaskContract"
+    },
+    "test_runner": {
+      "$ref": "#/$defs/TestAuthority"
+    },
+    "workflow": {
+      "$ref": "#/$defs/WorkflowVersions"
+    }
+  },
+  "required": [
+    "schema_version",
+    "experiment_id",
+    "task",
+    "container",
+    "harness",
+    "runtime",
+    "prompt_sha256",
+    "instruction_sha256",
+    "limits",
+    "network",
+    "retry",
+    "test_runner",
+    "profile",
+    "workflow",
+    "cernora"
+  ],
+  "title": "ExperimentSpec",
+  "type": "object"
+}

@@ -1,0 +1,1204 @@
+{
+  "$defs": {
+    "AdapterIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "const": "cernora-reference-adapter",
+          "title": "Adapter Id",
+          "type": "string"
+        },
+        "adapter_version": {
+          "const": "1",
+          "title": "Adapter Version",
+          "type": "string"
+        },
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "adapter_version",
+        "authority_sha256"
+      ],
+      "title": "AdapterIdentity",
+      "type": "object"
+    },
+    "AttemptRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_manifest_sha256": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableDigest",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableDigest"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Artifact Manifest Sha256"
+        },
+        "attempt_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "candidate_tree_sha256": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableDigest",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableDigest"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Candidate Tree Sha256"
+        },
+        "completed_export_sha256": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableDigest",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableDigest"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Completed Export Sha256"
+        },
+        "lifecycle_outcome": {
+          "enum": [
+            "completed",
+            "behavioral-failure",
+            "timed-out",
+            "interrupted",
+            "infrastructure-start-failure",
+            "transient-provider-pre-terminal",
+            "runtime-pre-terminal-failure"
+          ],
+          "title": "Lifecycle Outcome",
+          "type": "string"
+        },
+        "lifecycle_reason_code": {
+          "maxLength": 120,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Lifecycle Reason Code",
+          "type": "string"
+        },
+        "ordinal": {
+          "enum": [
+            1,
+            2
+          ],
+          "title": "Ordinal",
+          "type": "integer"
+        },
+        "predecessor_attempt_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Predecessor Attempt Id"
+        },
+        "retry_delay_seconds": {
+          "anyOf": [
+            {
+              "const": 10,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retry Delay Seconds"
+        },
+        "retry_eligible": {
+          "title": "Retry Eligible",
+          "type": "boolean"
+        },
+        "source_trial_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$",
+          "title": "Source Trial Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ordinal",
+        "attempt_id",
+        "predecessor_attempt_id",
+        "retry_delay_seconds",
+        "source_trial_id",
+        "lifecycle_outcome",
+        "lifecycle_reason_code",
+        "retry_eligible",
+        "completed_export_sha256",
+        "candidate_tree_sha256",
+        "artifact_manifest_sha256"
+      ],
+      "title": "AttemptRecord",
+      "type": "object"
+    },
+    "AvailableDigest": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "status": {
+          "const": "available",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "sha256"
+      ],
+      "title": "AvailableDigest",
+      "type": "object"
+    },
+    "AvailableMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "source_receipt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Receipt Sha256",
+          "type": "string"
+        },
+        "status": {
+          "const": "available",
+          "title": "Status",
+          "type": "string"
+        },
+        "unit": {
+          "enum": [
+            "milliseconds",
+            "bytes",
+            "tokens"
+          ],
+          "title": "Unit",
+          "type": "string"
+        },
+        "value": {
+          "minimum": 0,
+          "title": "Value",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "value",
+        "unit",
+        "source_receipt_sha256"
+      ],
+      "title": "AvailableMetric",
+      "type": "object"
+    },
+    "CernoraIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "package_version": {
+          "const": "0.1.2",
+          "title": "Package Version",
+          "type": "string"
+        },
+        "wheel_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Wheel Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package_version",
+        "wheel_sha256"
+      ],
+      "title": "CernoraIdentity",
+      "type": "object"
+    },
+    "ContainerIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "build_base_image": {
+          "minLength": 1,
+          "title": "Build Base Image",
+          "type": "string"
+        },
+        "image": {
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "platform": {
+          "const": "linux/arm64",
+          "title": "Platform",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image",
+        "build_base_image",
+        "platform"
+      ],
+      "title": "ContainerIdentity",
+      "type": "object"
+    },
+    "DiagnosticData": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_time": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableMetric",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableMetric"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Cpu Time"
+        },
+        "duration": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableMetric",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableMetric"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Duration"
+        },
+        "input_tokens": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableMetric",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableMetric"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Input Tokens"
+        },
+        "network_capable_commands": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/NetworkCommandsAvailable",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/NetworkCommandsAvailable"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Network Capable Commands"
+        },
+        "output_tokens": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableMetric",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableMetric"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Output Tokens"
+        },
+        "peak_memory": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableMetric",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableMetric"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Peak Memory"
+        },
+        "runtime_boundary_observation_sha256": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableDigest",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableDigest"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Runtime Boundary Observation Sha256"
+        },
+        "total_tokens": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableMetric",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableMetric"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Total Tokens"
+        }
+      },
+      "required": [
+        "duration",
+        "peak_memory",
+        "cpu_time",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "network_capable_commands",
+        "runtime_boundary_observation_sha256"
+      ],
+      "title": "DiagnosticData",
+      "type": "object"
+    },
+    "EvaluationOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "behavioral_decision": {
+          "enum": [
+            "pass",
+            "fail",
+            "inconclusive"
+          ],
+          "title": "Behavioral Decision",
+          "type": "string"
+        },
+        "gate_decision": {
+          "enum": [
+            "pass",
+            "fail",
+            "inconclusive"
+          ],
+          "title": "Gate Decision",
+          "type": "string"
+        },
+        "strict_reload": {
+          "discriminator": {
+            "mapping": {
+              "failed": "#/$defs/StrictReloadUnavailable",
+              "not-performed": "#/$defs/StrictReloadUnavailable",
+              "verified": "#/$defs/StrictReloadVerified"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StrictReloadVerified"
+            },
+            {
+              "$ref": "#/$defs/StrictReloadUnavailable"
+            }
+          ],
+          "title": "Strict Reload"
+        },
+        "validity": {
+          "enum": [
+            "valid",
+            "invalid",
+            "unavailable"
+          ],
+          "title": "Validity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "validity",
+        "behavioral_decision",
+        "gate_decision",
+        "strict_reload"
+      ],
+      "title": "EvaluationOutcome",
+      "type": "object"
+    },
+    "HarnessIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "name": {
+          "const": "harbor",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "const": "0.16.1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "configuration_sha256"
+      ],
+      "title": "HarnessIdentity",
+      "type": "object"
+    },
+    "MissingData": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "enum": [
+            "not-collected",
+            "not-emitted",
+            "not-verifiable",
+            "not-applicable",
+            "attempt-not-exported",
+            "evaluation-not-performed"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "const": "missing",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "title": "MissingData",
+      "type": "object"
+    },
+    "ModelIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "const": "gpt-5.6-terra",
+          "title": "Name",
+          "type": "string"
+        },
+        "provider_egress": {
+          "const": "required-allowed",
+          "title": "Provider Egress",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "const": "medium",
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "web_search": {
+          "title": "Web Search",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "reasoning_effort",
+        "web_search",
+        "provider_egress"
+      ],
+      "title": "ModelIdentity",
+      "type": "object"
+    },
+    "NetworkCommandObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "enum": [
+            "curl",
+            "wget"
+          ],
+          "title": "Command",
+          "type": "string"
+        },
+        "occurrences": {
+          "exclusiveMinimum": 0,
+          "title": "Occurrences",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command",
+        "occurrences"
+      ],
+      "title": "NetworkCommandObservation",
+      "type": "object"
+    },
+    "NetworkCommandsAvailable": {
+      "additionalProperties": false,
+      "properties": {
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/NetworkCommandObservation"
+          },
+          "title": "Observations",
+          "type": "array"
+        },
+        "source_receipt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Receipt Sha256",
+          "type": "string"
+        },
+        "status": {
+          "const": "available",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "source_receipt_sha256",
+        "observations"
+      ],
+      "title": "NetworkCommandsAvailable",
+      "type": "object"
+    },
+    "OfflineCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "purpose": {
+          "enum": [
+            "adapt",
+            "evaluate",
+            "strict-reload"
+          ],
+          "title": "Purpose",
+          "type": "string"
+        },
+        "working_directory": {
+          "const": ".",
+          "title": "Working Directory",
+          "type": "string"
+        }
+      },
+      "required": [
+        "purpose",
+        "working_directory",
+        "argv"
+      ],
+      "title": "OfflineCommand",
+      "type": "object"
+    },
+    "OfflineInput": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "title": "OfflineInput",
+      "type": "object"
+    },
+    "OfflineRebuildAvailable": {
+      "additionalProperties": false,
+      "properties": {
+        "adapted_bundle": {
+          "$ref": "#/$defs/OfflineInput"
+        },
+        "commands": {
+          "items": {
+            "$ref": "#/$defs/OfflineCommand"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Commands",
+          "type": "array"
+        },
+        "completed_export": {
+          "$ref": "#/$defs/OfflineInput"
+        },
+        "evaluation_output": {
+          "$ref": "#/$defs/OfflineInput"
+        },
+        "experiment_spec": {
+          "$ref": "#/$defs/OfflineInput"
+        },
+        "status": {
+          "const": "available",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "experiment_spec",
+        "completed_export",
+        "adapted_bundle",
+        "evaluation_output",
+        "commands"
+      ],
+      "title": "OfflineRebuildAvailable",
+      "type": "object"
+    },
+    "OfflineRebuildUnavailable": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "enum": [
+            "not-collected",
+            "not-emitted",
+            "not-verifiable",
+            "not-applicable",
+            "attempt-not-exported",
+            "evaluation-not-performed"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "const": "missing",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "title": "OfflineRebuildUnavailable",
+      "type": "object"
+    },
+    "ProfileIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "profile_id": {
+          "const": "cernora-reference-coding-v1",
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "const": "1.0.0",
+          "title": "Profile Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "authority_sha256"
+      ],
+      "title": "ProfileIdentity",
+      "type": "object"
+    },
+    "ReportComponents": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/AdapterIdentity"
+        },
+        "cernora": {
+          "$ref": "#/$defs/CernoraIdentity"
+        },
+        "container": {
+          "$ref": "#/$defs/ContainerIdentity"
+        },
+        "harness": {
+          "$ref": "#/$defs/HarnessIdentity"
+        },
+        "model": {
+          "$ref": "#/$defs/ModelIdentity"
+        },
+        "profile": {
+          "$ref": "#/$defs/ProfileIdentity"
+        },
+        "runtime": {
+          "$ref": "#/$defs/RuntimeIdentity"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskIdentity"
+        }
+      },
+      "required": [
+        "task",
+        "container",
+        "harness",
+        "runtime",
+        "model",
+        "cernora",
+        "profile",
+        "adapter"
+      ],
+      "title": "ReportComponents",
+      "type": "object"
+    },
+    "RuntimeIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "name": {
+          "const": "codex",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "const": "0.148.0",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "configuration_sha256"
+      ],
+      "title": "RuntimeIdentity",
+      "type": "object"
+    },
+    "StrictReloadUnavailable": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "enum": [
+            "not-collected",
+            "not-emitted",
+            "not-verifiable",
+            "not-applicable",
+            "attempt-not-exported",
+            "evaluation-not-performed"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "failed",
+            "not-performed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "title": "StrictReloadUnavailable",
+      "type": "object"
+    },
+    "StrictReloadVerified": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$",
+          "title": "Bundle Id",
+          "type": "string"
+        },
+        "decision_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "evaluation_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$",
+          "title": "Evaluation Id",
+          "type": "string"
+        },
+        "evaluation_input_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evaluation Input Sha256",
+          "type": "string"
+        },
+        "evaluation_receipt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evaluation Receipt Sha256",
+          "type": "string"
+        },
+        "evidence_bundle_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Bundle Sha256",
+          "type": "string"
+        },
+        "evidence_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$",
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "gate_decision_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Gate Decision Sha256",
+          "type": "string"
+        },
+        "result_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Result Identity Sha256",
+          "type": "string"
+        },
+        "score_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]*$",
+          "title": "Score Id",
+          "type": "string"
+        },
+        "status": {
+          "const": "verified",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "result_identity_sha256",
+        "bundle_id",
+        "evidence_bundle_sha256",
+        "evaluation_input_sha256",
+        "evaluation_id",
+        "evidence_id",
+        "score_id",
+        "decision_id",
+        "gate_decision_sha256",
+        "evaluation_receipt_sha256"
+      ],
+      "title": "StrictReloadVerified",
+      "type": "object"
+    },
+    "TaskIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "instruction_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Instruction Sha256",
+          "type": "string"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "task_id": {
+          "enum": [
+            "tiny-calculator-v1",
+            "tiny-calculator-v2"
+          ],
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_version": {
+          "enum": [
+            "1",
+            "2"
+          ],
+          "title": "Task Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "task_version",
+        "content_sha256",
+        "prompt_sha256",
+        "instruction_sha256"
+      ],
+      "title": "TaskIdentity",
+      "type": "object"
+    },
+    "TestRunnerEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_id": {
+          "enum": [
+            "tiny-calculator-test-runner",
+            "tiny-calculator-v2-test-runner"
+          ],
+          "title": "Authority Id",
+          "type": "string"
+        },
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "authority_version": {
+          "const": "1",
+          "title": "Authority Version",
+          "type": "string"
+        },
+        "process_receipt_sha256": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableDigest",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableDigest"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Process Receipt Sha256"
+        },
+        "resource_receipt_sha256": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableDigest",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableDigest"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Resource Receipt Sha256"
+        },
+        "test_plan_sha256": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableDigest",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableDigest"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Test Plan Sha256"
+        },
+        "test_results_sha256": {
+          "discriminator": {
+            "mapping": {
+              "available": "#/$defs/AvailableDigest",
+              "missing": "#/$defs/MissingData"
+            },
+            "propertyName": "status"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AvailableDigest"
+            },
+            {
+              "$ref": "#/$defs/MissingData"
+            }
+          ],
+          "title": "Test Results Sha256"
+        }
+      },
+      "required": [
+        "authority_id",
+        "authority_version",
+        "authority_sha256",
+        "test_plan_sha256",
+        "test_results_sha256",
+        "process_receipt_sha256",
+        "resource_receipt_sha256"
+      ],
+      "title": "TestRunnerEvidence",
+      "type": "object"
+    }
+  },
+  "$id": "https://cernora.example/schemas/run-report-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "attempts": {
+      "items": {
+        "$ref": "#/$defs/AttemptRecord"
+      },
+      "maxItems": 2,
+      "minItems": 1,
+      "title": "Attempts",
+      "type": "array"
+    },
+    "components": {
+      "$ref": "#/$defs/ReportComponents"
+    },
+    "diagnostics": {
+      "$ref": "#/$defs/DiagnosticData"
+    },
+    "evaluation": {
+      "$ref": "#/$defs/EvaluationOutcome"
+    },
+    "experiment_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Experiment Id",
+      "type": "string"
+    },
+    "offline_rebuild": {
+      "discriminator": {
+        "mapping": {
+          "available": "#/$defs/OfflineRebuildAvailable",
+          "missing": "#/$defs/OfflineRebuildUnavailable"
+        },
+        "propertyName": "status"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/OfflineRebuildAvailable"
+        },
+        {
+          "$ref": "#/$defs/OfflineRebuildUnavailable"
+        }
+      ],
+      "title": "Offline Rebuild"
+    },
+    "report_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Report Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "cernora.reference.run-report/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_attempt_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Selected Attempt Id",
+      "type": "string"
+    },
+    "test_runner": {
+      "$ref": "#/$defs/TestRunnerEvidence"
+    }
+  },
+  "required": [
+    "schema_version",
+    "report_id",
+    "experiment_id",
+    "components",
+    "attempts",
+    "selected_attempt_id",
+    "evaluation",
+    "test_runner",
+    "diagnostics",
+    "offline_rebuild"
+  ],
+  "title": "RunReport",
+  "type": "object"
+}

@@ -1,0 +1,20 @@
+schema_version = "1.3"
+
+[metadata]
+author_name = "Cernora contributors"
+author_email = "noreply@example.invalid"
+difficulty = "medium"
+category = "software-engineering"
+tags = ["python", "repair", "parser", "deterministic"]
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 300.0
+
+[environment]
+build_timeout_sec = 600.0
+docker_image = "sha256:0381f9feca7380640170e0b10a7b927263bed11ba04664290830616d8d598187"
+workdir = "/workspace"
+network_mode = "public"

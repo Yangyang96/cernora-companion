@@ -1,0 +1,29 @@
+# Private-by-default runtime state and credentials.
+.env
+.venv/
+.python-version
+auth.json
+**/auth.json
+.codex/
+attempts/
+exports/
+staging/
+reports/private/
+linux-wheelhouse/
+task_plan.md
+findings.md
+progress.md
+
+# Python and tool output.
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Local editor and OS state.
+.DS_Store
+*.swp
