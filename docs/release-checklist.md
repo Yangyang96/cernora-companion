@@ -78,13 +78,38 @@ reviewable evidence. Running a subset is not publication approval.
       portable trees passed credential, personal-path, Runtime-home, proxy-endpoint and undeclared
       file checks.
 
+## Priority 4 Milestone 2 Batch Summary local candidate
+
+- [x] Companion `0.2.1` installs with the exact local Cernora Core `0.1.3` wheel in an isolated,
+      wheel-only environment; neither artifact is described as publicly released.
+- [x] `experiment summarize PACK --output DIR` accepts only a strictly verified completed M1 Pack
+      and a new output directory, then strictly reloads the published Core Batch Summary.
+- [x] Normalization preserves the frozen RunPlan, ordered Trials, Attempt lineage, selected
+      Evaluation Packages, lifecycle receipts, and authoritative available resource receipts.
+- [x] Missing, conflicting, malformed, identity-mismatched, tampered, or concurrently changed Pack
+      evidence fails closed without publishing a partial summary.
+- [x] Conformance covers all four exhaustive outcomes: `pass`, `behavioral_fail`,
+      `evaluation_invalid`, and `infrastructure_unavailable`; invalid Evaluation evidence is not
+      relabeled as infrastructure failure.
+- [x] Retry Attempts remain diagnostics within one Trial and never become independent Trials.
+- [x] Three summaries from the same Pack in distinct new directories have byte-identical
+      authoritative bytes and strictly reload to the same identities.
+- [x] The retained native M1 Pack normalizes to exactly 5 `pass`, 0 `behavioral_fail`,
+      6 `evaluation_invalid`, and 1 `infrastructure_unavailable` Trial.
+- [x] M2 publishes no comparison, delta, interval, pass-at-k, `pass^k`, ranking, promotion,
+      improvement decision, or winner.
+- [x] The final local candidate passes full tests, Ruff, format, strict mypy, build, release
+      preflight, wheel-only acceptance, secret scan, and personal-path scan without a push, tag,
+      upload, or public Evidence publication.
+
 ## Commands
 
 Run from a clean independent checkout:
 
 ```sh
-uv sync --frozen --all-groups
-uv run python scripts/verify_public_wheel.py
+# First place the accepted Core 0.1.3 wheel in ../cernora/dist; its SHA-256 must be
+# 53276a35b137e4997ea5cdf843e2d23323583c4b34ac87a9cd997a08d44e6704.
+uv sync --frozen --all-groups --offline
 uv run pytest -q
 uv run ruff check .
 uv run ruff format --check .
@@ -92,6 +117,18 @@ uv run mypy
 uv run python scripts/verify_release.py
 git diff --check
 ```
+
+After building the Companion candidate wheel, run `scripts/verify_batch_wheels.py` with the exact
+Core wheel, Companion wheel, and retained accepted Pack. The verifier installs only those project
+wheels, tests both supported Python minors, strictly reloads three summaries per minor, checks the
+5/0/6/1 outcomes, denies Python network sockets while summarizing, and requires byte-identical
+authoritative trees. Release preflight reports this wheel-only gate as a separate requirement; its
+source-level result does not claim wheel-only acceptance.
+
+The historical `scripts/verify_public_wheel.py` and checked-in remote workflow remain the accepted
+`v0.2.0` checks for the public Core `0.1.2` boundary; they are not M2 candidate gates. Remote M2 CI
+activation is deferred until a separately authorized publication step makes Core `0.1.3`
+available without weakening the wheel-only boundary.
 
 The authenticated tracer remains a separate manual command and is not part of CI:
 

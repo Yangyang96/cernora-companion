@@ -6,10 +6,21 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pytest
+from cernora import reload_batch_summary
 from pydantic import ValidationError
 
 from cernora_reference_workflow.attempt_record import publish_preterminal_attempt
-from cernora_reference_workflow.common import ContractError, load_json_file
+from cernora_reference_workflow.batch_summary import (
+    normalize_execution_pack,
+    summarize_execution_pack,
+)
+from cernora_reference_workflow.cli import main
+from cernora_reference_workflow.common import (
+    ContractError,
+    canonical_json_bytes,
+    closed_regular_tree,
+    load_json_file,
+)
 from cernora_reference_workflow.execution import verify_execution_pack
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
 from cernora_reference_workflow.freeze import AttemptCapture, freeze_attempt
@@ -243,7 +254,9 @@ class _LifecycleMatrixExecutor:
             )
 
 
-def test_public_repeat_runner_closes_ordered_lifecycle_matrix_and_pack(tmp_path: Path) -> None:
+def test_public_repeat_runner_closes_ordered_lifecycle_matrix_and_pack(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     plan = materialize_run_plan(_plan_payload())
     executor = _LifecycleMatrixExecutor()
     outcome = run_repeat(
@@ -274,6 +287,51 @@ def test_public_repeat_runner_closes_ordered_lifecycle_matrix_and_pack(tmp_path:
     assert outcome.pack_root is not None
     verify_execution_pack(outcome.pack_root)
 
+    batch_input = normalize_execution_pack(outcome.pack_root)
+    assert batch_input.planned_trial_count == 12
+    assert batch_input.attempt_count == 15
+    assert all(
+        attempt.attempt_id != attempt.source_attempt_id
+        for trial in batch_input.trials
+        for attempt in trial.attempts
+    )
+    retry_trials = tuple(trial for trial in batch_input.trials if len(trial.attempts) == 2)
+    assert len(retry_trials) == 3
+    assert all(
+        trial.attempts[1].predecessor_attempt_id == trial.attempts[0].attempt_id
+        for trial in retry_trials
+    )
+
+    summary_trees: list[dict[str, bytes]] = []
+    summaries = []
+    for index in range(3):
+        summary_root = tmp_path / f"summary-{index}"
+        summaries.append(summarize_execution_pack(outcome.pack_root, summary_root))
+        summary_trees.append(
+            {name: path.read_bytes() for name, path in closed_regular_tree(summary_root).items()}
+        )
+    assert summaries[0] == summaries[1] == summaries[2]
+    assert summary_trees[0] == summary_trees[1] == summary_trees[2]
+    assert summaries[0].overall.outcomes.model_dump() == {
+        "passed": 3,
+        "behavioral_failed": 3,
+        "evaluation_invalid": 3,
+        "infrastructure_unavailable": 3,
+    }
+    assert summaries[0].attempt_diagnostics.retry_attempts == 3
+    assert reload_batch_summary(tmp_path / "summary-0") == summaries[0]
+    summary_payload = canonical_json_bytes(summaries[0].model_dump(mode="json"))
+    markdown = (tmp_path / "summary-0/batch-summary.md").read_bytes()
+    for forbidden in (b"winner", b"delta", b"confidence", b"pass@k", b"improvement"):
+        assert forbidden not in summary_payload.lower()
+        assert forbidden not in markdown.lower()
+
+    cli_output = tmp_path / "cli-summary"
+    assert main(["summarize", str(outcome.pack_root), "--output", str(cli_output)]) == 0
+    assert '"command":"summarize"' in capsys.readouterr().out
+    assert main(["summarize", str(outcome.pack_root), "--output", str(cli_output)]) == 2
+    assert "output must be new" in capsys.readouterr().err
+
     indexed_file = next(
         path
         for path in outcome.pack_root.rglob("*.json")
@@ -282,6 +340,11 @@ def test_public_repeat_runner_closes_ordered_lifecycle_matrix_and_pack(tmp_path:
     indexed_file.write_bytes(indexed_file.read_bytes() + b"\n")
     with pytest.raises(ContractError, match="digest|length"):
         verify_execution_pack(outcome.pack_root)
+    assert (
+        main(["summarize", str(outcome.pack_root), "--output", str(tmp_path / "corrupt-summary")])
+        == 3
+    )
+    assert "failed" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("mutation", ("missing", "duplicate"))

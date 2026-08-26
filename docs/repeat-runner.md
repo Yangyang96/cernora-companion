@@ -1,9 +1,10 @@
-# Companion Repeat Runner (Priority 4 Milestone 1)
+# Companion Repeat Runner and Batch Summary (Priority 4 Milestones 1–2)
 
-The Companion Repeat Runner is the `cernora-reference-workflow==0.2.0` orchestration boundary. It
-is not Cernora Core, a generic Runtime connector, or a native batch service. Its only live adapter
-is the source-tree-only qualified Harbor `0.16.1` / Codex `0.148.0` connector already used by this
-repository.
+The Companion Repeat Runner is the frozen `cernora-reference-workflow==0.2.0` Milestone 1
+orchestration boundary. It is not Cernora Core, a generic Runtime connector, or a native batch
+service. Its only live adapter is the source-tree-only qualified Harbor `0.16.1` / Codex `0.148.0`
+connector already used by this repository. Milestone 2 is an additive offline consumer; it does
+not reinterpret or rewrite the M1 contracts described below.
 
 ## Frozen RunPlan and preflight
 
@@ -86,12 +87,48 @@ M1 diagnostics contain lifecycle and completeness facts only. There is no aggreg
 quality rate, confidence claim, configuration ranking, winner selection, or comparative quality
 conclusion.
 
+## Milestone 2 strict batch normalization
+
+Companion `0.2.1` and Cernora Core `0.1.3` are matching local release candidates; neither version
+has been publicly released. Companion adds only this offline command:
+
+```sh
+uv run experiment summarize /absolute/path/to/execution.pack \
+  --output /absolute/path/to/new-summary
+```
+
+The input must be a verified, completed M1 Pack and the output directory must be new. Companion
+strictly reloads the Pack, projects its frozen RunPlan and ordered Trials, preserves each Trial's
+Attempt lineage, binds selected Evaluation Packages or lifecycle receipts, and copies only
+authoritative available resource receipts. It verifies the Pack again after reading the projected
+artifacts. Missing, conflicting, malformed, identity-mismatched, or concurrently changed inputs
+fail closed.
+
+Companion materializes a strict Core `BatchInput`; Core owns classification, validity-first
+aggregation, atomic publication, and strict reload of the resulting `BatchSummary`. The four
+exhaustive Trial outcomes are:
+
+- `pass`: selected evidence is valid and its behavioral decision passes.
+- `behavioral_fail`: selected evidence is valid and its behavioral decision fails.
+- `evaluation_invalid`: an Evaluation Package is present but invalid or inconclusive.
+- `infrastructure_unavailable`: no Evaluation Package is available and the selected lifecycle
+  evidence records an unavailable execution outcome.
+
+An invalid Evaluation Package is never downgraded to `infrastructure_unavailable`. Earlier retry
+Attempts remain diagnostic members of the same Trial; they do not increase the planned or observed
+Trial count. Running `summarize` repeatedly from the same Pack into distinct new directories must
+produce byte-identical authoritative summary bytes and the same content identities.
+
+M2 has no comparison, delta, interval, pass-at-k, `pass^k`, ranking, promotion, improvement
+decision, or winner. Those concepts are outside the `0.2.1` contract. See `batch-summary.md` for
+the detailed boundary.
+
 ## Exit status
 
-- `0`: verification, completed run/resume, or rebuild succeeded.
+- `0`: verification, completed run/resume, rebuild, or batch summarization succeeded.
 - `2`: command usage is invalid, an output is not new, or `--accept-plan-id` does not match.
-- `3`: strict validation or execution failed, or run/resume returned a non-completed status such
-  as `stopped` or `budget-exhausted`.
+- `3`: strict validation, normalization, or execution failed, or run/resume returned a
+  non-completed status such as `stopped` or `budget-exhausted`.
 
 The deterministic release gate runs the public offline 2 Cases × 2 Configurations × 3 repetitions
 conformance matrix, including success, behavioral failure, timeout, eligible retry followed by

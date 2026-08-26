@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from pathlib import Path
 from generate_license_inventory import build_inventory
 from generate_schemas import SchemaModel, schema_bytes
 from generate_task_authorities import TASKS, build_task_plans
+from verify_batch_wheels import EXPECTED_CORE_WHEEL_SHA256
 
 from cernora_reference_workflow.common import canonical_json_bytes, closed_regular_tree
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
@@ -32,26 +34,50 @@ from cernora_reference_workflow.spec_builder import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _verify_m1_release_surface() -> None:
+def _verify_m2_release_surface() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    if project["project"]["version"] != "0.2.0":
-        raise RuntimeError("Priority 4 M1 requires companion version 0.2.0")
+    if project["project"]["version"] != "0.2.1":
+        raise RuntimeError("Priority 4 M2 requires companion version 0.2.1")
     if project["project"].get("scripts", {}).get("experiment") != (
         "cernora_reference_workflow.cli:main"
     ):
-        raise RuntimeError("Priority 4 M1 experiment CLI entry point is missing")
+        raise RuntimeError("Priority 4 M2 experiment CLI entry point is missing")
+
+    dependencies = project["project"].get("dependencies", [])
+    if "cernora==0.1.3" not in dependencies:
+        raise RuntimeError("Priority 4 M2 requires the exact Core 0.1.3 candidate")
 
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     local = [item for item in lock["package"] if item["name"] == "cernora-reference-workflow"]
-    if len(local) != 1 or local[0]["version"] != "0.2.0":
-        raise RuntimeError("uv.lock does not bind companion version 0.2.0")
+    if len(local) != 1 or local[0]["version"] != "0.2.1":
+        raise RuntimeError("uv.lock does not bind companion version 0.2.1")
+    core = [item for item in lock["package"] if item["name"] == "cernora"]
+    if len(core) != 1 or core[0]["version"] != "0.1.3":
+        raise RuntimeError("uv.lock does not bind Core version 0.1.3")
+    source = core[0].get("source")
+    if source != {"registry": "../cernora/dist"}:
+        raise RuntimeError("uv.lock must use the stable sibling Core candidate wheelhouse")
+    wheels = core[0].get("wheels")
+    if wheels != [{"path": "cernora-0.1.3-py3-none-any.whl"}]:
+        raise RuntimeError("uv.lock does not bind the Core 0.1.3 wheel filename")
+    core_wheel = ROOT.parent / "cernora/dist/cernora-0.1.3-py3-none-any.whl"
+    if not core_wheel.is_file() or core_wheel.is_symlink():
+        raise RuntimeError("the accepted sibling Core 0.1.3 wheel is unavailable")
+    with core_wheel.open("rb") as handle:
+        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    if digest != EXPECTED_CORE_WHEEL_SHA256:
+        raise RuntimeError("the sibling Core 0.1.3 wheel digest is not accepted")
     required = (
+        ROOT / "docs/batch-summary.md",
         ROOT / "docs/repeat-runner.md",
         ROOT / "schemas/run-plan-v1.schema.json",
+        ROOT / "scripts/verify_batch_wheels.py",
+        ROOT / "src/cernora_reference_workflow/batch_summary.py",
         ROOT / "tests/conformance/test_repeat_runner.py",
+        ROOT / "tests/unit/test_batch_summary.py",
     )
     if any(not path.is_file() or path.is_symlink() or not path.read_bytes() for path in required):
-        raise RuntimeError("Priority 4 M1 release surface is incomplete")
+        raise RuntimeError("Priority 4 M2 release surface is incomplete")
 
 
 def _run(command: list[str]) -> None:
@@ -198,7 +224,7 @@ def main() -> int:
     files = _repository_files()
     _require_secret_free_files(files)
     _verify_no_cernora_internal_imports(files)
-    _verify_m1_release_surface()
+    _verify_m2_release_surface()
     _verify_generated_artifacts()
     _run([sys.executable, "-m", "pytest", "-q"])
     _run([sys.executable, "-m", "ruff", "check", "."])
@@ -211,7 +237,9 @@ def main() -> int:
                 "artifact_build": "passed",
                 "license_inventory": "passed",
                 "quality_gates": "passed",
-                "repeat_runner_m1": "passed",
+                "batch_summary_m2_source": "passed",
+                "batch_summary_m2_wheel_only": "separate-required",
+                "repeat_runner_m1": "preserved",
                 "repository_secret_scan": "passed",
                 "scope": "offline-private-publication-gate",
             },

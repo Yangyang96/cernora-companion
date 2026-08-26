@@ -1,4 +1,4 @@
-"""Command-line surface for the Priority 4 Milestone 1 Repeat Runner."""
+"""Command-line surface for the Priority 4 Repeat Runner and batch normalizer."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from cernora_reference_workflow.batch_summary import summarize_execution_pack
 from cernora_reference_workflow.common import ContractError, canonical_json_bytes
 from cernora_reference_workflow.execution import rebuild_execution_pack
 from cernora_reference_workflow.live_attempt import execute_qualified_live_attempt
@@ -38,6 +39,11 @@ def _parser() -> argparse.ArgumentParser:
     rebuild = commands.add_parser("rebuild", help="offline-rebuild one Execution Pack")
     rebuild.add_argument("execution_pack", type=Path)
     rebuild.add_argument("--output", type=Path, required=True)
+    summarize = commands.add_parser(
+        "summarize", help="normalize one Execution Pack and publish a Core Batch Summary"
+    )
+    summarize.add_argument("execution_pack", type=Path)
+    summarize.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -143,6 +149,21 @@ def _dispatch(args: argparse.Namespace) -> int:
                 "output": str(args.output),
                 "run_plan_id": manifest.run_plan_id,
                 "status": "completed",
+            }
+        )
+        return 0
+    if args.command == "summarize":
+        _require_new_directory(args.output)
+        summary = summarize_execution_pack(args.execution_pack, args.output)
+        _emit(
+            {
+                "batch_input_id": summary.batch_input_id,
+                "command": "summarize",
+                "execution_id": summary.execution_id,
+                "output": str(args.output),
+                "run_plan_id": summary.run_plan_id,
+                "status": "completed",
+                "summary_id": summary.summary_id,
             }
         )
         return 0

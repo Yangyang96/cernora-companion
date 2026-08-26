@@ -144,19 +144,18 @@ wheels = [
 
 [[package]]
 name = "cernora"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.3"
+source = { registry = "../cernora/dist" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/98/15/7b753f84cd7ce9543818d61cf25cd4061be865096f05edf38a213841d33d/cernora-0.1.2.tar.gz", hash = "sha256:f260c090416939762e24536f3282da2468951fefb22fcc25e8244650ae4b885f", size = 311564, upload-time = "2026-08-21T06:20:28.619Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/2c/80ff90002295069f4d605782f15e7d542e87e59382af5404c75cba3855b1/cernora-0.1.2-py3-none-any.whl", hash = "sha256:01de19a484172cc8e3940792b90de04683da600320d154fff18b0a717738a2df", size = 143370, upload-time = "2026-08-21T06:20:27.262Z" },
+    { path = "cernora-0.1.3-py3-none-any.whl" },
 ]
 
 [[package]]
 name = "cernora-reference-workflow"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "cernora" },
@@ -182,7 +181,7 @@ live = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cernora", specifier = "==0.1.2" },
+    { name = "cernora", specifier = "==0.1.3" },
     { name = "harbor", marker = "extra == 'live'", specifier = "==0.16.1" },
     { name = "jsonschema", specifier = "==4.25.1" },
     { name = "pydantic", specifier = "==2.11.7" },

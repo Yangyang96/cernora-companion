@@ -23,6 +23,28 @@ identity; changing one requires a new frozen experiment and compatibility record
 The Cernora package-root SDK is the only Cernora programming interface used by the companion.
 Cernora internal modules and source-checkout imports are not compatible inputs.
 
+## Priority 4 release-candidate layers
+
+Priority 4 preserves the Priority 3 authority above and adds versioned layers without changing
+the meaning or identity of existing artifacts.
+
+| Layer | Companion | Cernora Core | Status and boundary |
+| --- | --- | --- | --- |
+| M1 Repeat Runner | `0.2.0` | public wheel `0.1.2` | Frozen historical execution, Pack, and rebuild contract |
+| M2 Batch Summary | local candidate `0.2.1` | local candidate `0.1.3` | Additive strict Pack consumer; not publicly released |
+
+The M2 normalizer accepts one completed M1 Execution Pack, preserves its frozen RunPlan,
+Execution, Trial, Attempt, Evaluation, and lifecycle identities as source authority, and creates a
+strict Core `BatchInput`. Core alone owns the validity-first `BatchSummary` classification and
+atomic publication contract. Repeated normalization of the same Pack must produce byte-identical
+authoritative summary bytes.
+
+M2's exhaustive Trial outcomes are `pass`, `behavioral_fail`, `evaluation_invalid`, and
+`infrastructure_unavailable`. A present but invalid Evaluation Package remains
+`evaluation_invalid`; retry Attempts remain diagnostic lineage rather than independent Trials.
+The M2 surface contains no comparison, delta, interval, pass-at-k, `pass^k`, ranking,
+promotion, improvement decision, or winner.
+
 ## Report evolution
 
 `run-report/v1` is a companion artifact, not a Cernora import format. Readers must reject unknown
