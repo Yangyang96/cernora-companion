@@ -120,7 +120,7 @@ reviewable evidence. Running a subset is not publication approval.
       the same Comparison and Summary identities with sockets denied.
 - [x] Companion reports valid Core conclusions honestly, including `not_comparable`, `uncertain`,
       `no_change`, `mixed`, and `regressed`, without winner, ranking, or promotion semantics.
-- [ ] Full tests, Ruff, format, strict mypy, build, release preflight, wheel-only acceptance,
+- [x] Full tests, Ruff, format, strict mypy, build, release preflight, wheel-only acceptance,
       secret scan, personal-path scan, and independent review pass without push, tag, upload, or
       public Evidence publication.
 
