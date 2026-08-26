@@ -54,6 +54,30 @@ reviewable evidence. Running a subset is not publication approval.
 - [x] Observed provider egress and disabled web search are documented without claiming network
       isolation.
 
+## Priority 4 Milestone 1 Companion Repeat Runner
+
+- [x] A deterministic offline conformance run closes the ordered 2 Cases × 2 Configurations × 3
+      repetitions matrix as exactly 12 Trials.
+- [x] Public conformance covers evaluated success, behavioral failure, timeout, retry-eligible then
+      terminal non-retryable/unavailable, missing or duplicate matrix rejection, digest tampering,
+      crash adoption, and hard Attempt-budget exhaustion.
+- [x] RunPlan identity binds the embedded ExperimentSpecs, ordered matrix, repetitions, connector,
+      retry scope, fixed concurrency, and Attempt/wall budgets.
+- [x] Active records, Attempt artifacts, Trial results/manifests, and hash-chained checkpoints are
+      append-only; ambiguous active Attempts fail closed on resume.
+- [x] A completed execution produces a closed sidecar Execution Pack, and offline-only rebuild
+      reproduces verified bytes without credentials, network, Runtime, Docker, Git, or shell.
+- [x] Diagnostics state lifecycle and completeness only; M1 publishes no aggregate quality rate,
+      ranking, winner, or comparative conclusion.
+- [x] A native 12-Trial live run has been observed with the one qualified source-tree Harbor/Codex
+      connector on macOS Apple Silicon. This is a manual acceptance item, not a CI claim.
+- [x] The accepted Execution retained a graceful `stopped` checkpoint and resumed the same identity
+      to `completed`; it contains 11 strictly rebuildable Evaluations and one naturally occurring
+      non-retryable `runtime-pre-terminal-failure` with unavailable evaluation status.
+- [x] The completed Pack strictly reloaded, rebuilt the Execution byte-for-byte, and all three
+      portable trees passed credential, personal-path, Runtime-home, proxy-endpoint and undeclared
+      file checks.
+
 ## Commands
 
 Run from a clean independent checkout:

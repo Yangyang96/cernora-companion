@@ -5,6 +5,7 @@
 auth.json
 **/auth.json
 .codex/
+.agent/
 attempts/
 exports/
 staging/

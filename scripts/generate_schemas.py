@@ -8,9 +8,10 @@ from pathlib import Path
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
 from cernora_reference_workflow.export import CompletedExportManifest
 from cernora_reference_workflow.report import RunReport
+from cernora_reference_workflow.run_plan import RunPlan
 
 ROOT = Path(__file__).resolve().parents[1]
-SchemaModel = type[ExperimentSpec] | type[CompletedExportManifest] | type[RunReport]
+SchemaModel = type[ExperimentSpec] | type[CompletedExportManifest] | type[RunReport] | type[RunPlan]
 
 
 def schema_bytes(name: str, model: SchemaModel) -> bytes:
@@ -32,6 +33,7 @@ def main() -> int:
     write_schema("experiment-spec-v1.schema.json", ExperimentSpec)
     write_schema("completed-export-v1.schema.json", CompletedExportManifest)
     write_schema("run-report-v1.schema.json", RunReport)
+    write_schema("run-plan-v1.schema.json", RunPlan)
     return 0
 
 

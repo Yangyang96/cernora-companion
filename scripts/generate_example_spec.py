@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from cernora_reference_workflow.native_acceptance import build_m1_native_acceptance_plan
 from cernora_reference_workflow.spec_builder import (
     TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
     build_tiny_calculator_spec,
@@ -31,6 +32,16 @@ def main() -> int:
     )
     (examples / "tiny-calculator-v2.json").write_bytes(
         build_tiny_calculator_v2_spec(ROOT).canonical_bytes()
+    )
+    (examples / "tiny-calculator-v2-timeout.json").write_bytes(
+        build_tiny_calculator_v2_spec(
+            ROOT,
+            timeout_seconds=3,
+            agent_timeout_multiplier=TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
+        ).canonical_bytes()
+    )
+    (examples / "priority4-m1-native-acceptance.json").write_bytes(
+        build_m1_native_acceptance_plan(ROOT).canonical_bytes()
     )
     return 0
 

@@ -33,8 +33,3 @@ ENV PATH="/opt/codex/codex-path:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONHASHSEED=0 \
     PYTHONUNBUFFERED=1
-
-ENV ALL_PROXY="http://host.docker.internal:9981" \
-    HTTP_PROXY="http://host.docker.internal:9981" \
-    HTTPS_PROXY="http://host.docker.internal:9981" \
-    NO_PROXY="localhost,127.0.0.1"

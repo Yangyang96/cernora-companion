@@ -59,6 +59,19 @@ def test_builder_matches_the_versioned_harder_task_example() -> None:
     assert spec.test_runner.authority_id == "tiny-calculator-v2-test-runner"
 
 
+def test_builder_materializes_the_harder_task_timeout_variant() -> None:
+    spec = build_tiny_calculator_v2_spec(
+        ROOT,
+        timeout_seconds=3,
+        agent_timeout_multiplier=TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
+    )
+    example = ROOT / "examples/tiny-calculator-v2-timeout.json"
+    assert example.read_bytes() == spec.canonical_bytes()
+    assert ExperimentSpec.from_file(example) == spec
+    assert spec.limits.timeout_seconds == 3
+    assert spec.harness.configuration_sha256 == TIMEOUT_HARNESS_CONFIGURATION_SHA256
+
+
 def test_builder_binds_operator_interruption_to_a_distinct_identity() -> None:
     normal = build_tiny_calculator_spec(ROOT)
     interruption = build_tiny_calculator_spec(ROOT, operator_interrupt=True)

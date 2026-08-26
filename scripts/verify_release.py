@@ -18,8 +18,10 @@ from generate_task_authorities import TASKS, build_task_plans
 from cernora_reference_workflow.common import canonical_json_bytes, closed_regular_tree
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
 from cernora_reference_workflow.export import CompletedExportManifest
+from cernora_reference_workflow.native_acceptance import build_m1_native_acceptance_plan
 from cernora_reference_workflow.profile import create_profile
 from cernora_reference_workflow.report import RunReport
+from cernora_reference_workflow.run_plan import RunPlan
 from cernora_reference_workflow.secrets import scan_bytes
 from cernora_reference_workflow.spec_builder import (
     TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
@@ -28,6 +30,28 @@ from cernora_reference_workflow.spec_builder import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _verify_m1_release_surface() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    if project["project"]["version"] != "0.2.0":
+        raise RuntimeError("Priority 4 M1 requires companion version 0.2.0")
+    if project["project"].get("scripts", {}).get("experiment") != (
+        "cernora_reference_workflow.cli:main"
+    ):
+        raise RuntimeError("Priority 4 M1 experiment CLI entry point is missing")
+
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    local = [item for item in lock["package"] if item["name"] == "cernora-reference-workflow"]
+    if len(local) != 1 or local[0]["version"] != "0.2.0":
+        raise RuntimeError("uv.lock does not bind companion version 0.2.0")
+    required = (
+        ROOT / "docs/repeat-runner.md",
+        ROOT / "schemas/run-plan-v1.schema.json",
+        ROOT / "tests/conformance/test_repeat_runner.py",
+    )
+    if any(not path.is_file() or path.is_symlink() or not path.read_bytes() for path in required):
+        raise RuntimeError("Priority 4 M1 release surface is incomplete")
 
 
 def _run(command: list[str]) -> None:
@@ -74,10 +98,18 @@ def _verify_generated_artifacts() -> None:
             ROOT, operator_interrupt=True
         ),
         ROOT / "examples/tiny-calculator-v2.json": build_tiny_calculator_v2_spec(ROOT),
+        ROOT / "examples/tiny-calculator-v2-timeout.json": build_tiny_calculator_v2_spec(
+            ROOT,
+            timeout_seconds=3,
+            agent_timeout_multiplier=TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
+        ),
     }
     for example, expected in examples.items():
         if example.read_bytes() != expected.canonical_bytes():
             raise RuntimeError(f"checked-in ExperimentSpec example is stale: {example.name}")
+    native_plan = ROOT / "examples/priority4-m1-native-acceptance.json"
+    if native_plan.read_bytes() != build_m1_native_acceptance_plan(ROOT).canonical_bytes():
+        raise RuntimeError("checked-in M1 native acceptance RunPlan is stale")
     for task_id, plan in build_task_plans().items():
         encoded = canonical_json_bytes(plan.model_dump(mode="json"))
         task_plan = ROOT / "tasks" / task_id / "tests/test-plan.json"
@@ -96,6 +128,7 @@ def _verify_generated_artifacts() -> None:
         "experiment-spec-v1.schema.json": ExperimentSpec,
         "completed-export-v1.schema.json": CompletedExportManifest,
         "run-report-v1.schema.json": RunReport,
+        "run-plan-v1.schema.json": RunPlan,
     }
     for name, model in schema_models.items():
         if (ROOT / "schemas" / name).read_bytes() != schema_bytes(name, model):
@@ -165,6 +198,7 @@ def main() -> int:
     files = _repository_files()
     _require_secret_free_files(files)
     _verify_no_cernora_internal_imports(files)
+    _verify_m1_release_surface()
     _verify_generated_artifacts()
     _run([sys.executable, "-m", "pytest", "-q"])
     _run([sys.executable, "-m", "ruff", "check", "."])
@@ -177,6 +211,7 @@ def main() -> int:
                 "artifact_build": "passed",
                 "license_inventory": "passed",
                 "quality_gates": "passed",
+                "repeat_runner_m1": "passed",
                 "repository_secret_scan": "passed",
                 "scope": "offline-private-publication-gate",
             },

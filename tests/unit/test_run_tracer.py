@@ -8,8 +8,10 @@ from typing import Any, cast
 
 import pytest
 
+from cernora_reference_workflow.attempt_record import verify_preterminal_attempt
 from cernora_reference_workflow.common import ContractError
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
+from cernora_reference_workflow.secrets import SecretFinding, SecretScanError
 from cernora_reference_workflow.spec_builder import (
     DEFAULT_AGENT_TIMEOUT_MULTIPLIER,
     TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
@@ -28,12 +30,20 @@ def test_harbor_command_binds_timeout_and_disables_native_retry() -> None:
         spec,
         "test-job",
         agent_timeout_multiplier=DEFAULT_AGENT_TIMEOUT_MULTIPLIER,
+        proxy_environment={
+            "HTTP_PROXY": "http://proxy.invalid:8080",
+            "HTTPS_PROXY": "http://proxy.invalid:8080",
+            "ALL_PROXY": "socks5://proxy.invalid:1080",
+            "NO_PROXY": "localhost,127.0.0.1",
+        },
     )
     timeout_index = command.index("--agent-timeout-multiplier")
     retry_index = command.index("-r")
     assert command[timeout_index + 1] == "1.0"
     assert command[retry_index + 1] == "0"
     assert "--force-build" not in command
+    assert command.count("--ae") == 4
+    assert "ALL_PROXY=socks5://proxy.invalid:1080" in command
 
 
 def test_live_preflight_requires_exact_prebuilt_task_image(
@@ -263,6 +273,11 @@ def test_checked_specs_select_only_their_identity_bound_timeout() -> None:
     )
     interruption = build_tiny_calculator_spec(ROOT, operator_interrupt=True)
     harder = build_tiny_calculator_v2_spec(ROOT)
+    harder_timeout = build_tiny_calculator_v2_spec(
+        ROOT,
+        timeout_seconds=3,
+        agent_timeout_multiplier=TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
+    )
     assert selector(normal) == (
         DEFAULT_AGENT_TIMEOUT_MULTIPLIER,
         False,
@@ -282,6 +297,11 @@ def test_checked_specs_select_only_their_identity_bound_timeout() -> None:
         DEFAULT_AGENT_TIMEOUT_MULTIPLIER,
         False,
         "examples/tiny-calculator-v2.json",
+    )
+    assert selector(harder_timeout) == (
+        TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
+        False,
+        "examples/tiny-calculator-v2-timeout.json",
     )
 
 
@@ -368,3 +388,46 @@ def test_preterminal_state_has_a_closed_retry_classification(
         SCRIPT["_preterminal_state"],
     )
     assert classifier(result, return_code) == expected
+
+
+def test_secret_rejected_export_becomes_non_retryable_preterminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_unsafe_export(**_kwargs: object) -> None:
+        raise SecretScanError((SecretFinding("runtime/session.jsonl", "openai-api-key"),))
+
+    freeze = cast(Callable[..., Any], SCRIPT["_freeze_terminal_attempt"])
+    monkeypatch.setitem(freeze.__globals__, "freeze_attempt", reject_unsafe_export)
+    job = tmp_path / "job"
+    job.mkdir()
+    export = tmp_path / "export"
+    result = freeze(
+        spec=build_tiny_calculator_spec(ROOT),
+        capture=cast(Any, object()),
+        requested_state="completed",
+        predecessor_attempt_id=None,
+        job=job,
+        export=export,
+        source_trial_id="native-secret-rejection",
+        portable_export_path="exports/native-secret-rejection",
+    )
+
+    assert result.terminal.state == "runtime-pre-terminal-failure"
+    assert result.terminal.retry_eligible is False
+    assert result.value.export_root is None
+    assert not export.exists()
+    assert verify_preterminal_attempt(job / "reference-attempt").source_trial_id == (
+        "native-secret-rejection"
+    )
+
+
+def test_only_negative_duration_receipt_becomes_runtime_unavailable(tmp_path: Path) -> None:
+    duration = cast(Callable[[Path], int | None], SCRIPT["_optional_nonnegative_duration"])
+    receipt = tmp_path / "duration-milliseconds.txt"
+    receipt.write_text("-1\n", encoding="ascii")
+    assert duration(receipt) is None
+
+    receipt.write_text("invalid\n", encoding="ascii")
+    with pytest.raises(ContractError, match="invalid integer receipt"):
+        duration(receipt)

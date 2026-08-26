@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from cernora_reference_workflow.common import canonical_json_bytes, sha256_bytes
+import pytest
+
+from cernora_reference_workflow.common import ContractError, canonical_json_bytes, sha256_bytes
 from cernora_reference_workflow.runtime_agent import (
     RUNTIME_CONFIGURATION_SHA256,
     RUNTIME_POLICY,
@@ -10,6 +12,7 @@ from cernora_reference_workflow.runtime_agent import (
 from cernora_reference_workflow.runtime_policy import (
     CODEX_RUNTIME_INSTALLATION,
     PREINSTALLED_CODEX_CHECK_COMMAND,
+    resolve_provider_proxy_environment,
 )
 
 
@@ -39,7 +42,11 @@ def test_runtime_policy_disables_non_provider_network_and_telemetry_features() -
         "installation_mode": "preinstalled-runtime-base",
         "otel_exporter": "none",
         "plugins_enabled": False,
-        "provider_proxy_url": "http://host.docker.internal:9981",
+        "provider_proxy": {
+            "configuration": "operator-environment",
+            "required": True,
+            "value_recording": "redacted",
+        },
         "reasoning_summary": "none",
         "unified_exec_enabled": True,
         "web_search": "disabled",
@@ -63,3 +70,39 @@ def test_runtime_installation_is_preinstalled_exact_and_network_free() -> None:
         token not in PREINSTALLED_CODEX_CHECK_COMMAND
         for token in ("curl", "npm", "nvm", "apt-get", "http://", "https://")
     )
+
+
+def test_provider_proxy_is_external_and_loopback_is_mapped_into_docker() -> None:
+    resolved = resolve_provider_proxy_environment(
+        {
+            "http_proxy": "http://127.0.0.1:18080",
+            "https_proxy": "http://localhost:18080",
+            "all_proxy": "socks5://127.0.0.1:11080",
+        }
+    )
+    assert resolved == {
+        "HTTP_PROXY": "http://host.docker.internal:18080",
+        "HTTPS_PROXY": "http://host.docker.internal:18080",
+        "ALL_PROXY": "socks5://host.docker.internal:11080",
+        "NO_PROXY": "localhost,127.0.0.1",
+    }
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "http://" + "user:" + "secret@" + "proxy.invalid:8080",
+        "ftp://proxy.invalid:21",
+        "http://proxy.invalid",
+        "http://proxy.invalid:8080/path",
+    ),
+)
+def test_provider_proxy_rejects_unsafe_or_ambiguous_urls(value: str) -> None:
+    with pytest.raises(ContractError, match="proxy URL"):
+        resolve_provider_proxy_environment(
+            {
+                "CERNORA_HTTP_PROXY": value,
+                "CERNORA_HTTPS_PROXY": value,
+                "CERNORA_ALL_PROXY": value,
+            }
+        )

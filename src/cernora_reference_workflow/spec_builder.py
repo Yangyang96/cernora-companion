@@ -20,11 +20,11 @@ from cernora_reference_workflow.test_runner import TestPlan
 WHEEL_SHA256 = "01de19a484172cc8e3940792b90de04683da600320d154fff18b0a717738a2df"
 BASE_IMAGE = (
     "cernora-reference/codex-runtime@sha256:"
-    "78f59c16c741b9dccdadf1ab2746a9d7fe7a4df8448c848ea50059f22a56d089"
+    "0e9ac928b97a83c54663f1086576039175b9bd4513b7d8d97f8173af62416788"
 )
 TASK_IMAGE_SHA256 = {
-    "tiny-calculator-v1": "8757db06999b128f3efb3381bf43d92d4c548e7009738ec2ee7ab925fb50b13f",
-    "tiny-calculator-v2": "0381f9feca7380640170e0b10a7b927263bed11ba04664290830616d8d598187",
+    "tiny-calculator-v1": "57016ac36d8ad1a402b40de4a370be93e2ac392fa6e093b203aa2676e34debd2",
+    "tiny-calculator-v2": "2ba88de8936e2f396f0e33a6ae11a253fb6b7e779226a82ed2ed727543c4f430",
 }
 TASK_FILES = (
     "environment/.dockerignore",
@@ -239,11 +239,18 @@ def build_tiny_calculator_spec(
     )
 
 
-def build_tiny_calculator_v2_spec(repository_root: Path) -> ExperimentSpec:
+def build_tiny_calculator_v2_spec(
+    repository_root: Path,
+    *,
+    timeout_seconds: int = 300,
+    agent_timeout_multiplier: float = DEFAULT_AGENT_TIMEOUT_MULTIPLIER,
+) -> ExperimentSpec:
     return _build_spec(
         repository_root,
         task_id="tiny-calculator-v2",
         task_version="2",
+        timeout_seconds=timeout_seconds,
+        agent_timeout_multiplier=agent_timeout_multiplier,
     )
 
 

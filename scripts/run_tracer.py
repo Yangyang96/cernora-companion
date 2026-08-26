@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from cernora_reference_workflow.attempt_record import publish_preterminal_attempt
+from cernora_reference_workflow.attempt_record import (
+    publish_preterminal_attempt,
+    verify_preterminal_attempt,
+)
 from cernora_reference_workflow.common import (
     ContractError,
     canonical_json_bytes,
@@ -28,12 +32,14 @@ from cernora_reference_workflow.common import (
     sha256_file,
 )
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
+from cernora_reference_workflow.export import verify_completed_export
 from cernora_reference_workflow.freeze import AttemptCapture, RequestedState, freeze_attempt
 from cernora_reference_workflow.lifecycle import (
     TerminalRecord,
     materialize_preterminal_record,
 )
 from cernora_reference_workflow.offline import evaluate_frozen_export
+from cernora_reference_workflow.publication import atomic_publish_directory
 from cernora_reference_workflow.report import publish_run_report
 from cernora_reference_workflow.report_builder import (
     build_run_report,
@@ -50,7 +56,9 @@ from cernora_reference_workflow.runtime_policy import (
     RUNTIME_POLICY,
     TELEMETRY_CONFIG_TOML,
     OperatorInterruptReceipt,
+    resolve_provider_proxy_environment,
 )
+from cernora_reference_workflow.secrets import SecretScanError
 from cernora_reference_workflow.spec_builder import (
     DEFAULT_AGENT_TIMEOUT_MULTIPLIER,
     TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
@@ -98,6 +106,17 @@ def _integer_file(path: Path, *, minimum: int = 0) -> int:
     return value
 
 
+def _optional_nonnegative_duration(path: Path) -> int | None:
+    """Return None only for the observed negative Harbor duration receipt."""
+
+    try:
+        return _integer_file(path)
+    except ContractError as exc:
+        if str(exc) != "integer receipt is below its minimum: duration-milliseconds.txt":
+            raise
+        return None
+
+
 def _auth_value_markers(auth_path: Path) -> tuple[bytes, ...]:
     payload = load_json_file(auth_path)
     if not isinstance(payload, dict):
@@ -137,8 +156,9 @@ def _harbor_command(
     job_name: str,
     *,
     agent_timeout_multiplier: float,
+    proxy_environment: dict[str, str],
 ) -> list[str]:
-    return [
+    command = [
         str(ROOT / ".venv/bin/harbor"),
         "run",
         "-p",
@@ -180,6 +200,9 @@ def _harbor_command(
         "0",
         "--yes",
     ]
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        command.extend(("--ae", f"{name}={proxy_environment[name]}"))
+    return command
 
 
 def _running_trial_container(trial_name: str) -> str | None:
@@ -743,6 +766,76 @@ def _record_preterminal_attempt(
     return terminal, sha256_file(record_root / "manifest.json")
 
 
+def _runtime_preterminal_attempt(
+    *,
+    job: Path,
+    spec: ExperimentSpec,
+    source_trial_id: str,
+    predecessor_attempt_id: str | None,
+) -> AttemptResult[FrozenLiveAttempt]:
+    terminal, manifest_sha256 = _record_preterminal_attempt(
+        job=job,
+        spec=spec,
+        source_trial_id=source_trial_id,
+        state="runtime-pre-terminal-failure",
+        predecessor_attempt_id=predecessor_attempt_id,
+    )
+    return AttemptResult(
+        terminal=terminal,
+        source_trial_id=source_trial_id,
+        raw_attempt_root=job,
+        value=FrozenLiveAttempt(
+            export_root=None,
+            portable_export_path=None,
+            preterminal_manifest_sha256=manifest_sha256,
+        ),
+    )
+
+
+def _freeze_terminal_attempt(
+    *,
+    spec: ExperimentSpec,
+    capture: AttemptCapture,
+    requested_state: RequestedState,
+    predecessor_attempt_id: str | None,
+    job: Path,
+    export: Path,
+    source_trial_id: str,
+    portable_export_path: str,
+) -> AttemptResult[FrozenLiveAttempt]:
+    """Freeze a safe export or retain a strict non-retryable publication rejection."""
+
+    try:
+        terminal = freeze_attempt(
+            spec=spec,
+            capture=capture,
+            baseline_root=ROOT / "tasks" / spec.task.task_id / "environment",
+            test_plan_path=ROOT / "tasks" / spec.task.task_id / "tests/test-plan.json",
+            requested_state=requested_state,
+            predecessor_attempt_id=predecessor_attempt_id,
+            destination=export,
+        )
+    except SecretScanError as exc:
+        if export.exists() or export.is_symlink():
+            raise ContractError("secret-rejected export was published unexpectedly") from exc
+        return _runtime_preterminal_attempt(
+            job=job,
+            spec=spec,
+            source_trial_id=source_trial_id,
+            predecessor_attempt_id=predecessor_attempt_id,
+        )
+    return AttemptResult(
+        terminal=terminal,
+        source_trial_id=source_trial_id,
+        raw_attempt_root=job,
+        value=FrozenLiveAttempt(
+            export_root=export,
+            portable_export_path=portable_export_path,
+            preterminal_manifest_sha256=None,
+        ),
+    )
+
+
 def _accepted_execution_policy(spec: ExperimentSpec) -> tuple[float, bool, str]:
     if spec == build_tiny_calculator_spec(ROOT):
         return DEFAULT_AGENT_TIMEOUT_MULTIPLIER, False, "examples/tiny-calculator-v1.json"
@@ -765,6 +858,16 @@ def _accepted_execution_policy(spec: ExperimentSpec) -> tuple[float, bool, str]:
         )
     if spec == build_tiny_calculator_v2_spec(ROOT):
         return DEFAULT_AGENT_TIMEOUT_MULTIPLIER, False, "examples/tiny-calculator-v2.json"
+    if spec == build_tiny_calculator_v2_spec(
+        ROOT,
+        timeout_seconds=3,
+        agent_timeout_multiplier=TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
+    ):
+        return (
+            TIMEOUT_AGENT_TIMEOUT_MULTIPLIER,
+            False,
+            "examples/tiny-calculator-v2-timeout.json",
+        )
     raise ContractError("live tracer accepts only checked-in approved ExperimentSpec variants")
 
 
@@ -777,6 +880,7 @@ def _execute_live_attempt(
     auth_path: Path,
     auth_markers: tuple[bytes, ...],
     env: dict[str, str],
+    proxy_environment: dict[str, str],
     agent_timeout_multiplier: float,
     operator_interrupt: bool,
 ) -> AttemptResult[FrozenLiveAttempt]:
@@ -791,6 +895,7 @@ def _execute_live_attempt(
             spec,
             attempt_job_name,
             agent_timeout_multiplier=agent_timeout_multiplier,
+            proxy_environment=proxy_environment,
         ),
         env=env,
         job=job,
@@ -850,7 +955,14 @@ def _execute_live_attempt(
 
     verifier = trial / "verifier"
     exit_code = _integer_file(verifier / "exit-code.txt")
-    duration = _integer_file(verifier / "duration-milliseconds.txt")
+    duration = _optional_nonnegative_duration(verifier / "duration-milliseconds.txt")
+    if duration is None:
+        return _runtime_preterminal_attempt(
+            job=job,
+            spec=spec,
+            source_trial_id=source_trial_id,
+            predecessor_attempt_id=predecessor_attempt_id,
+        )
     capture = AttemptCapture(
         source_trial_id=source_trial_id,
         candidate_root=verifier / "candidate",
@@ -871,27 +983,87 @@ def _execute_live_attempt(
             observed_image_id=observed_image_id,
         ),
     )
-    terminal = freeze_attempt(
+    attempt = _freeze_terminal_attempt(
         spec=spec,
         capture=capture,
-        baseline_root=ROOT / "tasks" / spec.task.task_id / "environment",
-        test_plan_path=ROOT / "tasks" / spec.task.task_id / "tests/test-plan.json",
         requested_state=requested_state,
         predecessor_attempt_id=predecessor_attempt_id,
-        destination=export,
+        job=job,
+        export=export,
+        source_trial_id=source_trial_id,
+        portable_export_path=f"exports/{attempt_job_name}",
     )
     _assert_auth_absent(job, auth_path, auth_markers)
-    _assert_auth_absent(export, auth_path, auth_markers)
-    return AttemptResult(
-        terminal=terminal,
-        source_trial_id=source_trial_id,
-        raw_attempt_root=job,
-        value=FrozenLiveAttempt(
-            export_root=export,
-            portable_export_path=f"exports/{attempt_job_name}",
-            preterminal_manifest_sha256=None,
-        ),
+    if attempt.value.export_root is not None:
+        _assert_auth_absent(attempt.value.export_root, auth_path, auth_markers)
+    return attempt
+
+
+def _publish_repeat_attempt(attempt: AttemptResult[FrozenLiveAttempt], destination: Path) -> None:
+    """Atomically publish one verified P3 artifact for the Repeat Runner."""
+
+    if not destination.parent.is_dir() or destination.exists() or destination.is_symlink():
+        raise ContractError("single-attempt destination parent must exist and destination must not")
+    source = attempt.value.export_root or attempt.raw_attempt_root / "reference-attempt"
+    if attempt.value.export_root is None:
+        verify_preterminal_attempt(source)
+    else:
+        verify_completed_export(source)
+    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent))
+    shutil.rmtree(staging)
+    try:
+        shutil.copytree(source, staging)
+        if attempt.value.export_root is None:
+            verify_preterminal_attempt(staging)
+        else:
+            verify_completed_export(staging)
+        atomic_publish_directory(staging, destination)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+
+
+def _run_single_attempt(
+    *,
+    ordinal: int,
+    predecessor_attempt_id: str | None,
+    destination: Path,
+    job_name: str,
+    spec: ExperimentSpec,
+    auth_path: Path,
+    auth_markers: tuple[bytes, ...],
+    env: dict[str, str],
+    proxy_environment: dict[str, str],
+    agent_timeout_multiplier: float,
+    operator_interrupt: bool,
+) -> int:
+    attempt = _execute_live_attempt(
+        ordinal=ordinal,
+        predecessor_attempt_id=predecessor_attempt_id,
+        base_job_name=job_name,
+        spec=spec,
+        auth_path=auth_path,
+        auth_markers=auth_markers,
+        env=env,
+        proxy_environment=proxy_environment,
+        agent_timeout_multiplier=agent_timeout_multiplier,
+        operator_interrupt=operator_interrupt,
     )
+    _publish_repeat_attempt(attempt, destination)
+    print(
+        json.dumps(
+            {
+                "attempt_id": attempt.terminal.attempt_id,
+                "destination": str(destination),
+                "lifecycle": attempt.terminal.state,
+                "source_trial_id": attempt.source_trial_id,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    return 0
 
 
 def main() -> int:
@@ -899,6 +1071,10 @@ def main() -> int:
     parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--job-name")
     parser.add_argument("--operator-interrupt", action="store_true")
+    parser.add_argument("--single-attempt", action="store_true")
+    parser.add_argument("--ordinal", type=int)
+    parser.add_argument("--predecessor-attempt-id")
+    parser.add_argument("--destination", type=Path)
     args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise ContractError("live tracer supports only macOS on Apple Silicon")
@@ -906,11 +1082,25 @@ def main() -> int:
     agent_timeout_multiplier, operator_interrupt, portable_spec_path = _accepted_execution_policy(
         spec
     )
-    if args.spec.resolve() != ROOT / portable_spec_path:
+    if not args.single_attempt and args.spec.resolve() != ROOT / portable_spec_path:
         raise ContractError("live tracer requires the exact checked-in ExperimentSpec path")
-    if args.operator_interrupt is not operator_interrupt:
+    if not args.single_attempt and args.operator_interrupt is not operator_interrupt:
         raise ContractError("operator interruption flag must match the ExperimentSpec identity")
+    if args.single_attempt and (
+        args.operator_interrupt
+        or args.ordinal is None
+        or args.ordinal < 1
+        or args.destination is None
+    ):
+        raise ContractError("single-attempt mode requires ordinal and destination only")
+    if not args.single_attempt and (
+        args.ordinal is not None
+        or args.predecessor_attempt_id is not None
+        or args.destination is not None
+    ):
+        raise ContractError("single-attempt options require --single-attempt")
     _verify_pinned_task_image(spec)
+    proxy_environment = resolve_provider_proxy_environment(os.environ)
     auth_value = os.environ.get("CODEX_AUTH_JSON_PATH")
     if not auth_value:
         raise ContractError("CODEX_AUTH_JSON_PATH must name the explicit external auth file")
@@ -922,17 +1112,35 @@ def main() -> int:
     job_name = args.job_name or default_job
     if not job_name.replace("-", "").isalnum():
         raise ContractError("job name must contain only letters, digits, and hyphens")
+    env = os.environ.copy()
+    env.pop("OPENAI_API_KEY", None)
+    env.pop("CODEX_FORCE_AUTH_JSON", None)
+    env["CODEX_AUTH_JSON_PATH"] = str(auth_path)
+    if args.single_attempt:
+        assert args.ordinal is not None
+        assert args.destination is not None
+        (ROOT / "attempts").mkdir(exist_ok=True)
+        (ROOT / "exports").mkdir(exist_ok=True)
+        return _run_single_attempt(
+            ordinal=args.ordinal,
+            predecessor_attempt_id=args.predecessor_attempt_id,
+            destination=args.destination,
+            job_name=job_name,
+            spec=spec,
+            auth_path=auth_path,
+            auth_markers=auth_markers,
+            env=env,
+            proxy_environment=proxy_environment,
+            agent_timeout_multiplier=agent_timeout_multiplier,
+            operator_interrupt=operator_interrupt,
+        )
+
     offline = ROOT / "reports/private" / job_name
     if offline.exists() or offline.is_symlink():
         raise ContractError(f"immutable report output already exists: {offline.name}")
     (ROOT / "attempts").mkdir(exist_ok=True)
     (ROOT / "exports").mkdir(exist_ok=True)
     offline.parent.mkdir(parents=True, exist_ok=True)
-
-    env = os.environ.copy()
-    env.pop("OPENAI_API_KEY", None)
-    env.pop("CODEX_FORCE_AUTH_JSON", None)
-    env["CODEX_AUTH_JSON_PATH"] = str(auth_path)
     attempts = run_with_frozen_retry(
         lambda ordinal, predecessor: _execute_live_attempt(
             ordinal=ordinal,
@@ -942,6 +1150,7 @@ def main() -> int:
             auth_path=auth_path,
             auth_markers=auth_markers,
             env=env,
+            proxy_environment=proxy_environment,
             agent_timeout_multiplier=agent_timeout_multiplier,
             operator_interrupt=operator_interrupt,
         )

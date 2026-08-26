@@ -1,4 +1,5 @@
-FROM --platform=linux/arm64 sha256:78f59c16c741b9dccdadf1ab2746a9d7fe7a4df8448c848ea50059f22a56d089
+# The local tag must resolve to the Runtime digest pinned by the ExperimentSpec.
+FROM --platform=linux/arm64 cernora-reference/codex-runtime:0.148.0
 
 WORKDIR /workspace
 COPY pyproject.toml /workspace/pyproject.toml

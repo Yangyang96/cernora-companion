@@ -59,14 +59,13 @@ exact native `codex exec` process was observed in the pinned task image, but dir
 egress to `chatgpt.com` timed out. The Codex session recorded WebSocket retries, HTTPS fallback,
 and a final network-wait state before Harbor produced `AgentTimeoutError` at the bound 300-second
 limit. No completed export was created. A host-only unauthenticated HTTPS probe reached ChatGPT
-and received HTTP 403; the same direct container probe timed out; the container probe through
-`http://host.docker.internal:9981` reached ChatGPT and received HTTP 403. The endpoint belongs to
-the observed local ClashX listener and carries no embedded credentials. The operator subsequently
-authorized this exact endpoint for the task. The fixed Runtime image binds `HTTP_PROXY`,
-`HTTPS_PROXY` and `ALL_PROXY` to it, records the URL in Runtime policy and therefore changes the
-Runtime configuration and every Experiment identity. `NO_PROXY` is limited to localhost. A
-no-network, read-only probe of the derived Runtime verified the exact native binary hashes and all
-four environment values before live use.
+and received HTTP 403; the same direct container probe timed out; a container probe through an
+operator-authorized local proxy reached ChatGPT and received HTTP 403. The original private
+endpoint is intentionally omitted from this repository. Current live execution requires explicit
+operator proxy variables, maps loopback hosts into the Docker host boundary, rejects credentials
+in proxy URLs, and records only the redacted proxy-policy contract. `NO_PROXY` remains limited to
+localhost. A no-network, read-only probe of the derived Runtime verified the exact native binary
+hashes before live use.
 
 The failed run also proved that Harbor writes the external auth file path into `job.log`. The
 pre-publication marker scan stopped the tracer before freeze. A value-invisible diagnostic found
@@ -132,3 +131,26 @@ also covers Docker auth payloads/config paths, Git credential URLs/files, npm to
 tokens/config, registry Basic auth and existing provider/cloud/private-key patterns. Its expanded
 scan passed all four raw attempts, exports and reports. Native Supported Preview acceptance is
 observed locally. Hosted CI and publication remain pending explicit owner authorization.
+
+## Priority 4 Milestone 1 native exit
+
+The approved canonical RunPlan identity
+`58a6022d6b3f9e2dc8587203d99348d260f6a73e50a554e10081419fb9cc78dc` executed the frozen two
+Case by two Configuration by three repetition matrix sequentially. The accepted Execution identity
+is `2634f4c17385b43145ce205b4fd30c9f856d33c2c9d92a761ba0a27fe14bdc15`. After the first
+completed Trial, an operator SIGINT produced a graceful `stopped` checkpoint; strict resume kept
+the same identity, did not rerun completed work, and reached `completed` with 12 Trials and 12
+Attempts.
+
+The terminal distribution was five `completed`, six `timed-out`, and one naturally occurring
+non-retryable `runtime-pre-terminal-failure`. Eleven Trials retained strictly rebuildable
+Evaluations and the preterminal Trial retained an unavailable lifecycle record. Its unsafe
+secret-like Runtime output was rejected before completed-export publication; the portable Attempt
+contains only the closed preterminal receipt.
+
+The Execution Manifest SHA-256 is
+`af0441f355b24327350e535ce25748f0b372bb83aae90011c90c77a09c3e816e`. The Execution Pack
+manifest SHA-256 is `e3a203ee2af8d1f75001a869cfa14d6d4f315cbd98a7f86692b158a33324e913`.
+Strict offline rebuild reproduced the complete Execution byte-for-byte. The Execution, Pack and
+rebuilt tree had zero shared-secret findings and retained no personal path, Runtime home, raw proxy
+endpoint or undeclared file.
