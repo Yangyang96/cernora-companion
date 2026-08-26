@@ -12,12 +12,19 @@ import tomllib
 import zipfile
 from pathlib import Path
 
+from cernora import BatchInput
 from generate_license_inventory import build_inventory
 from generate_schemas import SchemaModel, schema_bytes
 from generate_task_authorities import TASKS, build_task_plans
-from verify_batch_wheels import EXPECTED_CORE_WHEEL_SHA256
 
-from cernora_reference_workflow.common import canonical_json_bytes, closed_regular_tree
+from cernora_reference_workflow.common import (
+    canonical_json_bytes,
+    closed_regular_tree,
+    read_regular_file_bytes,
+)
+from cernora_reference_workflow.comparison_plan import ComparisonPlanV1
+from cernora_reference_workflow.controlled_experiment_spec import ControlledExperimentSpecV2
+from cernora_reference_workflow.controlled_run_plan import ControlledRunPlanV2
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
 from cernora_reference_workflow.export import CompletedExportManifest
 from cernora_reference_workflow.native_acceptance import build_m1_native_acceptance_plan
@@ -31,53 +38,67 @@ from cernora_reference_workflow.spec_builder import (
     build_tiny_calculator_v2_spec,
 )
 
+EXPECTED_CORE_M3_WHEEL_SHA256 = "5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c"
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _verify_m2_release_surface() -> None:
+def _verify_m3_release_surface() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    if project["project"]["version"] != "0.2.1":
-        raise RuntimeError("Priority 4 M2 requires companion version 0.2.1")
+    if project["project"]["version"] != "0.3.0":
+        raise RuntimeError("Priority 4 M3 requires companion version 0.3.0")
     if project["project"].get("scripts", {}).get("experiment") != (
         "cernora_reference_workflow.cli:main"
     ):
-        raise RuntimeError("Priority 4 M2 experiment CLI entry point is missing")
+        raise RuntimeError("Priority 4 M3 experiment CLI entry point is missing")
 
     dependencies = project["project"].get("dependencies", [])
-    if "cernora==0.1.3" not in dependencies:
-        raise RuntimeError("Priority 4 M2 requires the exact Core 0.1.3 candidate")
+    if "cernora==0.1.4" not in dependencies:
+        raise RuntimeError("Priority 4 M3 requires the exact Core 0.1.4 candidate")
 
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     local = [item for item in lock["package"] if item["name"] == "cernora-reference-workflow"]
-    if len(local) != 1 or local[0]["version"] != "0.2.1":
-        raise RuntimeError("uv.lock does not bind companion version 0.2.1")
+    if len(local) != 1 or local[0]["version"] != "0.3.0":
+        raise RuntimeError("uv.lock does not bind companion version 0.3.0")
     core = [item for item in lock["package"] if item["name"] == "cernora"]
-    if len(core) != 1 or core[0]["version"] != "0.1.3":
-        raise RuntimeError("uv.lock does not bind Core version 0.1.3")
+    if len(core) != 1 or core[0]["version"] != "0.1.4":
+        raise RuntimeError("uv.lock does not bind Core version 0.1.4")
     source = core[0].get("source")
     if source != {"registry": "../cernora/dist"}:
         raise RuntimeError("uv.lock must use the stable sibling Core candidate wheelhouse")
     wheels = core[0].get("wheels")
-    if wheels != [{"path": "cernora-0.1.3-py3-none-any.whl"}]:
-        raise RuntimeError("uv.lock does not bind the Core 0.1.3 wheel filename")
-    core_wheel = ROOT.parent / "cernora/dist/cernora-0.1.3-py3-none-any.whl"
-    if not core_wheel.is_file() or core_wheel.is_symlink():
-        raise RuntimeError("the accepted sibling Core 0.1.3 wheel is unavailable")
-    with core_wheel.open("rb") as handle:
-        digest = hashlib.file_digest(handle, "sha256").hexdigest()
-    if digest != EXPECTED_CORE_WHEEL_SHA256:
-        raise RuntimeError("the sibling Core 0.1.3 wheel digest is not accepted")
+    if wheels != [{"path": "cernora-0.1.4-py3-none-any.whl"}]:
+        raise RuntimeError("uv.lock does not bind the Core 0.1.4 wheel filename")
+    core_wheel = ROOT.parent / "cernora/dist/cernora-0.1.4-py3-none-any.whl"
+    digest = hashlib.sha256(read_regular_file_bytes(core_wheel, maximum=None)).hexdigest()
+    if digest != EXPECTED_CORE_M3_WHEEL_SHA256:
+        raise RuntimeError("the sibling Core 0.1.4 wheel digest is not accepted")
     required = (
         ROOT / "docs/batch-summary.md",
+        ROOT / "docs/controlled-comparison.md",
         ROOT / "docs/repeat-runner.md",
+        ROOT / "examples/m3-offline/batch-input.json",
+        ROOT / "examples/m3-offline/comparison-plan.json",
+        ROOT / "examples/m3-offline/controlled-run-plan.json",
+        ROOT / "schemas/comparison-plan-v1.schema.json",
+        ROOT / "schemas/controlled-experiment-spec-v2.schema.json",
+        ROOT / "schemas/controlled-run-plan-v2.schema.json",
         ROOT / "schemas/run-plan-v1.schema.json",
         ROOT / "scripts/verify_batch_wheels.py",
+        ROOT / "scripts/verify_comparison_wheels.py",
         ROOT / "src/cernora_reference_workflow/batch_summary.py",
+        ROOT / "src/cernora_reference_workflow/comparison_input.py",
+        ROOT / "src/cernora_reference_workflow/comparison_plan.py",
+        ROOT / "src/cernora_reference_workflow/controlled_experiment_spec.py",
+        ROOT / "src/cernora_reference_workflow/controlled_run_plan.py",
         ROOT / "tests/conformance/test_repeat_runner.py",
         ROOT / "tests/unit/test_batch_summary.py",
+        ROOT / "tests/unit/test_comparison_input.py",
+        ROOT / "tests/unit/test_comparison_plan.py",
+        ROOT / "tests/unit/test_controlled_experiment_spec.py",
+        ROOT / "tests/unit/test_controlled_run_plan.py",
     )
     if any(not path.is_file() or path.is_symlink() or not path.read_bytes() for path in required):
-        raise RuntimeError("Priority 4 M2 release surface is incomplete")
+        raise RuntimeError("Priority 4 M3 release surface is incomplete")
 
 
 def _run(command: list[str]) -> None:
@@ -85,7 +106,7 @@ def _run(command: list[str]) -> None:
 
 
 def _repository_files() -> tuple[Path, ...]:
-    if not (ROOT / ".git").is_dir():
+    if not (ROOT / ".git").exists():
         return tuple(closed_regular_tree(ROOT).values())
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
@@ -155,10 +176,23 @@ def _verify_generated_artifacts() -> None:
         "completed-export-v1.schema.json": CompletedExportManifest,
         "run-report-v1.schema.json": RunReport,
         "run-plan-v1.schema.json": RunPlan,
+        "controlled-experiment-spec-v2.schema.json": ControlledExperimentSpecV2,
+        "controlled-run-plan-v2.schema.json": ControlledRunPlanV2,
+        "comparison-plan-v1.schema.json": ComparisonPlanV1,
     }
     for name, model in schema_models.items():
         if (ROOT / "schemas" / name).read_bytes() != schema_bytes(name, model):
             raise RuntimeError(f"checked-in JSON Schema is stale: {name}")
+    fixture = ROOT / "examples/m3-offline"
+    run_plan = ControlledRunPlanV2.from_file(fixture / "controlled-run-plan.json")
+    comparison_plan = ComparisonPlanV1.from_file(fixture / "comparison-plan.json")
+    comparison_plan.validate_run_plan(run_plan)
+    batch_path = fixture / "batch-input.json"
+    batch_input = BatchInput.model_validate_json(batch_path.read_bytes())
+    if batch_path.read_bytes() != canonical_json_bytes(batch_input.model_dump(mode="json")):
+        raise RuntimeError("checked-in M3 BatchInput fixture is not canonical")
+    if batch_input.run_plan_id != run_plan.run_plan_id:
+        raise RuntimeError("checked-in M3 BatchInput fixture does not bind its V2 RunPlan")
     inventory = ROOT / "docs/license-inventory.json"
     if inventory.read_bytes() != canonical_json_bytes(build_inventory()) + b"\n":
         raise RuntimeError("checked-in license inventory is stale")
@@ -190,7 +224,7 @@ def _scan_archive_member(name: str, data: bytes) -> None:
 def _verify_built_artifacts() -> None:
     with tempfile.TemporaryDirectory(prefix="cernora-release-build-") as directory:
         output = Path(directory)
-        _run([sys.executable, "-m", "build", "--outdir", str(output)])
+        _run(["uv", "build", "--offline", "--out-dir", str(output)])
         wheels = tuple(output.glob("*.whl"))
         sdists = tuple(output.glob("*.tar.gz"))
         if len(wheels) != 1 or len(sdists) != 1:
@@ -224,7 +258,7 @@ def main() -> int:
     files = _repository_files()
     _require_secret_free_files(files)
     _verify_no_cernora_internal_imports(files)
-    _verify_m2_release_surface()
+    _verify_m3_release_surface()
     _verify_generated_artifacts()
     _run([sys.executable, "-m", "pytest", "-q"])
     _run([sys.executable, "-m", "ruff", "check", "."])
@@ -237,8 +271,9 @@ def main() -> int:
                 "artifact_build": "passed",
                 "license_inventory": "passed",
                 "quality_gates": "passed",
-                "batch_summary_m2_source": "passed",
-                "batch_summary_m2_wheel_only": "separate-required",
+                "controlled_comparison_m3_source": "passed",
+                "controlled_comparison_m3_wheel_only": "separate-required",
+                "batch_summary_m2": "preserved",
                 "repeat_runner_m1": "preserved",
                 "repository_secret_scan": "passed",
                 "scope": "offline-private-publication-gate",

@@ -144,18 +144,18 @@ wheels = [
 
 [[package]]
 name = "cernora"
-version = "0.1.3"
+version = "0.1.4"
 source = { registry = "../cernora/dist" }
 dependencies = [
     { name = "pydantic" },
 ]
 wheels = [
-    { path = "cernora-0.1.3-py3-none-any.whl" },
+    { path = "cernora-0.1.4-py3-none-any.whl" },
 ]
 
 [[package]]
 name = "cernora-reference-workflow"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "cernora" },
@@ -181,7 +181,7 @@ live = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cernora", specifier = "==0.1.3" },
+    { name = "cernora", specifier = "==0.1.4" },
     { name = "harbor", marker = "extra == 'live'", specifier = "==0.16.1" },
     { name = "jsonschema", specifier = "==4.25.1" },
     { name = "pydantic", specifier = "==2.11.7" },

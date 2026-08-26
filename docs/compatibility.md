@@ -32,6 +32,7 @@ the meaning or identity of existing artifacts.
 | --- | --- | --- | --- |
 | M1 Repeat Runner | `0.2.0` | public wheel `0.1.2` | Frozen historical execution, Pack, and rebuild contract |
 | M2 Batch Summary | local candidate `0.2.1` | local candidate `0.1.3` | Additive strict Pack consumer; not publicly released |
+| M3 Controlled Comparison | local candidate `0.3.0` | local candidate `0.1.4` | Additive authority-bound comparison assembly; not publicly released |
 
 The M2 normalizer accepts one completed M1 Execution Pack, preserves its frozen RunPlan,
 Execution, Trial, Attempt, Evaluation, and lifecycle identities as source authority, and creates a
@@ -44,6 +45,18 @@ M2's exhaustive Trial outcomes are `pass`, `behavioral_fail`, `evaluation_invali
 `evaluation_invalid`; retry Attempts remain diagnostic lineage rather than independent Trials.
 The M2 surface contains no comparison, delta, interval, pass-at-k, `pass^k`, ranking,
 promotion, improvement decision, or winner.
+
+M3 adds `ControlledExperimentSpec/v2`, `ControlledRunPlan/v2`, and `ComparisonPlan/v1`. A V2
+Experiment ID is the independently recomputable Core `ExperimentAuthority/v1` identity before
+execution. Companion derives every comparison projection from the typed canonical sources and
+requires the complete two-configuration Trial matrix to carry those exact identities. It does not
+trust caller-declared arm digests or rewrite a legacy Experiment ID after execution.
+
+Legacy M1/M2 RunPlans, Packs, and Batch Summaries retain their frozen v1 identities. They remain
+valid for their original readers, but cannot be used as M3 controlled-comparison authority. This
+is an additive boundary, not a migration. Core `0.1.4` owns pairing, fixed bootstrap statistics,
+Guardrails, failure migration, and the conclusion; Companion publishes no winner, ranking, or
+promotion decision.
 
 ## Report evolution
 

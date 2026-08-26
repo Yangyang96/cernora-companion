@@ -1,4 +1,4 @@
-# Companion Repeat Runner and Batch Summary (Priority 4 Milestones 1–2)
+# Companion Repeat Runner, Batch Summary, and Comparison (Priority 4 Milestones 1–3)
 
 The Companion Repeat Runner is the frozen `cernora-reference-workflow==0.2.0` Milestone 1
 orchestration boundary. It is not Cernora Core, a generic Runtime connector, or a native batch
@@ -123,12 +123,38 @@ M2 has no comparison, delta, interval, pass-at-k, `pass^k`, ranking, promotion, 
 decision, or winner. Those concepts are outside the `0.2.1` contract. See `batch-summary.md` for
 the detailed boundary.
 
+## Milestone 3 controlled comparison assembly
+
+Companion `0.3.0` and Cernora Core `0.1.4` are matching local release candidates; neither version
+has been publicly released. M3 introduces additive V2 ExperimentSpec and RunPlan contracts whose
+Experiment IDs are Core `ExperimentAuthority/v1` identities before execution. Historical v1
+RunPlans and Packs remain unchanged and are not silently migrated into this boundary.
+
+```sh
+uv run experiment compare /absolute/path/to/batch-summary \
+  --run-plan /absolute/path/to/controlled-run-plan.json \
+  --plan /absolute/path/to/comparison-plan.json \
+  --output /absolute/path/to/new-comparison
+```
+
+The command strictly reloads one Core Batch Summary package, the V2 RunPlan, and the predeclared
+ComparisonPlan. It verifies the exact sorted Trial matrix, rederives both arm projections from the
+canonical authority sources, checks configuration-global coherence, verifies evaluated receipt
+authority and policy, and requires the Treatment to cover every permitted difference exactly.
+The output directory must be new. Core publishes and strictly reloads the Comparison package.
+
+Core owns Reliable Success Rate pairing, the fixed 10,000-resample case-clustered paired bootstrap,
+qualified pass-k metrics, hard Guardrails, failure migration, and the conclusion. A valid
+`not_comparable`, `uncertain`, `no_change`, `mixed`, or `regressed` result is still a successful
+publication. Companion supplies no winner, ranking, or promotion operation.
+
 ## Exit status
 
-- `0`: verification, completed run/resume, rebuild, or batch summarization succeeded.
+- `0`: verification, completed run/resume, rebuild, batch summarization, or controlled comparison
+  publication succeeded, including an honest non-improved conclusion.
 - `2`: command usage is invalid, an output is not new, or `--accept-plan-id` does not match.
-- `3`: strict validation, normalization, or execution failed, or run/resume returned a
-  non-completed status such as `stopped` or `budget-exhausted`.
+- `3`: strict artifact integrity, normalization, comparison binding, or execution failed, or
+  run/resume returned a non-completed status such as `stopped` or `budget-exhausted`.
 
 The deterministic release gate runs the public offline 2 Cases × 2 Configurations × 3 repetitions
 conformance matrix, including success, behavioral failure, timeout, eligible retry followed by

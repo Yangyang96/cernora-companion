@@ -10,6 +10,7 @@ from cernora_reference_workflow.common import (
     canonical_json_bytes,
     closed_regular_tree,
     load_json_bytes,
+    read_regular_file_bytes,
     sha256_file,
     sha256_installed_code,
     validate_relative_path,
@@ -72,3 +73,58 @@ def test_installed_code_hash_rejects_symlink(tmp_path: Path) -> None:
 
     with pytest.raises(ContractError, match="not an ordinary file"):
         sha256_installed_code(linked)
+
+
+def test_stable_file_snapshot_rejects_symlink(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    linked = tmp_path / "linked.json"
+    source.write_bytes(b"{}")
+    linked.symlink_to(source)
+
+    with pytest.raises(ContractError, match="ordinary file"):
+        read_regular_file_bytes(linked)
+
+
+@pytest.mark.parametrize("replacement", ("a-to-b", "aba"))
+def test_stable_file_snapshot_rejects_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    target = tmp_path / "authority.json"
+    candidate = tmp_path / "candidate.json"
+    original = tmp_path / "original.json"
+    displaced = tmp_path / "displaced.json"
+    target.write_bytes(b'{"authority":"a"}')
+    candidate.write_bytes(b'{"authority":"b"}')
+    real_open = os.open
+    replaced = False
+
+    def replace_before_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal replaced
+        if not replaced and Path(path) == target:
+            replaced = True
+            os.replace(target, original)
+            os.replace(candidate, target)
+            descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+            if replacement == "aba":
+                os.replace(target, displaced)
+                os.replace(original, target)
+            return descriptor
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", replace_before_open)
+    with pytest.raises(ContractError, match="changed before snapshot"):
+        read_regular_file_bytes(target)
+
+
+def test_stable_file_snapshot_is_size_bounded(tmp_path: Path) -> None:
+    target = tmp_path / "oversized.json"
+    target.write_bytes(b"{}" * 9)
+
+    with pytest.raises(ContractError, match="exceeds 16 bytes"):
+        read_regular_file_bytes(target, maximum=16)

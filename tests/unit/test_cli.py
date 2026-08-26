@@ -10,6 +10,7 @@ import pytest
 
 from cernora_reference_workflow import cli
 from cernora_reference_workflow.common import canonical_json_bytes
+from cernora_reference_workflow.comparison_input import ComparisonConfigurationError
 from cernora_reference_workflow.run_plan import materialize_run_plan
 from tests.unit.test_run_plan import valid_payload
 
@@ -82,6 +83,83 @@ def test_rebuild_routes_to_offline_pack_rebuilder(
     assert calls == [(pack, destination)]
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "completed"
+
+
+def test_compare_routes_strict_inputs_and_reports_honest_conclusion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    batch = tmp_path / "batch"
+    run_plan = tmp_path / "controlled-run-plan.json"
+    comparison_plan = tmp_path / "comparison-plan.json"
+    batch.mkdir()
+    for path in (run_plan, comparison_plan):
+        path.write_text("{}", encoding="utf-8")
+    output = tmp_path / "comparison"
+    calls: list[tuple[Path, Path, Path, Path]] = []
+
+    def fake_compare(
+        batch_root: Path,
+        run_plan_path: Path,
+        comparison_plan_path: Path,
+        destination: Path,
+    ) -> object:
+        calls.append((batch_root, run_plan_path, comparison_plan_path, destination))
+        destination.mkdir()
+        return SimpleNamespace(
+            comparison_id="comparison-" + "a" * 64,
+            conclusion="regressed",
+            summary_id="comparison-summary-" + "b" * 64,
+        )
+
+    monkeypatch.setattr(cli, "compare_batch_summary", fake_compare)
+    assert (
+        cli.main(
+            (
+                "compare",
+                str(batch),
+                "--run-plan",
+                str(run_plan),
+                "--plan",
+                str(comparison_plan),
+                "--output",
+                str(output),
+            )
+        )
+        == 0
+    )
+    assert calls == [(batch, run_plan, comparison_plan, output)]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["conclusion"] == "regressed"
+    assert "winner" not in payload
+
+
+def test_compare_reports_incompatible_authority_as_usage_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def reject(*_args: object) -> object:
+        raise ComparisonConfigurationError("comparison requires a controlled RunPlan v2")
+
+    monkeypatch.setattr(cli, "compare_batch_summary", reject)
+    assert (
+        cli.main(
+            (
+                "compare",
+                str(tmp_path / "batch"),
+                "--run-plan",
+                str(tmp_path / "legacy.json"),
+                "--plan",
+                str(tmp_path / "comparison.json"),
+                "--output",
+                str(tmp_path / "output"),
+            )
+        )
+        == 2
+    )
+    assert "controlled RunPlan v2" in capsys.readouterr().err
 
 
 def test_run_installs_sigint_stop_request_and_restores_handler(

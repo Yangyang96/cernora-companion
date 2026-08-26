@@ -1,0 +1,403 @@
+{
+  "$defs": {
+    "BootstrapPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence_basis_points": {
+          "const": 9500,
+          "title": "Confidence Basis Points",
+          "type": "integer"
+        },
+        "method": {
+          "const": "case-clustered-paired-bootstrap/v1",
+          "title": "Method",
+          "type": "string"
+        },
+        "percentile": {
+          "const": "nearest_rank_closed",
+          "title": "Percentile",
+          "type": "string"
+        },
+        "resamples": {
+          "const": 10000,
+          "title": "Resamples",
+          "type": "integer"
+        },
+        "seed_source": {
+          "const": "comparison_input_sha256",
+          "title": "Seed Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "confidence_basis_points",
+        "resamples",
+        "percentile",
+        "seed_source"
+      ],
+      "title": "BootstrapPlan",
+      "type": "object"
+    },
+    "ComparisonGuardrail": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "higher_is_better",
+            "lower_is_better"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "failure_code": {
+          "anyOf": [
+            {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Code"
+        },
+        "guardrail_id": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+          "title": "Guardrail Id",
+          "type": "string"
+        },
+        "hard": {
+          "const": true,
+          "title": "Hard",
+          "type": "boolean"
+        },
+        "max_adverse_basis_points": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Max Adverse Basis Points",
+          "type": "integer"
+        },
+        "metric": {
+          "enum": [
+            "evaluation_validity_rate",
+            "reliable_success_rate",
+            "profile_failure_code_rate"
+          ],
+          "title": "Metric",
+          "type": "string"
+        },
+        "profile_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile Id"
+        },
+        "profile_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile Version"
+        },
+        "scope": {
+          "enum": [
+            "all",
+            "split"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "split_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Split Id"
+        }
+      },
+      "required": [
+        "guardrail_id",
+        "hard",
+        "metric",
+        "scope",
+        "direction",
+        "max_adverse_basis_points"
+      ],
+      "title": "ComparisonGuardrail",
+      "type": "object"
+    },
+    "ComparisonPlanCaseSplit": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "split_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Split Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "split_id"
+      ],
+      "title": "ComparisonPlanCaseSplit",
+      "type": "object"
+    },
+    "PassKPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "independent_trials": {
+          "const": true,
+          "title": "Independent Trials",
+          "type": "boolean"
+        },
+        "k": {
+          "exclusiveMinimum": 0,
+          "title": "K",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "k",
+        "independent_trials"
+      ],
+      "title": "PassKPlan",
+      "type": "object"
+    },
+    "PrimaryOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "const": "higher_is_better",
+          "title": "Direction",
+          "type": "string"
+        },
+        "metric": {
+          "const": "reliable_success_rate",
+          "title": "Metric",
+          "type": "string"
+        },
+        "practical_threshold_basis_points": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Practical Threshold Basis Points",
+          "type": "integer"
+        },
+        "scope": {
+          "const": "all",
+          "title": "Scope",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric",
+        "scope",
+        "direction",
+        "practical_threshold_basis_points"
+      ],
+      "title": "PrimaryOutcome",
+      "type": "object"
+    },
+    "StatisticalPolicy": {
+      "additionalProperties": false,
+      "description": "Independent comparison policy, intentionally free of Experiment/Plan IDs.",
+      "properties": {
+        "bootstrap": {
+          "$ref": "#/$defs/BootstrapPlan"
+        },
+        "pass_k": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PassKPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": "cernora.reference.statistical-policy/v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "statistical_policy_id": {
+          "minLength": 1,
+          "title": "Statistical Policy Id",
+          "type": "string"
+        },
+        "statistical_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Statistical Policy Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "statistical_policy_id",
+        "statistical_policy_sha256",
+        "bootstrap",
+        "pass_k"
+      ],
+      "title": "StatisticalPolicy",
+      "type": "object"
+    },
+    "TreatmentDeclaration": {
+      "additionalProperties": false,
+      "description": "Kinds are frozen before endpoint digests are derived from V2 authorities.",
+      "properties": {
+        "declaration_id": {
+          "minLength": 1,
+          "title": "Declaration Id",
+          "type": "string"
+        },
+        "declaration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Declaration Sha256",
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "enum": [
+              "prompt_instruction",
+              "model",
+              "tool_schema",
+              "generation_configuration",
+              "runtime_version"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Kinds",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "cernora.reference.treatment-declaration/v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "declaration_id",
+        "declaration_sha256",
+        "kinds"
+      ],
+      "title": "TreatmentDeclaration",
+      "type": "object"
+    }
+  },
+  "$id": "https://cernora.example/schemas/comparison-plan-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseline_configuration_id": {
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "title": "Baseline Configuration Id",
+      "type": "string"
+    },
+    "bootstrap": {
+      "$ref": "#/$defs/BootstrapPlan"
+    },
+    "candidate_configuration_id": {
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "title": "Candidate Configuration Id",
+      "type": "string"
+    },
+    "case_splits": {
+      "items": {
+        "$ref": "#/$defs/ComparisonPlanCaseSplit"
+      },
+      "minItems": 1,
+      "title": "Case Splits",
+      "type": "array"
+    },
+    "comparison_plan_id": {
+      "minLength": 1,
+      "title": "Comparison Plan Id",
+      "type": "string"
+    },
+    "comparison_plan_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Comparison Plan Sha256",
+      "type": "string"
+    },
+    "guardrails": {
+      "items": {
+        "$ref": "#/$defs/ComparisonGuardrail"
+      },
+      "minItems": 1,
+      "title": "Guardrails",
+      "type": "array"
+    },
+    "pass_k": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PassKPlan"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "primary_outcome": {
+      "$ref": "#/$defs/PrimaryOutcome"
+    },
+    "schema_version": {
+      "const": "cernora.reference.comparison-plan/v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_run_plan_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Run Plan Id",
+      "type": "string"
+    },
+    "statistical_policy": {
+      "$ref": "#/$defs/StatisticalPolicy"
+    },
+    "treatment": {
+      "$ref": "#/$defs/TreatmentDeclaration"
+    }
+  },
+  "required": [
+    "schema_version",
+    "comparison_plan_id",
+    "comparison_plan_sha256",
+    "source_run_plan_id",
+    "baseline_configuration_id",
+    "candidate_configuration_id",
+    "case_splits",
+    "treatment",
+    "primary_outcome",
+    "guardrails",
+    "bootstrap",
+    "pass_k",
+    "statistical_policy"
+  ],
+  "title": "ComparisonPlanV1",
+  "type": "object"
+}

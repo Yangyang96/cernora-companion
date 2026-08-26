@@ -1,0 +1,1354 @@
+{
+  "$defs": {
+    "BootstrapPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence_basis_points": {
+          "const": 9500,
+          "title": "Confidence Basis Points",
+          "type": "integer"
+        },
+        "method": {
+          "const": "case-clustered-paired-bootstrap/v1",
+          "title": "Method",
+          "type": "string"
+        },
+        "percentile": {
+          "const": "nearest_rank_closed",
+          "title": "Percentile",
+          "type": "string"
+        },
+        "resamples": {
+          "const": 10000,
+          "title": "Resamples",
+          "type": "integer"
+        },
+        "seed_source": {
+          "const": "comparison_input_sha256",
+          "title": "Seed Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "confidence_basis_points",
+        "resamples",
+        "percentile",
+        "seed_source"
+      ],
+      "title": "BootstrapPlan",
+      "type": "object"
+    },
+    "CanonicalAuthoritySource": {
+      "additionalProperties": false,
+      "description": "One embedded source document whose digest is never caller-asserted.",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "schema_version": {
+          "const": "cernora.reference.canonical-authority-source/v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "source_id",
+        "source_sha256",
+        "payload"
+      ],
+      "title": "CanonicalAuthoritySource",
+      "type": "object"
+    },
+    "ComponentIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "digest_kind": {
+          "const": "identity",
+          "default": "identity",
+          "title": "Digest Kind",
+          "type": "string"
+        },
+        "name": {
+          "enum": [
+            "scorer",
+            "gate_policy"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "sha256"
+      ],
+      "title": "ComponentIdentity",
+      "type": "object"
+    },
+    "ConnectorIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "connector_id": {
+          "const": "cernora-reference-harbor-codex",
+          "title": "Connector Id",
+          "type": "string"
+        },
+        "connector_version": {
+          "const": "1",
+          "title": "Connector Version",
+          "type": "string"
+        },
+        "platform_qualification": {
+          "const": "macos-arm64",
+          "title": "Platform Qualification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "connector_id",
+        "connector_version",
+        "platform_qualification"
+      ],
+      "title": "ConnectorIdentity",
+      "type": "object"
+    },
+    "ControlledCernoraRelease": {
+      "additionalProperties": false,
+      "properties": {
+        "package_version": {
+          "const": "0.1.4",
+          "title": "Package Version",
+          "type": "string"
+        },
+        "wheel_sha256": {
+          "const": "5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c",
+          "title": "Wheel Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package_version",
+        "wheel_sha256"
+      ],
+      "title": "ControlledCernoraRelease",
+      "type": "object"
+    },
+    "ControlledContainerContract": {
+      "additionalProperties": false,
+      "properties": {
+        "build_base_image": {
+          "minLength": 1,
+          "title": "Build Base Image",
+          "type": "string"
+        },
+        "image": {
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "platform": {
+          "minLength": 1,
+          "title": "Platform",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image",
+        "build_base_image",
+        "platform"
+      ],
+      "title": "ControlledContainerContract",
+      "type": "object"
+    },
+    "ControlledExperimentSpecV2": {
+      "additionalProperties": false,
+      "properties": {
+        "cernora": {
+          "$ref": "#/$defs/ControlledCernoraRelease"
+        },
+        "configuration_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Configuration Id",
+          "type": "string"
+        },
+        "container": {
+          "$ref": "#/$defs/ControlledContainerContract"
+        },
+        "dataset_authority": {
+          "$ref": "#/$defs/DatasetAuthority"
+        },
+        "expected_evaluation_authority": {
+          "$ref": "#/$defs/ExpectedEvaluationAuthoritySource"
+        },
+        "expected_evaluation_policy": {
+          "$ref": "#/$defs/ExpectedEvaluationPolicySource"
+        },
+        "experiment_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Experiment Id",
+          "type": "string"
+        },
+        "generation_configuration_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "harness": {
+          "$ref": "#/$defs/ControlledHarnessContract"
+        },
+        "instruction_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Instruction Sha256",
+          "type": "string"
+        },
+        "instruction_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "limits": {
+          "$ref": "#/$defs/ControlledLimits"
+        },
+        "network": {
+          "$ref": "#/$defs/ControlledNetworkPolicy"
+        },
+        "profile": {
+          "$ref": "#/$defs/ControlledProfileAuthority"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "prompt_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "retry": {
+          "$ref": "#/$defs/ControlledRetryPolicy"
+        },
+        "runtime": {
+          "$ref": "#/$defs/ControlledRuntimeContract"
+        },
+        "schema_version": {
+          "const": "cernora.reference.controlled-experiment-spec/v2",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "statistical_policy": {
+          "$ref": "#/$defs/StatisticalPolicy"
+        },
+        "task": {
+          "$ref": "#/$defs/ControlledTaskContract"
+        },
+        "test_runner": {
+          "$ref": "#/$defs/ControlledTestAuthority"
+        },
+        "tool_schema_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "workflow": {
+          "$ref": "#/$defs/ControlledWorkflowVersions"
+        }
+      },
+      "required": [
+        "schema_version",
+        "configuration_id",
+        "task",
+        "container",
+        "harness",
+        "runtime",
+        "prompt_sha256",
+        "prompt_source",
+        "instruction_sha256",
+        "instruction_source",
+        "tool_schema_source",
+        "generation_configuration_source",
+        "limits",
+        "network",
+        "retry",
+        "test_runner",
+        "profile",
+        "expected_evaluation_authority",
+        "expected_evaluation_policy",
+        "dataset_authority",
+        "statistical_policy",
+        "workflow",
+        "cernora",
+        "experiment_id"
+      ],
+      "title": "ControlledExperimentSpecV2",
+      "type": "object"
+    },
+    "ControlledHarnessContract": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "configuration_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "configuration_sha256",
+        "configuration_source"
+      ],
+      "title": "ControlledHarnessContract",
+      "type": "object"
+    },
+    "ControlledLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_setup_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Agent Setup Timeout Seconds",
+          "type": "integer"
+        },
+        "cpu_millis": {
+          "exclusiveMinimum": 0,
+          "title": "Cpu Millis",
+          "type": "integer"
+        },
+        "memory_mebibytes": {
+          "exclusiveMinimum": 0,
+          "title": "Memory Mebibytes",
+          "type": "integer"
+        },
+        "timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent_setup_timeout_seconds",
+        "timeout_seconds",
+        "memory_mebibytes",
+        "cpu_millis"
+      ],
+      "title": "ControlledLimits",
+      "type": "object"
+    },
+    "ControlledNetworkPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "provider_egress": {
+          "const": "required-allowed",
+          "title": "Provider Egress",
+          "type": "string"
+        },
+        "web_search": {
+          "title": "Web Search",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "provider_egress",
+        "web_search"
+      ],
+      "title": "ControlledNetworkPolicy",
+      "type": "object"
+    },
+    "ControlledProfileAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "authority_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "profile_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "minLength": 1,
+          "title": "Profile Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "authority_sha256",
+        "authority_source"
+      ],
+      "title": "ControlledProfileAuthority",
+      "type": "object"
+    },
+    "ControlledRetryPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "delay_seconds": {
+          "const": 10,
+          "title": "Delay Seconds",
+          "type": "integer"
+        },
+        "eligible_states": {
+          "items": {
+            "enum": [
+              "infrastructure-start-failure",
+              "transient-provider-pre-terminal"
+            ],
+            "type": "string"
+          },
+          "title": "Eligible States",
+          "type": "array"
+        },
+        "jitter": {
+          "title": "Jitter",
+          "type": "boolean"
+        },
+        "max_retries": {
+          "const": 1,
+          "title": "Max Retries",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_retries",
+        "delay_seconds",
+        "jitter",
+        "eligible_states"
+      ],
+      "title": "ControlledRetryPolicy",
+      "type": "object"
+    },
+    "ControlledRunAnalysisPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregate_quality_conclusion": {
+          "const": false,
+          "title": "Aggregate Quality Conclusion",
+          "type": "boolean"
+        },
+        "method": {
+          "const": "controlled-comparison",
+          "title": "Method",
+          "type": "string"
+        },
+        "method_version": {
+          "const": "m3",
+          "title": "Method Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "method_version",
+        "aggregate_quality_conclusion"
+      ],
+      "title": "ControlledRunAnalysisPolicy",
+      "type": "object"
+    },
+    "ControlledRuntimeContract": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Configuration Sha256",
+          "type": "string"
+        },
+        "configuration_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "minLength": 1,
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "configuration_sha256",
+        "configuration_source",
+        "model",
+        "reasoning_effort"
+      ],
+      "title": "ControlledRuntimeContract",
+      "type": "object"
+    },
+    "ControlledTaskContract": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "case_set": {
+          "minLength": 1,
+          "title": "Case Set",
+          "type": "string"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "instruction_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Instruction Sha256",
+          "type": "string"
+        },
+        "instruction_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "prompt_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "protected_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Protected Paths",
+          "type": "array"
+        },
+        "task_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Task Id",
+          "type": "string"
+        },
+        "task_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "task_version": {
+          "minLength": 1,
+          "title": "Task Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "task_version",
+        "case_set",
+        "content_sha256",
+        "task_source",
+        "prompt_sha256",
+        "prompt_source",
+        "instruction_sha256",
+        "instruction_source",
+        "allowed_paths",
+        "protected_paths"
+      ],
+      "title": "ControlledTaskContract",
+      "type": "object"
+    },
+    "ControlledTestAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "authority_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Authority Id",
+          "type": "string"
+        },
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "authority_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "authority_version": {
+          "minLength": 1,
+          "title": "Authority Version",
+          "type": "string"
+        },
+        "command": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "test_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Test Plan Sha256",
+          "type": "string"
+        },
+        "test_plan_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "test_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
+        "test_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Test Source Sha256",
+          "type": "string"
+        },
+        "working_directory": {
+          "const": "candidate",
+          "title": "Working Directory",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority_id",
+        "authority_version",
+        "authority_sha256",
+        "authority_source",
+        "test_plan_sha256",
+        "test_plan_source",
+        "test_source_sha256",
+        "test_source",
+        "command",
+        "working_directory"
+      ],
+      "title": "ControlledTestAuthority",
+      "type": "object"
+    },
+    "ControlledWorkflowVersions": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "minLength": 1,
+          "title": "Adapter",
+          "type": "string"
+        },
+        "exporter": {
+          "minLength": 1,
+          "title": "Exporter",
+          "type": "string"
+        },
+        "report": {
+          "minLength": 1,
+          "title": "Report",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exporter",
+        "adapter",
+        "report"
+      ],
+      "title": "ControlledWorkflowVersions",
+      "type": "object"
+    },
+    "DatasetAuthority": {
+      "additionalProperties": false,
+      "description": "Configuration-neutral closed manifest for every selected Case.",
+      "properties": {
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/DatasetCaseAuthority"
+          },
+          "minItems": 1,
+          "title": "Cases",
+          "type": "array"
+        },
+        "dataset_id": {
+          "minLength": 1,
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "dataset_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Dataset Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "cernora.reference.dataset-authority/v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "dataset_id",
+        "dataset_sha256",
+        "cases"
+      ],
+      "title": "DatasetAuthority",
+      "type": "object"
+    },
+    "DatasetCaseAuthority": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Allowed Paths",
+          "type": "array"
+        },
+        "build_base_image": {
+          "minLength": 1,
+          "title": "Build Base Image",
+          "type": "string"
+        },
+        "case": {
+          "$ref": "#/$defs/EvaluationCaseIdentitySource"
+        },
+        "fixtures": {
+          "items": {
+            "$ref": "#/$defs/FixtureReference"
+          },
+          "minItems": 1,
+          "title": "Fixtures",
+          "type": "array"
+        },
+        "protected_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Protected Paths",
+          "type": "array"
+        },
+        "task_image": {
+          "minLength": 1,
+          "title": "Task Image",
+          "type": "string"
+        },
+        "task_instruction_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Instruction Sha256",
+          "type": "string"
+        },
+        "task_prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Prompt Sha256",
+          "type": "string"
+        },
+        "task_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Source Sha256",
+          "type": "string"
+        },
+        "test_authority_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Test Authority Id",
+          "type": "string"
+        },
+        "test_authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Test Authority Sha256",
+          "type": "string"
+        },
+        "test_authority_version": {
+          "minLength": 1,
+          "title": "Test Authority Version",
+          "type": "string"
+        },
+        "test_command": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Test Command",
+          "type": "array"
+        },
+        "test_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Test Plan Sha256",
+          "type": "string"
+        },
+        "test_source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Test Source Sha256",
+          "type": "string"
+        },
+        "test_working_directory": {
+          "const": "candidate",
+          "title": "Test Working Directory",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case",
+        "task_source_sha256",
+        "task_prompt_sha256",
+        "task_instruction_sha256",
+        "allowed_paths",
+        "protected_paths",
+        "task_image",
+        "build_base_image",
+        "test_authority_id",
+        "test_authority_version",
+        "test_authority_sha256",
+        "test_plan_sha256",
+        "test_source_sha256",
+        "test_command",
+        "test_working_directory",
+        "fixtures"
+      ],
+      "title": "DatasetCaseAuthority",
+      "type": "object"
+    },
+    "EvaluationCaseIdentitySource": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "case_set": {
+          "minLength": 1,
+          "title": "Case Set",
+          "type": "string"
+        },
+        "case_version": {
+          "minLength": 1,
+          "title": "Case Version",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "case_version",
+        "case_set",
+        "sha256"
+      ],
+      "title": "EvaluationCaseIdentitySource",
+      "type": "object"
+    },
+    "EvaluationProfileIdentitySource": {
+      "additionalProperties": false,
+      "properties": {
+        "profile_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "profile_version": {
+          "minLength": 1,
+          "title": "Profile Version",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile_id",
+        "profile_version",
+        "sha256"
+      ],
+      "title": "EvaluationProfileIdentitySource",
+      "type": "object"
+    },
+    "ExpectedEvaluationAuthoritySource": {
+      "additionalProperties": false,
+      "description": "Precomputable canonical ImportedEvaluationAuthority payload.",
+      "properties": {
+        "authority_id": {
+          "minLength": 1,
+          "title": "Authority Id",
+          "type": "string"
+        },
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "case": {
+          "$ref": "#/$defs/EvaluationCaseIdentitySource"
+        },
+        "case_gate": {
+          "$ref": "#/$defs/ComponentIdentity"
+        },
+        "fixtures": {
+          "items": {
+            "$ref": "#/$defs/FixtureReference"
+          },
+          "minItems": 1,
+          "title": "Fixtures",
+          "type": "array"
+        },
+        "profile": {
+          "$ref": "#/$defs/EvaluationProfileIdentitySource"
+        },
+        "projection": {
+          "$ref": "#/$defs/ImportedProjectionIdentitySource"
+        },
+        "schema_version": {
+          "const": "agent.evaluator.imported-evaluation-authority/v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scorer": {
+          "$ref": "#/$defs/ComponentIdentity"
+        }
+      },
+      "required": [
+        "schema_version",
+        "profile",
+        "case",
+        "fixtures",
+        "projection",
+        "scorer",
+        "case_gate",
+        "authority_id",
+        "authority_sha256"
+      ],
+      "title": "ExpectedEvaluationAuthoritySource",
+      "type": "object"
+    },
+    "ExpectedEvaluationPolicySource": {
+      "additionalProperties": false,
+      "description": "The exact case-neutral source consumed by Core evaluation-policy binding.",
+      "properties": {
+        "case_gate": {
+          "$ref": "#/$defs/ComponentIdentity"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "profile": {
+          "$ref": "#/$defs/EvaluationProfileIdentitySource"
+        },
+        "projection": {
+          "$ref": "#/$defs/ImportedProjectionIdentitySource"
+        },
+        "schema_version": {
+          "const": "agent.evaluator.comparison-evaluation-policy/v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "scorer": {
+          "$ref": "#/$defs/ComponentIdentity"
+        }
+      },
+      "required": [
+        "schema_version",
+        "profile",
+        "projection",
+        "scorer",
+        "case_gate",
+        "policy_sha256"
+      ],
+      "title": "ExpectedEvaluationPolicySource",
+      "type": "object"
+    },
+    "FixtureReference": {
+      "additionalProperties": false,
+      "properties": {
+        "fixture_id": {
+          "minLength": 1,
+          "title": "Fixture Id",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fixture_id",
+        "path",
+        "sha256"
+      ],
+      "title": "FixtureReference",
+      "type": "object"
+    },
+    "ImportedProjectionIdentitySource": {
+      "additionalProperties": false,
+      "properties": {
+        "digest_kind": {
+          "const": "identity",
+          "default": "identity",
+          "title": "Digest Kind",
+          "type": "string"
+        },
+        "name": {
+          "const": "imported_projection",
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "sha256"
+      ],
+      "title": "ImportedProjectionIdentitySource",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "PassKPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "independent_trials": {
+          "const": true,
+          "title": "Independent Trials",
+          "type": "boolean"
+        },
+        "k": {
+          "exclusiveMinimum": 0,
+          "title": "K",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "k",
+        "independent_trials"
+      ],
+      "title": "PassKPlan",
+      "type": "object"
+    },
+    "RunExecutionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "concurrency": {
+          "const": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "max_attempt_count": {
+          "exclusiveMinimum": 0,
+          "title": "Max Attempt Count",
+          "type": "integer"
+        },
+        "max_total_wall_time_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Max Total Wall Time Seconds",
+          "type": "integer"
+        },
+        "monetary_budget": {
+          "$ref": "#/$defs/UnavailableBudgetControl"
+        },
+        "token_budget": {
+          "$ref": "#/$defs/UnavailableBudgetControl"
+        }
+      },
+      "required": [
+        "concurrency",
+        "max_attempt_count",
+        "max_total_wall_time_seconds",
+        "token_budget",
+        "monetary_budget"
+      ],
+      "title": "RunExecutionPolicy",
+      "type": "object"
+    },
+    "RunPlanCase": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "case_version": {
+          "minLength": 1,
+          "title": "Case Version",
+          "type": "string"
+        },
+        "task_content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Content Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "case_version",
+        "task_content_sha256"
+      ],
+      "title": "RunPlanCase",
+      "type": "object"
+    },
+    "RunPlanCell": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "configuration_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Configuration Id",
+          "type": "string"
+        },
+        "experiment_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Experiment Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "configuration_id",
+        "experiment_id"
+      ],
+      "title": "RunPlanCell",
+      "type": "object"
+    },
+    "RunPlanConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "title": "Configuration Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "configuration_id"
+      ],
+      "title": "RunPlanConfiguration",
+      "type": "object"
+    },
+    "StatisticalPolicy": {
+      "additionalProperties": false,
+      "description": "Independent comparison policy, intentionally free of Experiment/Plan IDs.",
+      "properties": {
+        "bootstrap": {
+          "$ref": "#/$defs/BootstrapPlan"
+        },
+        "pass_k": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PassKPlan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": "cernora.reference.statistical-policy/v1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "statistical_policy_id": {
+          "minLength": 1,
+          "title": "Statistical Policy Id",
+          "type": "string"
+        },
+        "statistical_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Statistical Policy Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "statistical_policy_id",
+        "statistical_policy_sha256",
+        "bootstrap",
+        "pass_k"
+      ],
+      "title": "StatisticalPolicy",
+      "type": "object"
+    },
+    "UnavailableBudgetControl": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "const": "no-structured-authoritative-source",
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "const": "unavailable",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "title": "UnavailableBudgetControl",
+      "type": "object"
+    }
+  },
+  "$id": "https://cernora.example/schemas/controlled-run-plan-v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "analysis": {
+      "$ref": "#/$defs/ControlledRunAnalysisPolicy"
+    },
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/RunPlanCase"
+      },
+      "minItems": 1,
+      "title": "Cases",
+      "type": "array"
+    },
+    "cells": {
+      "items": {
+        "$ref": "#/$defs/RunPlanCell"
+      },
+      "minItems": 2,
+      "title": "Cells",
+      "type": "array"
+    },
+    "cernora_version": {
+      "const": "0.1.4",
+      "title": "Cernora Version",
+      "type": "string"
+    },
+    "companion_version": {
+      "const": "0.3.0",
+      "title": "Companion Version",
+      "type": "string"
+    },
+    "configurations": {
+      "items": {
+        "$ref": "#/$defs/RunPlanConfiguration"
+      },
+      "minItems": 2,
+      "title": "Configurations",
+      "type": "array"
+    },
+    "connector": {
+      "$ref": "#/$defs/ConnectorIdentity"
+    },
+    "execution": {
+      "$ref": "#/$defs/RunExecutionPolicy"
+    },
+    "experiment_specs": {
+      "items": {
+        "$ref": "#/$defs/ControlledExperimentSpecV2"
+      },
+      "minItems": 2,
+      "title": "Experiment Specs",
+      "type": "array"
+    },
+    "pairing_rule": {
+      "const": "case-configuration-repetition",
+      "title": "Pairing Rule",
+      "type": "string"
+    },
+    "planned_trial_count": {
+      "exclusiveMinimum": 0,
+      "title": "Planned Trial Count",
+      "type": "integer"
+    },
+    "repetitions": {
+      "exclusiveMinimum": 0,
+      "title": "Repetitions",
+      "type": "integer"
+    },
+    "run_plan_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Run Plan Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "cernora.reference.controlled-run-plan/v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "worst_case_attempt_count": {
+      "exclusiveMinimum": 0,
+      "title": "Worst Case Attempt Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_plan_id",
+    "companion_version",
+    "cernora_version",
+    "connector",
+    "experiment_specs",
+    "cases",
+    "configurations",
+    "cells",
+    "repetitions",
+    "pairing_rule",
+    "planned_trial_count",
+    "worst_case_attempt_count",
+    "execution",
+    "analysis"
+  ],
+  "title": "ControlledRunPlanV2",
+  "type": "object"
+}

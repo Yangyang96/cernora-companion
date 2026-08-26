@@ -12,6 +12,10 @@ from typing import Any
 
 from cernora_reference_workflow.batch_summary import summarize_execution_pack
 from cernora_reference_workflow.common import ContractError, canonical_json_bytes
+from cernora_reference_workflow.comparison_input import (
+    ComparisonConfigurationError,
+    compare_batch_summary,
+)
 from cernora_reference_workflow.execution import rebuild_execution_pack
 from cernora_reference_workflow.live_attempt import execute_qualified_live_attempt
 from cernora_reference_workflow.run_plan import RunPlan
@@ -44,6 +48,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     summarize.add_argument("execution_pack", type=Path)
     summarize.add_argument("--output", type=Path, required=True)
+    compare = commands.add_parser(
+        "compare", help="assemble and publish one controlled Core Comparison"
+    )
+    compare.add_argument("batch_summary", type=Path)
+    compare.add_argument("--run-plan", type=Path, required=True)
+    compare.add_argument("--plan", type=Path, required=True)
+    compare.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -154,16 +165,35 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if args.command == "summarize":
         _require_new_directory(args.output)
-        summary = summarize_execution_pack(args.execution_pack, args.output)
+        batch_summary = summarize_execution_pack(args.execution_pack, args.output)
         _emit(
             {
-                "batch_input_id": summary.batch_input_id,
+                "batch_input_id": batch_summary.batch_input_id,
                 "command": "summarize",
-                "execution_id": summary.execution_id,
+                "execution_id": batch_summary.execution_id,
                 "output": str(args.output),
-                "run_plan_id": summary.run_plan_id,
+                "run_plan_id": batch_summary.run_plan_id,
                 "status": "completed",
-                "summary_id": summary.summary_id,
+                "summary_id": batch_summary.summary_id,
+            }
+        )
+        return 0
+    if args.command == "compare":
+        _require_new_directory(args.output)
+        comparison_summary = compare_batch_summary(
+            args.batch_summary,
+            args.run_plan,
+            args.plan,
+            args.output,
+        )
+        _emit(
+            {
+                "command": "compare",
+                "comparison_id": comparison_summary.comparison_id,
+                "conclusion": comparison_summary.conclusion,
+                "output": str(args.output),
+                "status": "completed",
+                "summary_id": comparison_summary.summary_id,
             }
         )
         return 0
@@ -176,6 +206,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return _dispatch(args)
     except _UsageError as exc:
+        print(f"experiment: error: {exc}", file=sys.stderr)
+        return 2
+    except ComparisonConfigurationError as exc:
         print(f"experiment: error: {exc}", file=sys.stderr)
         return 2
     except (ContractError, OSError, ValueError) as exc:

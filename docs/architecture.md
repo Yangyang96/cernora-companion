@@ -1,8 +1,9 @@
 # Architecture
 
-This repository is a companion workflow for evaluating frozen coding-agent evidence with the
-released `cernora==0.1.2` wheel. It does not extend Cernora Core with Runtime, Harness,
-credential, orchestration, or publication responsibilities.
+This repository is a companion workflow for evaluating frozen coding-agent evidence. Its
+historical M1 surface uses the released `cernora==0.1.2` wheel; local M2 and M3 candidates use
+accepted Core `0.1.3` and `0.1.4` wheels respectively. It does not extend Cernora Core with
+Runtime, Harness, credential, orchestration, or publication responsibilities.
 
 ## Ownership and data flow
 
@@ -21,6 +22,30 @@ Harbor owns the task container and Runtime lifecycle. Codex owns Agent behavior.
 Test Runner is the only behavioral verdict authority. The companion exporter owns the closed
 export boundary, while the Adapter performs a pure translation after export verification.
 Cernora owns import, Profile evaluation, canonical result publication, and strict reload.
+
+M3 adds a separate, additive controlled-comparison path:
+
+```text
+ControlledExperimentSpec v2 canonical sources
+  -> Core ExperimentAuthority v1 identities before execution
+  -> ControlledRunPlan v2 complete two-configuration matrix
+  -> strict Core Batch Summary package
+  + ComparisonPlan v1 exhaustive Treatment declaration
+  -> Companion binding and projection verification
+  -> Core ComparisonInput, publication, and strict reload
+```
+
+The V2 authority source is the source of truth for Runtime, model, Prompt/Instruction, tools,
+generation, timeout, resources, retry, dataset, Profile, report, statistical, and Evaluation
+projections. Caller-provided equal strings cannot establish comparability. Case-specific task
+material is bound by the common dataset authority; the permitted Prompt/Instruction Treatment is
+configuration-global. Any missing, incompatible, or undeclared authority fails closed before a
+controlled conclusion.
+
+Legacy ExperimentSpec/RunPlan v1 identities remain frozen and are never post-hoc rewritten into
+Core authority identities. Core alone owns pairing, bootstrap intervals, pass-k metrics,
+Guardrails, failure migration, and conclusion semantics. Companion assembles and verifies inputs;
+it does not select a winner, rank Configurations, or promote a candidate.
 
 The report is observational. It is never supplied to Cernora and cannot change an evaluation.
 Its JSON form is authoritative; `run-report.md` is generated only from the already validated JSON

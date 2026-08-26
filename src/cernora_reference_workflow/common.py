@@ -51,8 +51,45 @@ def load_json_bytes(data: bytes, *, maximum: int = MAX_JSON_BYTES) -> Any:
 
 
 def load_json_file(path: Path, *, maximum: int = MAX_JSON_BYTES) -> Any:
-    require_regular_file(path)
-    return load_json_bytes(path.read_bytes(), maximum=maximum)
+    return load_json_bytes(read_regular_file_bytes(path, maximum=maximum), maximum=maximum)
+
+
+def _metadata(value: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def read_regular_file_bytes(path: Path, *, maximum: int | None = MAX_JSON_BYTES) -> bytes:
+    """Read one no-follow ordinary file through a metadata-stable descriptor."""
+
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ContractError(f"path is not an unambiguous ordinary file: {path.name}")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode) or _metadata(before) != _metadata(opened):
+                raise ContractError(f"file changed before snapshot: {path.name}")
+            payload = handle.read() if maximum is None else handle.read(maximum + 1)
+            finished = os.fstat(handle.fileno())
+        after = path.lstat()
+    except ContractError:
+        raise
+    except OSError as exc:
+        raise ContractError(f"cannot snapshot required file: {path.name}") from exc
+    if _metadata(opened) != _metadata(finished) or _metadata(opened) != _metadata(after):
+        raise ContractError(f"file changed during snapshot: {path.name}")
+    if maximum is not None and len(payload) > maximum:
+        raise ContractError(f"file exceeds {maximum} bytes: {path.name}")
+    return payload
 
 
 def canonical_json_bytes(value: Any) -> bytes:

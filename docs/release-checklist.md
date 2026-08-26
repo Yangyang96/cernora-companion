@@ -102,13 +102,35 @@ reviewable evidence. Running a subset is not publication approval.
       preflight, wheel-only acceptance, secret scan, and personal-path scan without a push, tag,
       upload, or public Evidence publication.
 
+## Priority 4 Milestone 3 Controlled Comparison local candidate
+
+- [x] Companion `0.3.0` installs with the exact accepted Cernora Core `0.1.4` wheel in isolated
+      CPython 3.12 and 3.13 environments; neither artifact is described as publicly released.
+- [x] Controlled ExperimentSpec/RunPlan V2 derives each Experiment ID from canonical Core
+      authority before execution and rejects projection, identity, matrix, or Treatment mismatch.
+- [x] Legacy M1/M2 identities remain byte-semantics compatible for their historical readers and
+      are rejected, not rewritten, at the M3 controlled-comparison boundary.
+- [x] `experiment compare` accepts only a strict Core Batch Summary package plus an exact V2
+      RunPlan and ComparisonPlan, checks every Trial and Evaluation receipt binding, and publishes
+      through Core's atomic Comparison API into a new directory.
+- [x] Adversarial coverage proves that timeout, resources, retry, dataset, Profile, report, or
+      statistical differences cannot be hidden by caller-supplied equal arm declarations or a
+      forged Treatment endpoint.
+- [x] Three publications from the same frozen inputs are byte-identical and strictly reload to
+      the same Comparison and Summary identities with sockets denied.
+- [x] Companion reports valid Core conclusions honestly, including `not_comparable`, `uncertain`,
+      `no_change`, `mixed`, and `regressed`, without winner, ranking, or promotion semantics.
+- [ ] Full tests, Ruff, format, strict mypy, build, release preflight, wheel-only acceptance,
+      secret scan, personal-path scan, and independent review pass without push, tag, upload, or
+      public Evidence publication.
+
 ## Commands
 
 Run from a clean independent checkout:
 
 ```sh
-# First place the accepted Core 0.1.3 wheel in ../cernora/dist; its SHA-256 must be
-# 53276a35b137e4997ea5cdf843e2d23323583c4b34ac87a9cd997a08d44e6704.
+# First place the accepted Core 0.1.4 wheel in ../cernora/dist; its SHA-256 must be
+# 5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c.
 uv sync --frozen --all-groups --offline
 uv run pytest -q
 uv run ruff check .
@@ -118,16 +140,19 @@ uv run python scripts/verify_release.py
 git diff --check
 ```
 
-After building the Companion candidate wheel, run `scripts/verify_batch_wheels.py` with the exact
-Core wheel, Companion wheel, and retained accepted Pack. The verifier installs only those project
-wheels, tests both supported Python minors, strictly reloads three summaries per minor, checks the
-5/0/6/1 outcomes, denies Python network sockets while summarizing, and requires byte-identical
-authoritative trees. Release preflight reports this wheel-only gate as a separate requirement; its
-source-level result does not claim wheel-only acceptance.
+After building the Companion candidate wheel, run `scripts/verify_comparison_wheels.py` with the
+exact Core and Companion wheels. The verifier installs only those project wheels, tests both
+supported Python minors, denies Python network sockets, publishes three comparisons per minor,
+strictly reloads each result, and requires byte-identical authoritative trees. Release preflight
+reports this wheel-only gate as a separate requirement; its source-level result does not claim
+wheel-only acceptance.
+
+The accepted M2 `scripts/verify_batch_wheels.py` gate and retained Pack remain historical evidence
+for the 0.1.3/0.2.1 pair. M3 does not reinterpret or rerun that acceptance as a 0.1.4/0.3.0 claim.
 
 The historical `scripts/verify_public_wheel.py` and checked-in remote workflow remain the accepted
-`v0.2.0` checks for the public Core `0.1.2` boundary; they are not M2 candidate gates. Remote M2 CI
-activation is deferred until a separately authorized publication step makes Core `0.1.3`
+`v0.2.0` checks for the public Core `0.1.2` boundary; they are not M3 candidate gates. Remote M3 CI
+activation is deferred until a separately authorized publication step makes Core `0.1.4`
 available without weakening the wheel-only boundary.
 
 The authenticated tracer remains a separate manual command and is not part of CI:

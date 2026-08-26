@@ -5,14 +5,38 @@ coding-Agent workflow and the Priority 4 Companion Repeat Runner. Version `0.2.0
 approved Harbor and Codex versions locally, freezes closed Attempt exports, and performs its
 adaptation, evaluation, packing, and rebuild work through the public `cernora==0.1.2` wheel. The
 additive `0.2.1` Milestone 2 local release candidate consumes those frozen Packs with the matching
-Cernora Core `0.1.3` local release candidate.
+Cernora Core `0.1.3` local release candidate. Additive `0.3.0` assembles authority-bound controlled
+comparisons with the accepted Core `0.1.4` local release candidate.
 
 The project is not part of Cernora Core. It owns orchestration, export validation, the
 `cernora-reference-coding-v1` Profile, and portable reports. It does not provide a generic
 Runtime connector or claim network isolation while Codex provider egress is enabled.
 
-Neither Companion `0.2.1` nor Cernora Core `0.1.3` has been publicly released. Their M2 release
-artifacts and acceptance evidence remain local.
+Companion `0.3.0` and Cernora Core `0.1.4` have not been publicly released. Their M3 artifacts and
+acceptance evidence remain local.
+
+## Priority 4 Milestone 3 Controlled Comparison
+
+Companion `0.3.0` adds one offline assembly command for a strict Core Batch Summary package and
+predeclared V2 authorities:
+
+```sh
+uv run experiment compare /absolute/path/to/batch-summary \
+  --run-plan /absolute/path/to/controlled-run-plan.json \
+  --plan /absolute/path/to/comparison-plan.json \
+  --output /absolute/path/to/new-comparison
+```
+
+Controlled ExperimentSpec/RunPlan V2 uses Core's neutral Experiment authority as the Experiment ID
+before execution. Companion rederives every projection and Treatment endpoint from typed canonical
+sources, checks the complete Trial matrix and any strict Evaluation receipts, then asks Core to
+publish and reload the authoritative Comparison package. Legacy M1/M2 Experiment IDs remain frozen
+and are rejected instead of being rewritten after execution.
+
+Core owns pairing, statistics, hard Guardrails, failure migration, and conclusions. Companion does
+not choose a winner, rank Configurations, promote an artifact, or convert a regressed result into a
+command failure. See `docs/controlled-comparison.md` for the complete identity and exit-status
+boundary.
 
 ## Priority 4 Milestone 2 Batch Summary
 
@@ -76,10 +100,10 @@ contract and status-code boundary.
 
 ## Offline quality gate
 
-The M2 lock resolves Core from the stable sibling wheelhouse
-`../cernora/dist/cernora-0.1.3-py3-none-any.whl`. Build the accepted Core `0.1.3` candidate into
+The M3 lock resolves Core from the stable sibling wheelhouse
+`../cernora/dist/cernora-0.1.4-py3-none-any.whl`. Build the accepted Core `0.1.4` candidate into
 that ignored directory first and verify its SHA-256 is
-`53276a35b137e4997ea5cdf843e2d23323583c4b34ac87a9cd997a08d44e6704`. The wheel is a local
+`5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c`. The wheel is a local
 release artifact; do not commit or upload it.
 
 ```sh
@@ -89,18 +113,17 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 uv run python scripts/verify_release.py
-uv run python scripts/verify_batch_wheels.py \
-  --core-wheel ../cernora/dist/cernora-0.1.3-py3-none-any.whl \
-  --companion-wheel /absolute/path/to/cernora_reference_workflow-0.2.1-py3-none-any.whl \
-  --execution-pack /absolute/path/to/accepted-execution.pack
+uv run python scripts/verify_comparison_wheels.py \
+  --core-wheel ../cernora/dist/cernora-0.1.4-py3-none-any.whl \
+  --companion-wheel /absolute/path/to/cernora_reference_workflow-0.3.0-py3-none-any.whl
 ```
 
 The public-wheel verifier and current checked-in workflow remain historical Priority 3/M1
-`cernora==0.1.2` gates at tag `v0.2.0`; they are not M2 release signals. The M2 local-candidate
-gate installs the separately built Core `0.1.3` wheel and Companion `0.2.1` wheel without treating
-either as a public artifact. M2 remains a locally verified candidate until a separately authorized
-publication step supplies Core `0.1.3` to remote CI. The local offline gates contain no credentials
-and never invoke the live tracer. Live authenticated execution is a separate manual command:
+`cernora==0.1.2` gates at tag `v0.2.0`; they are not M3 release signals. The historical M2 Batch
+wheel verifier remains available for its accepted 0.1.3/0.2.1 pair. M3 installs the separately
+built Core `0.1.4` and Companion `0.3.0` wheels without treating either as public. Local offline
+gates contain no credentials and never invoke the live tracer. Live authenticated execution is a
+separate manual command:
 
 ```sh
 export http_proxy="http://127.0.0.1:${PROXY_PORT}"
