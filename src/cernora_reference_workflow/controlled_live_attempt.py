@@ -13,6 +13,7 @@ import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from math import isfinite
 from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import UUID
@@ -821,6 +822,36 @@ def _expected_verifier_config() -> dict[str, object]:
     }
 
 
+def _json_type_strict_equal(actual: object, expected: object) -> bool:
+    """Compare parsed JSON without Python's bool/int/float equality coercions."""
+
+    if type(actual) is dict and type(expected) is dict:
+        actual_mapping = cast(dict[object, object], actual)
+        expected_mapping = cast(dict[object, object], expected)
+        if not all(type(key) is str for key in (*actual_mapping, *expected_mapping)):
+            return False
+        if set(actual_mapping) != set(expected_mapping):
+            return False
+        return all(
+            _json_type_strict_equal(actual_mapping[key], expected_mapping[key])
+            for key in expected_mapping
+        )
+    if type(actual) is list and type(expected) is list:
+        actual_array = cast(list[object], actual)
+        expected_array = cast(list[object], expected)
+        return len(actual_array) == len(expected_array) and all(
+            _json_type_strict_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual_array, expected_array, strict=True)
+        )
+    if type(actual) is not type(expected):
+        return False
+    if actual is None or type(actual) in {bool, int, str}:
+        return actual == expected
+    if type(actual) is float:
+        return isfinite(actual) and actual == expected
+    return False
+
+
 def _validate_job_config(
     config: Mapping[str, object],
     request: ControlledAttemptRequest,
@@ -883,7 +914,7 @@ def _validate_job_config(
         "artifacts": [],
         "extra_instruction_paths": [],
     }
-    if config != expected:
+    if not _json_type_strict_equal(config, expected):
         raise LiveAttemptError("resolved Harbor job config drifts from actual argv authority")
 
 
@@ -963,15 +994,20 @@ def _validate_trial_result(
         "job_id": job_id,
     }
     if (
-        config != expected_config
+        not _json_type_strict_equal(config, expected_config)
         or set(agent_info) != {"name", "version", "model_info"}
         or set(model) != {"name", "provider"}
-        or result.get("task_name") != task.case.case_id
-        or result.get("source") is not None
-        or result.get("task_checksum") != task_checksum
-        or agent_info.get("name") != "codex"
-        or agent_info.get("version") != spec.runtime.version
-        or model != {"name": spec.runtime.model, "provider": None}
+        or not _json_type_strict_equal(result.get("task_name"), task.case.case_id)
+        or not _json_type_strict_equal(result.get("source"), None)
+        or not _json_type_strict_equal(result.get("task_checksum"), task_checksum)
+        or not _json_type_strict_equal(
+            agent_info,
+            {
+                "name": "codex",
+                "version": spec.runtime.version,
+                "model_info": {"name": spec.runtime.model, "provider": None},
+            },
+        )
     ):
         raise LiveAttemptError("actual Harbor result drifts from Runtime/task authority")
 

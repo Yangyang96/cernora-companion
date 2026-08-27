@@ -938,6 +938,10 @@ def test_live_executor_requires_strict_preterminal_result_for_transient_retry(
         "extra-nested-config",
         "job-retry-drift",
         "job-extra-nested-config",
+        "job-bool-int",
+        "job-int-float",
+        "trial-bool-int",
+        "trial-int-float",
     ),
 )
 def test_unverified_preterminal_result_never_receives_retry(
@@ -975,6 +979,10 @@ def test_unverified_preterminal_result_never_receives_retry(
                 config = json.loads(config_path.read_bytes())
                 if mutation == "job-retry-drift":
                     config["retry"]["max_retries"] = 1
+                elif mutation == "job-bool-int":
+                    config["n_attempts"] = True
+                elif mutation == "job-int-float":
+                    config["timeout_multiplier"] = 1
                 else:
                     config["environment"]["unexpected"] = True
                 config_path.write_bytes(canonical_json_bytes(config))
@@ -997,6 +1005,10 @@ def test_unverified_preterminal_result_never_receives_retry(
                 payload["source"] = "remote-dataset"
             elif mutation == "task-git-url":
                 payload["config"]["task"]["git_url"] = "https://invalid.example/repo.git"
+            elif mutation == "trial-bool-int":
+                payload["config"]["install_only"] = 0
+            elif mutation == "trial-int-float":
+                payload["config"]["timeout_multiplier"] = 1
             else:
                 payload["config"]["agent"]["unexpected"] = True
             result_path.write_bytes(canonical_json_bytes(payload))

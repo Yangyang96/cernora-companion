@@ -414,8 +414,41 @@ def verify_candidate_freeze(
         or reveal_receipt.manifest_sha256 != freeze.heldout_seal_manifest_sha256
         or reveal_receipt.candidate_freeze_id != freeze.candidate_freeze_id
         or reveal_receipt.candidate_freeze_sha256 != freeze.candidate_freeze_sha256
+        or reveal_receipt.revealed_archive_sha256 != heldout_manifest.archive_sha256
     ):
         raise ContractError("held-out RevealReceipt does not bind CandidateFreeze and Manifest")
+    heldout_tasks = tuple(task for task in task_authorities if task.split_id == "held-out")
+    if len(heldout_tasks) != len(heldout_manifest.case_commitments) or len(heldout_tasks) != len(
+        reveal_receipt.case_records
+    ):
+        raise ContractError("held-out RevealReceipt does not map the exact task authority set")
+    for commitment, record, task in zip(
+        heldout_manifest.case_commitments,
+        reveal_receipt.case_records,
+        heldout_tasks,
+        strict=True,
+    ):
+        revealed_case = {
+            "case_id": task.case.case_id,
+            "task": {
+                "case": task.case.model_dump(mode="json"),
+                "allowed_paths": list(task.allowed_paths),
+                "protected_paths": list(task.protected_paths),
+            },
+            "workspace": {"files": [item.model_dump(mode="json") for item in task.workspace_files]},
+            "evaluation": {
+                "failure_code": task.failure_code,
+                "files": [item.model_dump(mode="json") for item in task.test_files],
+                "command": list(task.test_command),
+            },
+        }
+        if (
+            commitment.case_id != record.case_id
+            or commitment.case_id != task.case.case_id
+            or record.sealed_plaintext_sha256 != commitment.plaintext_sha256
+            or record.revealed_authority_sha256 != sha256_bytes(canonical_json_bytes(revealed_case))
+        ):
+            raise ContractError("held-out RevealReceipt does not bind exact revealed authorities")
     splits: dict[str, list[str]] = {}
     for item in comparison_plan.case_splits:
         splits.setdefault(item.split_id, []).append(item.case_id)

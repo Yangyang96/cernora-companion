@@ -16,7 +16,12 @@ from cernora import (
 )
 
 import cernora_reference_workflow.improvement_loop as improvement_loop_module
-from cernora_reference_workflow.common import ContractError, canonical_content_id
+from cernora_reference_workflow.common import (
+    ContractError,
+    canonical_content_id,
+    canonical_json_bytes,
+    sha256_bytes,
+)
 from cernora_reference_workflow.comparison_plan import (
     ComparisonPlanV1,
     materialize_comparison_plan,
@@ -171,7 +176,56 @@ def _pilot(tmp_path: Path, *, pass_all: bool = False) -> BatchSummaryPackage:
 
 
 def _manifest() -> HeldoutManifest:
-    return HeldoutManifest.from_file(Path("examples/m4-heldout-sealed/manifest.json"))
+    source = HeldoutManifest.from_file(Path("examples/m4-heldout-sealed/manifest.json"))
+    heldout = tuple(task for task in _all_task_authorities(source) if task.split_id == "held-out")
+    cases = [_revealed_case_authority(task) for task in heldout]
+    commitments = [
+        {
+            "case_id": task.case.case_id,
+            "plaintext_sha256": sha256_bytes(canonical_json_bytes(case)),
+        }
+        for task, case in zip(heldout, cases, strict=True)
+    ]
+    suite = {
+        "schema_version": "cernora.reference.heldout-suite-commitment/v1",
+        "cases": commitments,
+    }
+    archive = {
+        "schema_version": "cernora.reference.heldout-archive/v1",
+        "cases": cases,
+    }
+    payload = source.model_dump(mode="json", exclude={"manifest_id"})
+    payload["case_commitments"] = commitments
+    payload["suite_sha256"] = sha256_bytes(canonical_json_bytes(suite))
+    payload["archive_sha256"] = sha256_bytes(canonical_json_bytes(archive))
+    aad = {
+        "schema_version": "cernora.reference.heldout-seal-aad/v1",
+        "algorithm": payload["algorithm"],
+        "case_commitments": commitments,
+        "suite_sha256": payload["suite_sha256"],
+        "archive_sha256": payload["archive_sha256"],
+        "nonce": payload["nonce"],
+    }
+    payload["aad_sha256"] = sha256_bytes(canonical_json_bytes(aad))
+    payload["manifest_id"] = canonical_content_id(payload, excluded=frozenset())
+    return HeldoutManifest.model_validate(payload)
+
+
+def _revealed_case_authority(task: ControlledTaskAuthority) -> dict[str, object]:
+    return {
+        "case_id": task.case.case_id,
+        "task": {
+            "case": task.case.model_dump(mode="json"),
+            "allowed_paths": list(task.allowed_paths),
+            "protected_paths": list(task.protected_paths),
+        },
+        "workspace": {"files": [item.model_dump(mode="json") for item in task.workspace_files]},
+        "evaluation": {
+            "failure_code": task.failure_code,
+            "files": [item.model_dump(mode="json") for item in task.test_files],
+            "command": list(task.test_command),
+        },
+    }
 
 
 def _all_task_authorities(manifest: HeldoutManifest) -> tuple[ControlledTaskAuthority, ...]:
@@ -437,6 +491,80 @@ def test_final_comparison_reverifies_authorities_before_delegate(
             heldout_manifest=manifest,
             reveal_receipt=reveal,
             task_authorities=_all_task_authorities(manifest),
+        )
+
+    assert delegated is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "archive-digest",
+        "sealed-digest",
+        "revealed-authority-digest",
+        "substituted-task",
+        "reordered-tasks",
+    ),
+)
+def test_reidentified_reveal_or_substituted_task_cannot_reach_comparison_delegate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    freeze, pilot, plan, comparison, manifest = _freeze_and_final(tmp_path)
+    reveal = _reveal(manifest, freeze)
+    tasks = list(_all_task_authorities(manifest))
+    if mutation == "reordered-tasks":
+        heldout = [index for index, task in enumerate(tasks) if task.split_id == "held-out"]
+        tasks[heldout[0]], tasks[heldout[1]] = tasks[heldout[1]], tasks[heldout[0]]
+    elif mutation == "substituted-task":
+        index = next(index for index, task in enumerate(tasks) if task.split_id == "held-out")
+        payload = tasks[index].model_dump(mode="json", exclude={"authority_id"})
+        payload["failure_code"] = "substituted_failure_v1"
+        case = payload["case"]
+        assert isinstance(case, dict)
+        inputs = case["input"]
+        assert isinstance(inputs, dict)
+        parameters = inputs["parameters"]
+        assert isinstance(parameters, dict)
+        parameters["failure_code"] = "substituted_failure_v1"
+        tasks[index] = materialize_controlled_task(payload)
+    else:
+        if mutation == "archive-digest":
+            reveal = reveal.model_copy(update={"revealed_archive_sha256": "0" * 64})
+        else:
+            records = list(reveal.case_records)
+            field = (
+                "sealed_plaintext_sha256"
+                if mutation == "sealed-digest"
+                else "revealed_authority_sha256"
+            )
+            records[0] = records[0].model_copy(update={field: "0" * 64})
+            reveal = reveal.model_copy(update={"case_records": tuple(records)})
+        identity = canonical_content_id(
+            reveal.model_dump(mode="json", exclude={"receipt_id"}), excluded=frozenset()
+        )
+        reveal = reveal.model_copy(update={"receipt_id": identity})
+    delegated = False
+
+    def forbidden_delegate(*args: object, **kwargs: object) -> object:
+        nonlocal delegated
+        delegated = True
+        raise AssertionError("comparison delegate must remain unreachable")
+
+    monkeypatch.setattr(improvement_loop_module, "assemble_comparison_input", forbidden_delegate)
+
+    with pytest.raises(ContractError):
+        assemble_final_comparison_input(
+            pilot,
+            plan,
+            comparison,
+            freeze=freeze,
+            pilot_package=pilot,
+            visible_corpus_root=VISIBLE_ROOT,
+            heldout_manifest=manifest,
+            reveal_receipt=reveal,
+            task_authorities=tuple(tasks),
         )
 
     assert delegated is False
