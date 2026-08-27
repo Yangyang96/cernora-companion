@@ -15,6 +15,7 @@ from cernora import (
     materialize_batch_input,
 )
 
+import cernora_reference_workflow.improvement_loop as improvement_loop_module
 from cernora_reference_workflow.common import ContractError, canonical_content_id
 from cernora_reference_workflow.comparison_plan import (
     ComparisonPlanV1,
@@ -24,6 +25,8 @@ from cernora_reference_workflow.comparison_plan import (
 from cernora_reference_workflow.controlled_evaluation import materialize_repair_result
 from cernora_reference_workflow.controlled_experiment_spec import (
     materialize_authority_source,
+    materialize_controlled_experiment_spec,
+    materialize_dataset_authority,
 )
 from cernora_reference_workflow.controlled_profile import (
     PROFILE_ID,
@@ -206,20 +209,57 @@ def _final_plan(
     *,
     candidate_prompt: str = "Inspect the leading failure, then repair the project.",
 ) -> ControlledRunPlanV2:
-    case_ids = tuple(
-        sorted((*DEV_NAMES, *REG_NAMES, *(item.case_id for item in manifest.case_commitments)))
-    )
-    return materialize_controlled_run_plan(
-        valid_m4_payload(
-            case_ids=case_ids,
-            candidate_prompt=candidate_prompt,
-            candidate_failure_binding={
-                "code": "interval_boundary_v1",
-                "profile_id": PROFILE_ID,
-                "profile_version": PROFILE_VERSION,
-            },
+    from tests.unit.test_controlled_live_attempt import _spec
+
+    tasks = tuple(sorted(_all_task_authorities(manifest), key=lambda item: item.case.case_id))
+    failure_binding = {
+        "code": "interval_boundary_v1",
+        "profile_id": PROFILE_ID,
+        "profile_version": PROFILE_VERSION,
+    }
+    raw_specs = tuple(
+        _spec(
+            task,
+            configuration_id=configuration_id,
+            prompt=prompt,
+            candidate_failure_binding=(
+                failure_binding if configuration_id == "candidate" else None
+            ),
+            profile_tasks=tasks,
+        )
+        for task in tasks
+        for configuration_id, prompt in (
+            ("baseline", "Repair the project."),
+            ("candidate", candidate_prompt),
         )
     )
+    dataset = materialize_dataset_authority(
+        tuple(item.dataset_authority.cases[0] for item in raw_specs[::2])
+    )
+    specs = []
+    for item in raw_specs:
+        payload = item.model_dump(mode="json", exclude={"experiment_id"})
+        payload["dataset_authority"] = dataset.model_dump(mode="json")
+        specs.append(materialize_controlled_experiment_spec(payload))
+    plan_payload = valid_m4_payload(case_ids=tuple(task.case.case_id for task in tasks))
+    plan_payload["experiment_specs"] = [item.model_dump(mode="json") for item in specs]
+    plan_payload["cases"] = [
+        {
+            "case_id": item.task.task_id,
+            "case_version": item.task.task_version,
+            "task_content_sha256": item.task.content_sha256,
+        }
+        for item in specs[::2]
+    ]
+    plan_payload["cells"] = [
+        {
+            "case_id": item.task.task_id,
+            "configuration_id": item.configuration_id,
+            "experiment_id": item.experiment_id,
+        }
+        for item in specs
+    ]
+    return materialize_controlled_run_plan(plan_payload)
 
 
 def _comparison(plan: ControlledRunPlanV2, manifest: HeldoutManifest) -> ComparisonPlanV1:
@@ -369,9 +409,37 @@ def test_candidate_freeze_is_derived_from_real_strict_three_case_pilot(
     assert receipt.candidate_freeze_id == freeze.candidate_freeze_id
     assert receipt.run_plan_id == plan.run_plan_id
 
-    drifted = receipt.model_copy(update={"run_plan_id": "0" * 64})
-    with pytest.raises(ContractError, match="lack their CandidateFreeze verification"):
-        assemble_final_comparison_input(pilot, plan, comparison, drifted)
+
+def test_final_comparison_reverifies_authorities_before_delegate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    freeze, pilot, plan, comparison, manifest = _freeze_and_final(tmp_path)
+    reveal = _reveal(manifest, freeze)
+    delegated = False
+
+    def forbidden_delegate(*args: object, **kwargs: object) -> object:
+        nonlocal delegated
+        delegated = True
+        raise AssertionError("comparison delegate must remain unreachable")
+
+    monkeypatch.setattr(improvement_loop_module, "assemble_comparison_input", forbidden_delegate)
+    forged = freeze.model_copy(update={"visible_corpus_sha256": "0" * 64})
+
+    with pytest.raises(ContractError):
+        assemble_final_comparison_input(
+            pilot,
+            plan,
+            comparison,
+            freeze=forged,
+            pilot_package=pilot,
+            visible_corpus_root=VISIBLE_ROOT,
+            heldout_manifest=manifest,
+            reveal_receipt=reveal,
+            task_authorities=_all_task_authorities(manifest),
+        )
+
+    assert delegated is False
 
 
 @pytest.mark.parametrize("drift", ("freeze", "run-plan", "policy", "seal", "reveal"))

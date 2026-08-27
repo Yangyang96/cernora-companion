@@ -434,6 +434,27 @@ def verify_candidate_freeze(
         key: tuple(sorted(value)) for key, value in task_splits.items()
     } != {key: tuple(sorted(value)) for key, value in splits.items()}:
         raise ContractError("Comparison splits do not equal strict task split authorities")
+    task_by_case = {item.case.case_id: item for item in task_authorities}
+    for case in run_plan.cases:
+        task = task_by_case[case.case_id]
+        if (
+            task.case.case_version != case.case_version
+            or task.case_sha256 != case.task_content_sha256
+        ):
+            raise ContractError("final task authority contradicts its RunPlan Case")
+        for spec in run_plan.experiment_specs:
+            if spec.task.task_id != case.case_id:
+                continue
+            if (
+                spec.task.authority_id != task.authority_id
+                or spec.task.authority_sha256 != task.authority_sha256
+                or spec.task.authority_source.payload != task.model_dump(mode="json")
+                or spec.task.allowed_paths != task.allowed_paths
+                or spec.task.protected_paths != task.protected_paths
+                or spec.test_runner.command != task.test_command
+                or spec.test_runner.test_source_sha256 != task.test_source_sha256
+            ):
+                raise ContractError("final RunPlan does not bind the exact task authority")
     if tuple(sorted(splits["development"])) != freeze.pilot.development_case_ids:
         raise ContractError("CandidateFreeze pilot Cases do not equal the development split")
     heldout_ids = tuple(sorted(splits["held-out"]))
@@ -548,16 +569,26 @@ def assemble_final_comparison_input(
     batch_package: BatchSummaryPackage,
     run_plan: ControlledRunPlanV2,
     comparison_plan: ComparisonPlanV1,
-    verification_receipt: CandidateFreezeVerificationReceipt,
+    *,
+    freeze: CandidateFreeze,
+    pilot_package: BatchSummaryPackage,
+    visible_corpus_root: Path,
+    heldout_manifest: HeldoutManifest,
+    reveal_receipt: HeldoutRevealReceipt,
+    task_authorities: tuple[ControlledTaskAuthority, ...],
 ) -> ComparisonInput:
-    """Delegate final statistics and conclusion to the accepted M3/Core seam."""
+    """Reverify every strict authority before entering the accepted Core seam."""
 
-    if (
-        verification_receipt.run_plan_id != run_plan.run_plan_id
-        or verification_receipt.comparison_plan_id != comparison_plan.comparison_plan_id
-        or verification_receipt.comparison_plan_sha256 != comparison_plan.comparison_plan_sha256
-    ):
-        raise ContractError("final comparison authorities lack their CandidateFreeze verification")
+    verify_candidate_freeze(
+        freeze,
+        pilot_package=pilot_package,
+        run_plan=run_plan,
+        comparison_plan=comparison_plan,
+        visible_corpus_root=visible_corpus_root,
+        heldout_manifest=heldout_manifest,
+        reveal_receipt=reveal_receipt,
+        task_authorities=task_authorities,
+    )
     return assemble_comparison_input(batch_package, run_plan, comparison_plan)
 
 

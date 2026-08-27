@@ -81,12 +81,29 @@ def _auth_file(root: Path) -> Path:
     return path
 
 
-def _spec(task: ControlledTaskAuthority) -> ControlledExperimentSpecV2:
+def _spec(
+    task: ControlledTaskAuthority,
+    *,
+    configuration_id: str = "baseline",
+    prompt: str = "Repair the project using the frozen task evidence.",
+    candidate_failure_binding: dict[str, str] | None = None,
+    profile_tasks: tuple[ControlledTaskAuthority, ...] | None = None,
+) -> ControlledExperimentSpecV2:
     payload = valid_payload(
         case_id=task.case.case_id,
-        configuration_id="baseline",
-        prompt="Repair the project using the frozen task evidence.",
+        configuration_id=configuration_id,
+        prompt=prompt,
     )
+    if candidate_failure_binding is not None:
+        prompt_source = materialize_authority_source(
+            "treatment-prompt",
+            cast(
+                JsonValue,
+                {"selected_failure": candidate_failure_binding, "text": prompt},
+            ),
+        )
+        payload["prompt_source"] = prompt_source.model_dump(mode="json")
+        payload["prompt_sha256"] = prompt_source.source_sha256
     runtime_source = materialize_authority_source(
         "runtime",
         cast(
@@ -128,7 +145,7 @@ def _spec(task: ControlledTaskAuthority) -> ControlledExperimentSpecV2:
     }
     test_source = materialize_authority_source("test-source", cast(JsonValue, test_files))
     assert test_source.source_sha256 == task.test_source_sha256
-    profile = build_controlled_profile_authority((task,))
+    profile = build_controlled_profile_authority(profile_tasks or (task,))
     profile_source = materialize_authority_source(
         "profile", cast(JsonValue, profile.model_dump(mode="json", exclude_none=False))
     )
@@ -258,6 +275,66 @@ def _request(spec: ControlledExperimentSpecV2, *, trial: str = "live") -> Contro
     )
 
 
+def _harbor_agent_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
+    return {
+        "name": None,
+        "import_path": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
+        "model_name": spec.runtime.model,
+        "n_concurrent": 1,
+        "concurrency_group": None,
+        "skills": [],
+        "override_timeout_sec": None,
+        "override_setup_timeout_sec": None,
+        "max_timeout_sec": None,
+        "extra_allowed_hosts": [],
+        "include_logs": [],
+        "exclude_logs": [],
+        "kwargs": {
+            "reasoning_effort": spec.runtime.reasoning_effort,
+            "reasoning_summary": "none",
+            "strict_config": True,
+            "version": spec.runtime.version,
+            "web_search": "disabled",
+        },
+        "env": {},
+        "mcp_servers": [],
+    }
+
+
+def _harbor_environment_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
+    return {
+        "type": "docker",
+        "import_path": None,
+        "force_build": False,
+        "delete": True,
+        "cpu_enforcement_policy": "auto",
+        "memory_enforcement_policy": "auto",
+        "override_cpus": spec.limits.cpu_millis // 1000,
+        "override_memory_mb": spec.limits.memory_mebibytes,
+        "override_storage_mb": None,
+        "override_gpus": None,
+        "override_tpu": None,
+        "mounts": None,
+        "extra_docker_compose": [],
+        "env": {},
+        "kwargs": {},
+        "extra_allowed_hosts": [],
+    }
+
+
+def _harbor_verifier_config() -> dict[str, object]:
+    return {
+        "disable": False,
+        "env": {},
+        "exclude_logs": [],
+        "import_path": None,
+        "include_logs": [],
+        "kwargs": {},
+        "max_timeout_sec": None,
+        "override_timeout_sec": None,
+    }
+
+
 class FakeProcess:
     def __init__(self, task: ControlledTaskAuthority, spec: ControlledExperimentSpecV2) -> None:
         self.task = task
@@ -323,30 +400,60 @@ class FakeProcess:
             ),
         )
         kwargs["strict_config"] = True
-        environment_config: dict[str, object] = {
-            "type": "docker",
-            "delete": True,
-            "override_cpus": self.spec.limits.cpu_millis // 1000,
-            "override_memory_mb": self.spec.limits.memory_mebibytes,
-        }
-        agent_config: dict[str, object] = {
-            "import_path": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
-            "model_name": self.spec.runtime.model,
-            "n_concurrent": 1,
-            "kwargs": kwargs,
-            "env": {},
-        }
+        environment_config = _harbor_environment_config(self.spec)
+        agent_config = _harbor_agent_config(self.spec)
+        assert agent_config["kwargs"] == kwargs
         config: dict[str, object] = {
             "job_name": job_name,
             "jobs_dir": str(job_root),
             "n_attempts": 1,
-            "n_concurrent_trials": 1,
-            "agent_setup_timeout_multiplier": 4.0,
+            "install_only": False,
+            "timeout_multiplier": 1.0,
             "agent_timeout_multiplier": 1.0,
-            "retry": {"max_retries": 0},
+            "verifier_timeout_multiplier": None,
+            "agent_setup_timeout_multiplier": 4.0,
+            "environment_build_timeout_multiplier": None,
+            "debug": False,
+            "n_concurrent_trials": 1,
+            "quiet": False,
+            "retry": {
+                "max_retries": 0,
+                "min_wait_sec": 1.0,
+                "max_wait_sec": 60.0,
+                "wait_multiplier": 1.0,
+                "include_exceptions": None,
+                "exclude_exceptions": [
+                    "AgentTimeoutError",
+                    "ApiUsageLimitError",
+                    "VerifierOutputParseError",
+                    "RewardFileEmptyError",
+                    "RewardFileNotFoundError",
+                    "VerifierTimeoutError",
+                ],
+            },
             "environment": environment_config,
+            "verifier": _harbor_verifier_config(),
+            "metrics": [],
             "agents": [agent_config],
-            "datasets": [{"path": str(task_root)}],
+            "datasets": [
+                {
+                    "path": str(task_root),
+                    "name": None,
+                    "version": None,
+                    "overwrite": False,
+                    "registry_url": None,
+                    "registry_path": None,
+                    "download_dir": None,
+                    "task_names": None,
+                    "exclude_task_names": None,
+                    "n_tasks": None,
+                    "ref": None,
+                    "repo": None,
+                }
+            ],
+            "tasks": [],
+            "artifacts": [],
+            "extra_instruction_paths": [],
         }
         job = verifier.parents[1]
         (job / "config.json").write_bytes(canonical_json_bytes(config))
@@ -389,12 +496,31 @@ class FakeProcess:
         (verifier / "exit-code.txt").write_text("1\n", encoding="ascii")
         from dirhash import dirhash  # type: ignore[import-untyped]
 
-        trial_config = {
-            "task": {"path": str(task_root)},
+        trial_config: dict[str, object] = {
+            "task": {
+                "path": str(task_root),
+                "git_url": None,
+                "git_commit_id": None,
+                "name": None,
+                "ref": None,
+                "overwrite": False,
+                "download_dir": None,
+                "source": None,
+            },
+            "trial_name": "trial-1",
+            "trials_dir": str(job),
+            "install_only": False,
+            "timeout_multiplier": 1.0,
+            "agent_timeout_multiplier": 1.0,
+            "verifier_timeout_multiplier": None,
+            "agent_setup_timeout_multiplier": 4.0,
+            "environment_build_timeout_multiplier": None,
             "agent": agent_config,
             "environment": environment_config,
-            "agent_setup_timeout_multiplier": 4.0,
-            "agent_timeout_multiplier": 1.0,
+            "verifier": _harbor_verifier_config(),
+            "artifacts": [],
+            "extra_instruction_paths": [],
+            "job_id": "00000000-0000-0000-0000-000000000002",
         }
         result = {
             "id": "00000000-0000-0000-0000-000000000001",
@@ -800,7 +926,19 @@ def test_live_executor_requires_strict_preterminal_result_for_transient_retry(
 
 @pytest.mark.parametrize(
     "mutation",
-    ("wrong-task", "wrong-checksum", "wrong-config", "incomplete", "reidentified", "malformed"),
+    (
+        "wrong-task",
+        "wrong-checksum",
+        "wrong-config",
+        "incomplete",
+        "reidentified",
+        "malformed",
+        "remote-source",
+        "task-git-url",
+        "extra-nested-config",
+        "job-retry-drift",
+        "job-extra-nested-config",
+    ),
 )
 def test_unverified_preterminal_result_never_receives_retry(
     tmp_path: Path,
@@ -832,6 +970,15 @@ def test_unverified_preterminal_result_never_receives_retry(
             )
             job_root = Path(command[command.index("-o") + 1])
             job_name = command[command.index("--job-name") + 1]
+            if mutation.startswith("job-"):
+                config_path = job_root / job_name / "config.json"
+                config = json.loads(config_path.read_bytes())
+                if mutation == "job-retry-drift":
+                    config["retry"]["max_retries"] = 1
+                else:
+                    config["environment"]["unexpected"] = True
+                config_path.write_bytes(canonical_json_bytes(config))
+                return process
             result_path = job_root / job_name / "trial-1" / "result.json"
             payload = json.loads(result_path.read_bytes())
             if mutation == "wrong-task":
@@ -844,8 +991,14 @@ def test_unverified_preterminal_result_never_receives_retry(
                 payload.pop("task_id")
             elif mutation == "reidentified":
                 payload["trial_name"] = "different-trial"
-            else:
+            elif mutation == "malformed":
                 payload["exception_info"].pop("occurred_at")
+            elif mutation == "remote-source":
+                payload["source"] = "remote-dataset"
+            elif mutation == "task-git-url":
+                payload["config"]["task"]["git_url"] = "https://invalid.example/repo.git"
+            else:
+                payload["config"]["agent"]["unexpected"] = True
             result_path.write_bytes(canonical_json_bytes(payload))
             return process
 

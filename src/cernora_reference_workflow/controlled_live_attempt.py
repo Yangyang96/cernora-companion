@@ -761,6 +761,66 @@ def _validate_actual_argv(
         raise LiveAttemptError("explicit proxy projection is incomplete")
 
 
+def _expected_agent_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
+    return {
+        "name": None,
+        "import_path": AGENT_IMPORT,
+        "model_name": spec.runtime.model,
+        "n_concurrent": 1,
+        "concurrency_group": None,
+        "skills": [],
+        "override_timeout_sec": None,
+        "override_setup_timeout_sec": None,
+        "max_timeout_sec": None,
+        "extra_allowed_hosts": [],
+        "include_logs": [],
+        "exclude_logs": [],
+        "kwargs": {
+            "reasoning_effort": spec.runtime.reasoning_effort,
+            "reasoning_summary": "none",
+            "strict_config": True,
+            "version": spec.runtime.version,
+            "web_search": "disabled",
+        },
+        "env": {},
+        "mcp_servers": [],
+    }
+
+
+def _expected_environment_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
+    return {
+        "type": "docker",
+        "import_path": None,
+        "force_build": False,
+        "delete": True,
+        "cpu_enforcement_policy": "auto",
+        "memory_enforcement_policy": "auto",
+        "override_cpus": spec.limits.cpu_millis // 1000,
+        "override_memory_mb": spec.limits.memory_mebibytes,
+        "override_storage_mb": None,
+        "override_gpus": None,
+        "override_tpu": None,
+        "mounts": None,
+        "extra_docker_compose": [],
+        "env": {},
+        "kwargs": {},
+        "extra_allowed_hosts": [],
+    }
+
+
+def _expected_verifier_config() -> dict[str, object]:
+    return {
+        "disable": False,
+        "env": {},
+        "exclude_logs": [],
+        "import_path": None,
+        "include_logs": [],
+        "kwargs": {},
+        "max_timeout_sec": None,
+        "override_timeout_sec": None,
+    }
+
+
 def _validate_job_config(
     config: Mapping[str, object],
     request: ControlledAttemptRequest,
@@ -771,44 +831,59 @@ def _validate_job_config(
     proxy_environment: Mapping[str, str],
 ) -> None:
     spec = request.specification
-    retry = config.get("retry")
-    environment = config.get("environment")
-    agents = config.get("agents")
-    datasets = config.get("datasets")
-    if not isinstance(retry, dict) or not isinstance(environment, dict):
-        raise LiveAttemptError("Harbor config omits retry/environment authority")
-    if not isinstance(agents, list) or len(agents) != 1 or not isinstance(agents[0], dict):
-        raise LiveAttemptError("Harbor config must resolve one exact Agent")
-    if not isinstance(datasets, list) or len(datasets) != 1 or not isinstance(datasets[0], dict):
-        raise LiveAttemptError("Harbor config must resolve one exact task path")
-    agent = agents[0]
-    expected_kwargs = {
-        "reasoning_effort": spec.runtime.reasoning_effort,
-        "reasoning_summary": "none",
-        "strict_config": True,
-        "version": spec.runtime.version,
-        "web_search": "disabled",
+    expected = {
+        "job_name": job_name,
+        "jobs_dir": str(job_root),
+        "n_attempts": 1,
+        "install_only": False,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": 1.0,
+        "verifier_timeout_multiplier": None,
+        "agent_setup_timeout_multiplier": 4.0,
+        "environment_build_timeout_multiplier": None,
+        "debug": False,
+        "n_concurrent_trials": 1,
+        "quiet": False,
+        "retry": {
+            "max_retries": 0,
+            "min_wait_sec": 1.0,
+            "max_wait_sec": 60.0,
+            "wait_multiplier": 1.0,
+            "include_exceptions": None,
+            "exclude_exceptions": [
+                "AgentTimeoutError",
+                "ApiUsageLimitError",
+                "VerifierOutputParseError",
+                "RewardFileEmptyError",
+                "RewardFileNotFoundError",
+                "VerifierTimeoutError",
+            ],
+        },
+        "environment": _expected_environment_config(spec),
+        "verifier": _expected_verifier_config(),
+        "metrics": [],
+        "agents": [_expected_agent_config(spec)],
+        "datasets": [
+            {
+                "path": str(task_root),
+                "name": None,
+                "version": None,
+                "overwrite": False,
+                "registry_url": None,
+                "registry_path": None,
+                "download_dir": None,
+                "task_names": None,
+                "exclude_task_names": None,
+                "n_tasks": None,
+                "ref": None,
+                "repo": None,
+            }
+        ],
+        "tasks": [],
+        "artifacts": [],
+        "extra_instruction_paths": [],
     }
-    checks = (
-        config.get("job_name") == job_name,
-        config.get("jobs_dir") == str(job_root),
-        config.get("n_attempts") == 1,
-        config.get("n_concurrent_trials") == 1,
-        config.get("agent_setup_timeout_multiplier") == 4.0,
-        config.get("agent_timeout_multiplier") == 1.0,
-        retry.get("max_retries") == 0,
-        environment.get("type") == "docker",
-        environment.get("delete") is True,
-        environment.get("override_cpus") == spec.limits.cpu_millis // 1000,
-        environment.get("override_memory_mb") == spec.limits.memory_mebibytes,
-        agent.get("import_path") == AGENT_IMPORT,
-        agent.get("model_name") == spec.runtime.model,
-        agent.get("n_concurrent") == 1,
-        agent.get("kwargs") == expected_kwargs,
-        agent.get("env") == {},
-        datasets[0].get("path") == str(task_root),
-    )
-    if not all(checks):
+    if config != expected:
         raise LiveAttemptError("resolved Harbor job config drifts from actual argv authority")
 
 
@@ -818,6 +893,8 @@ def _validate_trial_result(
     task: ControlledTaskAuthority,
     *,
     task_root: Path,
+    job_root: Path,
+    job_name: str,
     task_checksum: str,
 ) -> None:
     spec = request.specification
@@ -831,7 +908,14 @@ def _validate_trial_result(
         raise LiveAttemptError("Harbor result identity is malformed") from exc
     task_id = result.get("task_id")
     trial_uri = result.get("trial_uri")
-    if task_id != {"path": str(task_root)} or not isinstance(trial_uri, str) or not trial_uri:
+    trial_name = result.get("trial_name")
+    if (
+        task_id != {"path": str(task_root)}
+        or not isinstance(trial_uri, str)
+        or not trial_uri
+        or not isinstance(trial_name, str)
+        or not trial_name
+    ):
         raise LiveAttemptError("Harbor result task identity is malformed")
     if not isinstance(agent_info, dict) or not isinstance(config, dict):
         raise LiveAttemptError("Harbor result omits agent/config observations")
@@ -847,33 +931,47 @@ def _validate_trial_result(
     assert isinstance(trial_agent, dict)
     assert isinstance(trial_environment, dict)
     assert isinstance(trial_task, dict)
-    expected_kwargs = {
-        "reasoning_effort": spec.runtime.reasoning_effort,
-        "reasoning_summary": "none",
-        "strict_config": True,
-        "version": spec.runtime.version,
-        "web_search": "disabled",
+    job_id = config.get("job_id")
+    try:
+        UUID(cast(str, job_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise LiveAttemptError("Harbor result job identity is malformed") from exc
+    expected_config: dict[str, object] = {
+        "task": {
+            "path": str(task_root),
+            "git_url": None,
+            "git_commit_id": None,
+            "name": None,
+            "ref": None,
+            "overwrite": False,
+            "download_dir": None,
+            "source": None,
+        },
+        "trial_name": trial_name,
+        "trials_dir": str(job_root / job_name),
+        "install_only": False,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": 1.0,
+        "verifier_timeout_multiplier": None,
+        "agent_setup_timeout_multiplier": 4.0,
+        "environment_build_timeout_multiplier": None,
+        "agent": _expected_agent_config(spec),
+        "environment": _expected_environment_config(spec),
+        "verifier": _expected_verifier_config(),
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "job_id": job_id,
     }
     if (
-        set(agent_info) != {"name", "version", "model_info"}
+        config != expected_config
+        or set(agent_info) != {"name", "version", "model_info"}
         or set(model) != {"name", "provider"}
         or result.get("task_name") != task.case.case_id
+        or result.get("source") is not None
         or result.get("task_checksum") != task_checksum
         or agent_info.get("name") != "codex"
         or agent_info.get("version") != spec.runtime.version
-        or model.get("name") != spec.runtime.model
-        or trial_agent.get("import_path") != AGENT_IMPORT
-        or trial_agent.get("model_name") != spec.runtime.model
-        or trial_agent.get("n_concurrent") != 1
-        or trial_agent.get("kwargs") != expected_kwargs
-        or trial_agent.get("env") != {}
-        or trial_environment.get("type") != "docker"
-        or trial_environment.get("delete") is not True
-        or trial_environment.get("override_cpus") != spec.limits.cpu_millis // 1000
-        or trial_environment.get("override_memory_mb") != spec.limits.memory_mebibytes
-        or trial_task.get("path") != str(task_root)
-        or config.get("agent_setup_timeout_multiplier") != 4.0
-        or config.get("agent_timeout_multiplier") != 1.0
+        or model != {"name": spec.runtime.model, "provider": None}
     ):
         raise LiveAttemptError("actual Harbor result drifts from Runtime/task authority")
 
@@ -908,7 +1006,15 @@ def _runtime_observation(
         job_name=job_name,
         proxy_environment=proxy_environment,
     )
-    _validate_trial_result(result, request, task, task_root=task_root, task_checksum=task_checksum)
+    _validate_trial_result(
+        result,
+        request,
+        task,
+        task_root=task_root,
+        job_root=job_root,
+        job_name=job_name,
+        task_checksum=task_checksum,
+    )
     task_config = tomllib.loads(read_regular_file_bytes(task_root / "task.toml").decode("utf-8"))
     environment = task_config.get("environment")
     expected_image = spec.container.image.rsplit("@sha256:", 1)[1]
@@ -983,13 +1089,23 @@ def _classify_preterminal(
     task: ControlledTaskAuthority,
     *,
     task_root: Path,
+    job_root: Path,
+    job_name: str,
     task_checksum: str,
 ) -> tuple[str, bool] | None:
     if process.status in {"timed_out", "output_limit"}:
         return "runtime_pre_terminal_failure", False
     if result is None:
         return None if process.exit_code == 0 else ("runtime_pre_terminal_failure", False)
-    _validate_trial_result(result, request, task, task_root=task_root, task_checksum=task_checksum)
+    _validate_trial_result(
+        result,
+        request,
+        task,
+        task_root=task_root,
+        job_root=job_root,
+        job_name=job_name,
+        task_checksum=task_checksum,
+    )
     exception = result.get("exception_info")
     agent_result = result.get("agent_result")
     verifier_result = result.get("verifier_result")
@@ -1369,12 +1485,24 @@ class ControlledHarborAttemptExecutor:
                 and process.finished_monotonic >= request.global_deadline_monotonic
             ):
                 raise ControlledActiveSafeStop("hard_wall_deadline_elapsed")
+            if result is not None:
+                job_config = _object(job_root / job_name / "config.json", label="Harbor job config")
+                _validate_job_config(
+                    job_config,
+                    request,
+                    task_root=task_root,
+                    job_root=job_root,
+                    job_name=job_name,
+                    proxy_environment=self._proxy_environment,
+                )
             classification = _classify_preterminal(
                 process,
                 result,
                 request,
                 task,
                 task_root=task_root,
+                job_root=job_root,
+                job_name=job_name,
                 task_checksum=task_checksum,
             )
             if classification is not None:

@@ -15,10 +15,7 @@ from cernora_reference_workflow.controlled_run_plan import (
 )
 from cernora_reference_workflow.controlled_task import load_visible_task
 from cernora_reference_workflow.heldout_seal import HeldoutManifest
-from cernora_reference_workflow.improvement_loop import (
-    CandidateFreeze,
-    CandidateFreezeVerificationReceipt,
-)
+from cernora_reference_workflow.improvement_loop import CandidateFreeze
 from tests.unit.test_controlled_run_plan import valid_m4_payload, valid_payload
 from tests.unit.test_improvement_loop import (
     VISIBLE_ROOT,
@@ -33,13 +30,21 @@ from tests.unit.test_improvement_loop import (
 class _Verified(Protocol):
     freeze: CandidateFreeze
     plan: ControlledRunPlanV2
-    verification_receipt: CandidateFreezeVerificationReceipt
 
 
 class _Script(Protocol):
     def validate_task_suite(self, plan: object, tasks: tuple[object, ...]) -> None: ...
 
     def load_verified_execution(self, **kwargs: object) -> _Verified: ...
+
+    def execute_verified_run(
+        self,
+        verified: _Verified,
+        executor: object,
+        *,
+        store_root: Path,
+        nonce: str,
+    ) -> object: ...
 
 
 def _script() -> tuple[_Script, ModuleType]:
@@ -108,28 +113,23 @@ def _verified_paths(
 
 def test_production_loader_requires_complete_verified_freeze_boundary(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    script, module = _script()
+    script, _ = _script()
     paths, freeze, _ = _verified_paths(tmp_path)
-    monkeypatch.setattr(module, "validate_task_suite", lambda plan, tasks: None)
 
     verified = script.load_verified_execution(**paths)
 
     assert verified.freeze == freeze
     assert len(verified.plan.expand_trial_slots()) == 54
-    assert verified.verification_receipt.run_plan_id == verified.plan.run_plan_id
 
 
 @pytest.mark.parametrize("mutation", ("reidentified-freeze", "mismatched-comparison"))
 def test_production_loader_rejects_reidentified_or_mismatched_authorities(
     tmp_path: Path,
     mutation: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    script, module = _script()
+    script, _ = _script()
     paths, freeze, manifest = _verified_paths(tmp_path)
-    monkeypatch.setattr(module, "validate_task_suite", lambda plan, tasks: None)
     if mutation == "reidentified-freeze":
         payload = freeze.model_dump(mode="json")
         payload["candidate_freeze_id"] = "candidate-freeze-reidentified"
@@ -145,6 +145,37 @@ def test_production_loader_rejects_reidentified_or_mismatched_authorities(
 
     with pytest.raises((ContractError, ValueError)):
         script.load_verified_execution(**paths)
+
+
+def test_forged_verified_wrapper_cannot_reach_execution_delegate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script, module = _script()
+    paths, _, manifest = _verified_paths(tmp_path)
+    verified = script.load_verified_execution(**paths)
+    verified.plan = _final_plan(
+        manifest,
+        candidate_prompt="Apply a separately identified candidate prompt.",
+    )
+    delegated = False
+
+    def forbidden_delegate(*args: object, **kwargs: object) -> object:
+        nonlocal delegated
+        delegated = True
+        raise AssertionError("execution delegate must remain unreachable")
+
+    monkeypatch.setattr(module, "execute_or_resume_controlled_run", forbidden_delegate)
+
+    with pytest.raises(ContractError):
+        script.execute_verified_run(
+            verified,
+            object(),
+            store_root=tmp_path / "store",
+            nonce="0" * 64,
+        )
+
+    assert delegated is False
 
 
 def test_production_parser_rejects_omitted_freeze_authorities() -> None:

@@ -31,7 +31,6 @@ from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
 from cernora_reference_workflow.heldout_seal import HeldoutManifest, HeldoutRevealReceipt
 from cernora_reference_workflow.improvement_loop import (
     CandidateFreeze,
-    CandidateFreezeVerificationReceipt,
     verify_candidate_freeze,
 )
 
@@ -47,7 +46,7 @@ class VerifiedM4Execution:
         "plan",
         "reveal_receipt",
         "tasks",
-        "verification_receipt",
+        "visible_corpus_root",
     )
 
     def __init__(
@@ -60,7 +59,7 @@ class VerifiedM4Execution:
         pilot_package: BatchSummaryPackage,
         heldout_manifest: HeldoutManifest,
         reveal_receipt: HeldoutRevealReceipt,
-        verification_receipt: CandidateFreezeVerificationReceipt,
+        visible_corpus_root: Path,
     ) -> None:
         self.plan = plan
         self.tasks = tasks
@@ -69,7 +68,7 @@ class VerifiedM4Execution:
         self.pilot_package = pilot_package
         self.heldout_manifest = heldout_manifest
         self.reveal_receipt = reveal_receipt
-        self.verification_receipt = verification_receipt
+        self.visible_corpus_root = visible_corpus_root
 
 
 def _task(path: Path) -> ControlledTaskAuthority:
@@ -130,7 +129,7 @@ def load_verified_execution(
     reveal_receipt = HeldoutRevealReceipt.from_bytes(read_regular_file_bytes(reveal_receipt_path))
     tasks = tuple(_task(path) for path in task_authority_paths)
     validate_task_suite(plan, tasks)
-    verification_receipt = verify_candidate_freeze(
+    verify_candidate_freeze(
         freeze,
         pilot_package=pilot_package,
         run_plan=plan,
@@ -148,7 +147,7 @@ def load_verified_execution(
         pilot_package=pilot_package,
         heldout_manifest=heldout_manifest,
         reveal_receipt=reveal_receipt,
-        verification_receipt=verification_receipt,
+        visible_corpus_root=visible_corpus_root,
     )
 
 
@@ -159,21 +158,18 @@ def execute_verified_run(
     store_root: Path,
     nonce: str,
 ) -> ControlledExecutionResult:
-    """Execute only through the complete immutable verification receipt."""
+    """Reverify every strict authority at the irreversible execution boundary."""
 
-    receipt = verified.verification_receipt
-    if (
-        receipt.run_plan_id != verified.plan.run_plan_id
-        or receipt.candidate_freeze_id != verified.freeze.candidate_freeze_id
-        or receipt.candidate_freeze_sha256 != verified.freeze.candidate_freeze_sha256
-        or receipt.comparison_plan_id != verified.comparison_plan.comparison_plan_id
-        or receipt.comparison_plan_sha256 != verified.comparison_plan.comparison_plan_sha256
-        or receipt.pilot_id != verified.freeze.pilot.pilot_id
-        or receipt.heldout_manifest_id != verified.heldout_manifest.manifest_id
-        or receipt.reveal_receipt_id != verified.reveal_receipt.receipt_id
-        or receipt.task_authority_ids != tuple(sorted(item.authority_id for item in verified.tasks))
-    ):
-        raise ContractError("M4 Runtime lacks its complete CandidateFreeze verification receipt")
+    verify_candidate_freeze(
+        verified.freeze,
+        pilot_package=verified.pilot_package,
+        run_plan=verified.plan,
+        comparison_plan=verified.comparison_plan,
+        visible_corpus_root=verified.visible_corpus_root,
+        heldout_manifest=verified.heldout_manifest,
+        reveal_receipt=verified.reveal_receipt,
+        task_authorities=verified.tasks,
+    )
     return execute_or_resume_controlled_run(
         verified.plan,
         executor,
