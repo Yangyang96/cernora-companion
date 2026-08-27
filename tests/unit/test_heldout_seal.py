@@ -39,9 +39,31 @@ def _cases() -> tuple[dict[str, object], ...]:
     return tuple(
         {
             "case_id": f"case-{index:032x}",
-            "task": {"instruction": f"dummy repair {index}"},
-            "workspace": {"files": [{"path": "module.py", "content": f"VALUE = {index}"}]},
-            "evaluation": {"command": "pytest -q", "expected": "pass"},
+            "task": {
+                "schema_version": "cernora.reference.heldout-task/v1",
+                "language": "python",
+                "instruction": f"repair synthetic module {index}",
+                "allowed_paths": ["src/module.py"],
+                "protected_paths": ["tests/verify.py"],
+                "case_version": "1",
+            },
+            "workspace": {
+                "schema_version": "cernora.reference.heldout-workspace/v1",
+                "files": [
+                    {"path": "src/module.py", "content_utf8": f"VALUE = {index}\n"},
+                    {"path": "tests/verify.py", "content_utf8": "assert VALUE == 4\n"},
+                ],
+            },
+            "evaluation": {
+                "schema_version": "cernora.reference.heldout-evaluation/v1",
+                "command": ["python", "tests/verify.py"],
+                "working_directory": ".",
+                "timeout_seconds": 60,
+                "network": "disabled",
+                "expected_exit_code": 0,
+                "success_metric": "verifier_exit_zero",
+                "failure_codes": ["wrong_value_v1"],
+            },
         }
         for index in range(1, 4)
     )
@@ -252,6 +274,35 @@ def test_manifest_and_receipt_reject_noncanonical_identity() -> None:
         HeldoutManifest.model_validate(manifest_payload)
     with pytest.raises(ValidationError, match="receipt identity"):
         HeldoutRevealReceipt.model_validate(receipt_payload)
+
+
+@pytest.mark.parametrize("field", ("task_authority_id", "task_authority_sha256"))
+def test_public_reveal_rejects_reidentified_task_binding_tampering(field: str) -> None:
+    manifest, ciphertext, receipt = _sealed()
+    archive, _ = reveal_heldout_archive(
+        manifest,
+        ciphertext,
+        key=KEY,
+        candidate_freeze_id=CANDIDATE_ID,
+        candidate_freeze_sha256=CANDIDATE_SHA256,
+    )
+    payload = receipt.model_dump(mode="json", exclude={"receipt_id"})
+    records = payload["case_records"]
+    assert isinstance(records, list)
+    first = records[0]
+    assert isinstance(first, dict)
+    first[field] = "0" * 64
+    payload["receipt_id"] = canonical_content_id(payload, excluded=frozenset())
+    forged = HeldoutRevealReceipt.model_validate(payload)
+
+    with pytest.raises(HeldoutSealError, match="revealed authorities"):
+        verify_revealed_archive(
+            manifest,
+            archive.canonical_bytes(),
+            forged,
+            expected_candidate_freeze_id=CANDIDATE_ID,
+            expected_candidate_freeze_sha256=CANDIDATE_SHA256,
+        )
 
 
 def test_checked_in_prefreeze_artifacts_are_public_commitments_only() -> None:

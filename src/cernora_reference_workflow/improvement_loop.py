@@ -31,7 +31,10 @@ from cernora_reference_workflow.controlled_experiment_spec import (
 )
 from cernora_reference_workflow.controlled_profile import PROFILE_ID, PROFILE_VERSION
 from cernora_reference_workflow.controlled_run_plan import ControlledRunPlanV2
-from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
+from cernora_reference_workflow.controlled_task import (
+    ControlledTaskAuthority,
+    reconstructed_revealed_case,
+)
 from cernora_reference_workflow.heldout_seal import (
     HeldoutManifest,
     HeldoutRevealReceipt,
@@ -428,25 +431,17 @@ def verify_candidate_freeze(
         heldout_tasks,
         strict=True,
     ):
-        revealed_case = {
-            "case_id": task.case.case_id,
-            "task": {
-                "case": task.case.model_dump(mode="json"),
-                "allowed_paths": list(task.allowed_paths),
-                "protected_paths": list(task.protected_paths),
-            },
-            "workspace": {"files": [item.model_dump(mode="json") for item in task.workspace_files]},
-            "evaluation": {
-                "failure_code": task.failure_code,
-                "files": [item.model_dump(mode="json") for item in task.test_files],
-                "command": list(task.test_command),
-            },
-        }
+        revealed_case_sha256 = sha256_bytes(
+            canonical_json_bytes(reconstructed_revealed_case(task).model_dump(mode="json"))
+        )
         if (
             commitment.case_id != record.case_id
             or commitment.case_id != task.case.case_id
             or record.sealed_plaintext_sha256 != commitment.plaintext_sha256
-            or record.revealed_authority_sha256 != sha256_bytes(canonical_json_bytes(revealed_case))
+            or record.revealed_authority_sha256 != commitment.plaintext_sha256
+            or record.task_authority_id != task.authority_id
+            or record.task_authority_sha256 != task.authority_sha256
+            or revealed_case_sha256 != commitment.plaintext_sha256
         ):
             raise ContractError("held-out RevealReceipt does not bind exact revealed authorities")
     splits: dict[str, list[str]] = {}

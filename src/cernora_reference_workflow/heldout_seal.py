@@ -147,6 +147,8 @@ class HeldoutRevealCaseRecord(StrictV2Contract):
     case_id: OpaqueCaseId
     sealed_plaintext_sha256: Digest
     revealed_authority_sha256: Digest
+    task_authority_id: Digest
+    task_authority_sha256: Digest
 
     @model_validator(mode="after")
     def authority_matches_commitment(self) -> Self:
@@ -302,7 +304,10 @@ def materialize_reveal_receipt(
 ) -> HeldoutRevealReceipt:
     """Record a verified reveal without disclosing the decryption key."""
 
+    from cernora_reference_workflow.controlled_task import task_from_revealed_case
+
     commitments = _verify_archive_commitments(manifest, archive)
+    tasks = tuple(task_from_revealed_case(case) for case in archive.cases)
     payload: dict[str, object] = {
         "schema_version": "cernora.reference.heldout-reveal-receipt/v1",
         "manifest_id": manifest.manifest_id,
@@ -315,8 +320,10 @@ def materialize_reveal_receipt(
                 "case_id": item.case_id,
                 "sealed_plaintext_sha256": item.plaintext_sha256,
                 "revealed_authority_sha256": item.plaintext_sha256,
+                "task_authority_id": task.authority_id,
+                "task_authority_sha256": task.authority_sha256,
             }
-            for item in commitments
+            for item, task in zip(commitments, tasks, strict=True)
         ],
     }
     payload["receipt_id"] = canonical_content_id(payload, excluded=frozenset())
@@ -385,13 +392,18 @@ def verify_revealed_archive(
     except (ValueError, ContractError) as exc:
         raise HeldoutSealError("revealed held-out archive is invalid") from exc
     commitments = _verify_archive_commitments(manifest, archive)
+    from cernora_reference_workflow.controlled_task import task_from_revealed_case
+
+    tasks = tuple(task_from_revealed_case(case) for case in archive.cases)
     expected_records = tuple(
         HeldoutRevealCaseRecord(
             case_id=item.case_id,
             sealed_plaintext_sha256=item.plaintext_sha256,
             revealed_authority_sha256=item.plaintext_sha256,
+            task_authority_id=task.authority_id,
+            task_authority_sha256=task.authority_sha256,
         )
-        for item in commitments
+        for item, task in zip(commitments, tasks, strict=True)
     )
     if receipt.revealed_archive_sha256 != manifest.archive_sha256 or (
         receipt.case_records != expected_records

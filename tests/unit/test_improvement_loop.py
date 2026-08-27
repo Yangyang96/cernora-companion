@@ -46,8 +46,11 @@ from cernora_reference_workflow.controlled_task import (
     ControlledTaskAuthority,
     load_visible_task,
     materialize_controlled_task,
+    reconstructed_revealed_case,
+    task_from_revealed_case,
 )
 from cernora_reference_workflow.heldout_seal import (
+    HeldoutArchiveCase,
     HeldoutManifest,
     HeldoutRevealReceipt,
 )
@@ -211,50 +214,49 @@ def _manifest() -> HeldoutManifest:
     return HeldoutManifest.model_validate(payload)
 
 
+def _generic_heldout_case(case_id: str, template: ControlledTaskAuthority) -> HeldoutArchiveCase:
+    files = (*template.workspace_files, *template.test_files)
+    return HeldoutArchiveCase(
+        case_id=case_id,
+        task={
+            "schema_version": "cernora.reference.heldout-task/v1",
+            "language": "python",
+            "instruction": template.case.input.prompt,
+            "allowed_paths": list(template.allowed_paths),
+            "protected_paths": list(template.protected_paths),
+            "case_version": template.case.case_version,
+        },
+        workspace={
+            "schema_version": "cernora.reference.heldout-workspace/v1",
+            "files": [
+                {"path": item.path, "content_utf8": item.content().decode("utf-8")}
+                for item in files
+            ],
+        },
+        evaluation={
+            "schema_version": "cernora.reference.heldout-evaluation/v1",
+            "command": list(template.test_command),
+            "working_directory": ".",
+            "timeout_seconds": 60,
+            "network": "disabled",
+            "expected_exit_code": 0,
+            "success_metric": "verifier_exit_zero",
+            "failure_codes": [template.failure_code],
+        },
+    )
+
+
 def _revealed_case_authority(task: ControlledTaskAuthority) -> dict[str, object]:
-    return {
-        "case_id": task.case.case_id,
-        "task": {
-            "case": task.case.model_dump(mode="json"),
-            "allowed_paths": list(task.allowed_paths),
-            "protected_paths": list(task.protected_paths),
-        },
-        "workspace": {"files": [item.model_dump(mode="json") for item in task.workspace_files]},
-        "evaluation": {
-            "failure_code": task.failure_code,
-            "files": [item.model_dump(mode="json") for item in task.test_files],
-            "command": list(task.test_command),
-        },
-    }
+    return reconstructed_revealed_case(task).model_dump(mode="json")
 
 
 def _all_task_authorities(manifest: HeldoutManifest) -> tuple[ControlledTaskAuthority, ...]:
     visible = _tasks((*DEV_NAMES, *REG_NAMES))
     template = visible[0]
-    heldout: list[ControlledTaskAuthority] = []
-    for commitment in manifest.case_commitments:
-        case = template.case.model_dump(mode="json")
-        case["case_id"] = commitment.case_id
-        fixtures = case["fixture_references"]
-        assert isinstance(fixtures, list)
-        fixtures[0]["fixture_id"] = f"{commitment.case_id}-tests"
-        heldout.append(
-            materialize_controlled_task(
-                {
-                    "schema_version": "cernora.reference.controlled-task-authority/v1",
-                    "case": case,
-                    "split_id": "held-out",
-                    "failure_code": template.failure_code,
-                    "workspace_files": [
-                        item.model_dump(mode="json") for item in template.workspace_files
-                    ],
-                    "test_files": [item.model_dump(mode="json") for item in template.test_files],
-                    "allowed_paths": list(template.allowed_paths),
-                    "protected_paths": list(template.protected_paths),
-                    "test_command": list(template.test_command),
-                }
-            )
-        )
+    heldout = tuple(
+        task_from_revealed_case(_generic_heldout_case(commitment.case_id, template))
+        for commitment in manifest.case_commitments
+    )
     return (*visible, *heldout)
 
 
@@ -262,10 +264,16 @@ def _final_plan(
     manifest: HeldoutManifest,
     *,
     candidate_prompt: str = "Inspect the leading failure, then repair the project.",
+    task_authorities: tuple[ControlledTaskAuthority, ...] | None = None,
 ) -> ControlledRunPlanV2:
     from tests.unit.test_controlled_live_attempt import _spec
 
-    tasks = tuple(sorted(_all_task_authorities(manifest), key=lambda item: item.case.case_id))
+    tasks = tuple(
+        sorted(
+            _all_task_authorities(manifest) if task_authorities is None else task_authorities,
+            key=lambda item: item.case.case_id,
+        )
+    )
     failure_binding = {
         "code": "interval_boundary_v1",
         "profile_id": PROFILE_ID,
@@ -389,7 +397,19 @@ def _comparison(plan: ControlledRunPlanV2, manifest: HeldoutManifest) -> Compari
     )
 
 
-def _reveal(manifest: HeldoutManifest, freeze: CandidateFreeze) -> HeldoutRevealReceipt:
+def _reveal(
+    manifest: HeldoutManifest,
+    freeze: CandidateFreeze,
+    *,
+    task_authorities: tuple[ControlledTaskAuthority, ...] | None = None,
+) -> HeldoutRevealReceipt:
+    heldout_tasks = tuple(
+        task
+        for task in (
+            _all_task_authorities(manifest) if task_authorities is None else task_authorities
+        )
+        if task.split_id == "held-out"
+    )
     payload: dict[str, object] = {
         "schema_version": "cernora.reference.heldout-reveal-receipt/v1",
         "manifest_id": manifest.manifest_id,
@@ -402,8 +422,10 @@ def _reveal(manifest: HeldoutManifest, freeze: CandidateFreeze) -> HeldoutReveal
                 "case_id": item.case_id,
                 "sealed_plaintext_sha256": item.plaintext_sha256,
                 "revealed_authority_sha256": item.plaintext_sha256,
+                "task_authority_id": task.authority_id,
+                "task_authority_sha256": task.authority_sha256,
             }
-            for item in manifest.case_commitments
+            for item, task in zip(manifest.case_commitments, heldout_tasks, strict=True)
         ],
     }
     payload["receipt_id"] = canonical_content_id(payload, excluded=frozenset())
@@ -502,6 +524,9 @@ def test_final_comparison_reverifies_authorities_before_delegate(
         "archive-digest",
         "sealed-digest",
         "revealed-authority-digest",
+        "task-authority-id",
+        "task-authority-digest",
+        "reordered-records",
         "substituted-task",
         "reordered-tasks",
     ),
@@ -519,27 +544,26 @@ def test_reidentified_reveal_or_substituted_task_cannot_reach_comparison_delegat
         tasks[heldout[0]], tasks[heldout[1]] = tasks[heldout[1]], tasks[heldout[0]]
     elif mutation == "substituted-task":
         index = next(index for index, task in enumerate(tasks) if task.split_id == "held-out")
-        payload = tasks[index].model_dump(mode="json", exclude={"authority_id"})
-        payload["failure_code"] = "substituted_failure_v1"
-        case = payload["case"]
-        assert isinstance(case, dict)
-        inputs = case["input"]
-        assert isinstance(inputs, dict)
-        parameters = inputs["parameters"]
-        assert isinstance(parameters, dict)
-        parameters["failure_code"] = "substituted_failure_v1"
-        tasks[index] = materialize_controlled_task(payload)
+        payload = reconstructed_revealed_case(tasks[index]).model_dump(mode="json")
+        task_projection = payload["task"]
+        assert isinstance(task_projection, dict)
+        task_projection["instruction"] = "A canonically different substituted instruction."
+        tasks[index] = task_from_revealed_case(HeldoutArchiveCase.model_validate(payload))
     else:
         if mutation == "archive-digest":
             reveal = reveal.model_copy(update={"revealed_archive_sha256": "0" * 64})
         else:
             records = list(reveal.case_records)
-            field = (
-                "sealed_plaintext_sha256"
-                if mutation == "sealed-digest"
-                else "revealed_authority_sha256"
-            )
-            records[0] = records[0].model_copy(update={field: "0" * 64})
+            if mutation == "reordered-records":
+                records[0], records[1] = records[1], records[0]
+            else:
+                field = {
+                    "sealed-digest": "sealed_plaintext_sha256",
+                    "revealed-authority-digest": "revealed_authority_sha256",
+                    "task-authority-id": "task_authority_id",
+                    "task-authority-digest": "task_authority_sha256",
+                }[mutation]
+                records[0] = records[0].model_copy(update={field: "0" * 64})
             reveal = reveal.model_copy(update={"case_records": tuple(records)})
         identity = canonical_content_id(
             reveal.model_dump(mode="json", exclude={"receipt_id"}), excluded=frozenset()
@@ -565,6 +589,51 @@ def test_reidentified_reveal_or_substituted_task_cannot_reach_comparison_delegat
             heldout_manifest=manifest,
             reveal_receipt=reveal,
             task_authorities=tuple(tasks),
+        )
+
+    assert delegated is False
+
+
+def test_coherent_task_plan_and_receipt_forgery_cannot_replace_manifest_case(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    freeze, pilot, _, _, manifest = _freeze_and_final(tmp_path)
+    tasks = list(_all_task_authorities(manifest))
+    index = next(index for index, task in enumerate(tasks) if task.split_id == "held-out")
+    projection = reconstructed_revealed_case(tasks[index]).model_dump(mode="json")
+    task_projection = projection["task"]
+    assert isinstance(task_projection, dict)
+    task_projection["instruction"] = "A coherently reidentified substituted instruction."
+    tasks[index] = task_from_revealed_case(HeldoutArchiveCase.model_validate(projection))
+    forged_tasks = tuple(tasks)
+    forged_plan = _final_plan(manifest, task_authorities=forged_tasks)
+    forged_comparison = _comparison(forged_plan, manifest)
+    forged_reveal = _reveal(
+        manifest,
+        freeze,
+        task_authorities=forged_tasks,
+    )
+    delegated = False
+
+    def forbidden_delegate(*args: object, **kwargs: object) -> object:
+        nonlocal delegated
+        delegated = True
+        raise AssertionError("comparison delegate must remain unreachable")
+
+    monkeypatch.setattr(improvement_loop_module, "assemble_comparison_input", forbidden_delegate)
+
+    with pytest.raises(ContractError, match="exact revealed authorities"):
+        assemble_final_comparison_input(
+            pilot,
+            forged_plan,
+            forged_comparison,
+            freeze=freeze,
+            pilot_package=pilot,
+            visible_corpus_root=VISIBLE_ROOT,
+            heldout_manifest=manifest,
+            reveal_receipt=forged_reveal,
+            task_authorities=forged_tasks,
         )
 
     assert delegated is False
