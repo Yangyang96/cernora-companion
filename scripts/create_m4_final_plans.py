@@ -50,6 +50,21 @@ def _task(path: Path) -> ControlledTaskAuthority:
     return ControlledTaskAuthority.from_bytes(read_regular_file_bytes(path))
 
 
+def _heldout_task_paths(root: Path) -> tuple[Path, ...]:
+    if not root.is_dir() or root.is_symlink():
+        raise ContractError("held-out task root must be one real directory")
+    files = closed_regular_tree(root)
+    entries = tuple(root.iterdir())
+    if (
+        len(files) != 3
+        or len(entries) != 3
+        or any("/" in relative or not relative.endswith(".json") for relative in files)
+        or any(entry.name not in files or entry.is_symlink() for entry in entries)
+    ):
+        raise ContractError("held-out task root must contain exactly three JSON authorities")
+    return tuple(files[relative] for relative in sorted(files))
+
+
 def create_final_plan_package(
     *,
     visible_root: Path,
@@ -160,7 +175,7 @@ def create_final_plan_package(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--visible-root", type=Path, required=True)
-    parser.add_argument("--heldout-task", action="append", type=Path, required=True)
+    parser.add_argument("--heldout-task-root", type=Path, required=True)
     parser.add_argument("--candidate-freeze", type=Path, required=True)
     parser.add_argument("--pilot-package", type=Path, required=True)
     parser.add_argument("--heldout-manifest", type=Path, required=True)
@@ -175,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plan, comparison = create_final_plan_package(
             visible_root=arguments.visible_root,
-            heldout_task_paths=tuple(arguments.heldout_task),
+            heldout_task_paths=_heldout_task_paths(arguments.heldout_task_root),
             candidate_freeze_path=arguments.candidate_freeze,
             pilot_package_root=arguments.pilot_package,
             heldout_manifest_path=arguments.heldout_manifest,
