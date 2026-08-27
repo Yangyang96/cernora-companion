@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from cernora_reference_workflow.common import ContractError
 from cernora_reference_workflow.controlled_task import (
     ControlledTaskAuthority,
     load_visible_task,
@@ -112,7 +113,7 @@ def test_revealed_generic_case_conversion_is_exactly_reversible() -> None:
 
 @pytest.mark.parametrize(
     "mutation",
-    ("missing", "extra", "ambiguous", "wrong-type", "multiple-failures"),
+    ("missing", "extra", "ambiguous", "wrong-type"),
 )
 def test_revealed_case_decoder_rejects_invalid_generic_projection(mutation: str) -> None:
     payload = _generic_case().model_dump(mode="json")
@@ -132,8 +133,6 @@ def test_revealed_case_decoder_rejects_invalid_generic_projection(mutation: str)
         files.append(dict(files[0]))
     elif mutation == "wrong-type":
         evaluation["timeout_seconds"] = True
-    else:
-        evaluation["failure_codes"] = ["wrong_value_v1", "second_failure_v1"]
     case = HeldoutArchiveCase.model_validate(payload)
 
     with pytest.raises((ValidationError, ValueError), match="revealed Case|controlled task"):
@@ -150,17 +149,41 @@ def test_revealed_case_decoder_rejects_invalid_generic_projection(mutation: str)
         ("evaluation", "schema_version", "cernora.reference.heldout-evaluation/v2"),
         ("evaluation", "working_directory", "/tmp"),
         ("evaluation", "timeout_seconds", 61),
-        ("evaluation", "timeout_seconds", True),
         ("evaluation", "network", "enabled"),
         ("evaluation", "expected_exit_code", 1),
-        ("evaluation", "expected_exit_code", False),
         ("evaluation", "success_metric", "tests_passed"),
     ),
 )
-def test_revealed_case_decoder_rejects_frozen_semantic_drift(
+def test_revealed_case_preserves_bounded_source_metadata(
     section: str,
     field: str,
     value: object,
+) -> None:
+    payload = _generic_case().model_dump(mode="json")
+    projection = payload[section]
+    assert isinstance(projection, dict)
+    projection[field] = value
+
+    case = HeldoutArchiveCase.model_validate(payload)
+    assert reconstructed_revealed_case(task_from_revealed_case(case)) == case
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    (
+        ("task", "schema_version", ""),
+        ("task", "language", "x" * 1_025),
+        ("evaluation", "timeout_seconds", 0),
+        ("evaluation", "timeout_seconds", 43_201),
+        ("evaluation", "timeout_seconds", True),
+        ("evaluation", "expected_exit_code", -256),
+        ("evaluation", "expected_exit_code", 256),
+        ("evaluation", "expected_exit_code", False),
+        ("evaluation", "failure_codes", []),
+    ),
+)
+def test_revealed_case_rejects_unbounded_or_wrong_typed_metadata(
+    section: str, field: str, value: object
 ) -> None:
     payload = _generic_case().model_dump(mode="json")
     projection = payload[section]
@@ -171,35 +194,44 @@ def test_revealed_case_decoder_rejects_frozen_semantic_drift(
         task_from_revealed_case(HeldoutArchiveCase.model_validate(payload))
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    (
-        ("task_schema_version", "cernora.reference.heldout-task/v2"),
-        ("language", "ruby"),
-        ("case_version", "2"),
-        ("workspace_schema_version", "cernora.reference.heldout-workspace/v2"),
-        ("evaluation_schema_version", "cernora.reference.heldout-evaluation/v2"),
-        ("working_directory", "/tmp"),
-        ("timeout_seconds", 61),
-        ("timeout_seconds", True),
-        ("network", "enabled"),
-        ("expected_exit_code", 1),
-        ("expected_exit_code", False),
-        ("success_metric", "tests_passed"),
-    ),
-)
-def test_reidentified_task_rejects_frozen_binding_drift(field: str, value: object) -> None:
-    task = task_from_revealed_case(_generic_case())
-    payload = task.model_dump(mode="json", exclude={"authority_id"})
-    case = payload["case"]
-    assert isinstance(case, dict)
-    inputs = case["input"]
-    assert isinstance(inputs, dict)
-    parameters = inputs["parameters"]
-    assert isinstance(parameters, dict)
-    binding = parameters["heldout_archive_v1"]
-    assert isinstance(binding, dict)
-    binding[field] = value
+def test_revealed_case_preserves_nested_protected_scopes_and_failure_order() -> None:
+    payload = _generic_case().model_dump(mode="json")
+    task = payload["task"]
+    workspace = payload["workspace"]
+    evaluation = payload["evaluation"]
+    assert isinstance(task, dict)
+    assert isinstance(workspace, dict)
+    assert isinstance(evaluation, dict)
+    task["protected_paths"] = ["tests"]
+    files = workspace["files"]
+    assert isinstance(files, list)
+    files.insert(1, {"path": "tests/helpers/data.py", "content_utf8": "VALUE = 2\n"})
+    evaluation["failure_codes"] = ["wrong_value_v1", "protected_scope_v1"]
+    case = HeldoutArchiveCase.model_validate(payload)
 
-    with pytest.raises(ValidationError, match="held-out|literal|integer"):
-        ControlledTaskAuthority.model_validate({**payload, "authority_id": "0" * 64})
+    authority = task_from_revealed_case(case)
+
+    assert authority.failure_code == "wrong_value_v1"
+    assert authority.protected_paths == ("tests/helpers/data.py", "tests/verify.py")
+    assert reconstructed_revealed_case(authority) == case
+
+
+@pytest.mark.parametrize("mutation", ("unclassified", "overlapping", "allowed-protected"))
+def test_revealed_case_rejects_ambiguous_path_classification(mutation: str) -> None:
+    payload = _generic_case().model_dump(mode="json")
+    task = payload["task"]
+    workspace = payload["workspace"]
+    assert isinstance(task, dict)
+    assert isinstance(workspace, dict)
+    if mutation == "unclassified":
+        files = workspace["files"]
+        assert isinstance(files, list)
+        files.append({"path": "notes.txt", "content_utf8": "private\n"})
+    elif mutation == "overlapping":
+        task["protected_paths"] = ["tests", "tests/verify.py"]
+    else:
+        task["allowed_paths"] = ["src/main.py", "tests/verify.py"]
+    case = HeldoutArchiveCase.model_validate(payload)
+
+    with pytest.raises(ContractError, match="controlled task authority"):
+        task_from_revealed_case(case)

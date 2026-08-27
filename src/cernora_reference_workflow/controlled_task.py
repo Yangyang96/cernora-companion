@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, Self
 
 from cernora import Case, CaseInput, FixtureReference
-from pydantic import Field, JsonValue, StrictStr, field_validator, model_validator
+from pydantic import Field, JsonValue, StrictInt, StrictStr, field_validator, model_validator
 
 from cernora_reference_workflow.common import (
     ContractError,
@@ -30,15 +30,22 @@ if TYPE_CHECKING:
     from cernora_reference_workflow.heldout_seal import HeldoutArchiveCase
 
 MAX_TASK_FILE_BYTES = 2 * 1024 * 1024
+MAX_SOURCE_METADATA_CHARS = 1_024
+MAX_SOURCE_FAILURE_CODES = 32
+
+SourceMetadata = Annotated[
+    StrictStr,
+    Field(min_length=1, max_length=MAX_SOURCE_METADATA_CHARS),
+]
 
 
 class _HeldoutTaskProjection(StrictV2Contract):
-    schema_version: Literal["cernora.reference.heldout-task/v1"]
-    language: Literal["python"]
+    schema_version: SourceMetadata
+    language: SourceMetadata
     instruction: StrictStr = Field(min_length=1)
     allowed_paths: tuple[StrictStr, ...]
     protected_paths: tuple[StrictStr, ...]
-    case_version: Literal["1"]
+    case_version: SourceMetadata
 
     @field_validator("allowed_paths", "protected_paths", mode="before")
     @classmethod
@@ -52,7 +59,7 @@ class _HeldoutWorkspaceFile(StrictV2Contract):
 
 
 class _HeldoutWorkspaceProjection(StrictV2Contract):
-    schema_version: Literal["cernora.reference.heldout-workspace/v1"]
+    schema_version: SourceMetadata
     files: Annotated[tuple[_HeldoutWorkspaceFile, ...], Field(min_length=1)]
 
     @field_validator("files", mode="before")
@@ -62,14 +69,16 @@ class _HeldoutWorkspaceProjection(StrictV2Contract):
 
 
 class _HeldoutEvaluationProjection(StrictV2Contract):
-    schema_version: Literal["cernora.reference.heldout-evaluation/v1"]
+    schema_version: SourceMetadata
     command: Annotated[tuple[StrictStr, ...], Field(min_length=1)]
-    working_directory: Literal["."]
-    timeout_seconds: Literal[60]
-    network: Literal["disabled"]
-    expected_exit_code: Literal[0]
-    success_metric: Literal["verifier_exit_zero"]
-    failure_codes: Annotated[tuple[Identifier, ...], Field(min_length=1)]
+    working_directory: SourceMetadata
+    timeout_seconds: Annotated[StrictInt, Field(gt=0, le=43_200)]
+    network: SourceMetadata
+    expected_exit_code: Annotated[StrictInt, Field(ge=-255, le=255)]
+    success_metric: SourceMetadata
+    failure_codes: Annotated[
+        tuple[Identifier, ...], Field(min_length=1, max_length=MAX_SOURCE_FAILURE_CODES)
+    ]
 
     @field_validator("command", "failure_codes", mode="before")
     @classmethod
@@ -85,20 +94,22 @@ class _HeldoutEvaluationProjection(StrictV2Contract):
 
 
 class _HeldoutProjectionBinding(StrictV2Contract):
-    task_schema_version: Literal["cernora.reference.heldout-task/v1"]
-    language: Literal["python"]
-    case_version: Literal["1"]
-    workspace_schema_version: Literal["cernora.reference.heldout-workspace/v1"]
+    task_schema_version: SourceMetadata
+    language: SourceMetadata
+    case_version: SourceMetadata
+    workspace_schema_version: SourceMetadata
     workspace_file_order: tuple[StrictStr, ...]
     allowed_path_order: tuple[StrictStr, ...]
     protected_path_order: tuple[StrictStr, ...]
-    evaluation_schema_version: Literal["cernora.reference.heldout-evaluation/v1"]
-    working_directory: Literal["."]
-    timeout_seconds: Literal[60]
-    network: Literal["disabled"]
-    expected_exit_code: Literal[0]
-    success_metric: Literal["verifier_exit_zero"]
-    failure_codes: Annotated[tuple[Identifier, ...], Field(min_length=1, max_length=1)]
+    evaluation_schema_version: SourceMetadata
+    working_directory: SourceMetadata
+    timeout_seconds: Annotated[StrictInt, Field(gt=0, le=43_200)]
+    network: SourceMetadata
+    expected_exit_code: Annotated[StrictInt, Field(ge=-255, le=255)]
+    success_metric: SourceMetadata
+    failure_codes: Annotated[
+        tuple[Identifier, ...], Field(min_length=1, max_length=MAX_SOURCE_FAILURE_CODES)
+    ]
 
     @field_validator(
         "workspace_file_order",
@@ -117,6 +128,40 @@ class _HeldoutProjectionBinding(StrictV2Contract):
         if type(value) is not int:
             raise ValueError("held-out binding integer fields must be strict integers")
         return value
+
+
+def _classify_source_paths(
+    file_paths: tuple[str, ...],
+    allowed_paths: tuple[str, ...],
+    protected_scopes: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Map each source file exactly once to an allowed path or protected scope."""
+
+    for label, paths in (
+        ("workspace", file_paths),
+        ("allowed", allowed_paths),
+        ("protected", protected_scopes),
+    ):
+        if len(paths) != len(set(paths)):
+            raise ContractError(f"revealed Case {label} paths must be unique")
+        for path in paths:
+            validate_relative_path(path)
+    allowed: list[str] = []
+    protected: list[str] = []
+    for path in file_paths:
+        exact_allowed = path in allowed_paths
+        matching_scopes = tuple(
+            scope for scope in protected_scopes if path == scope or path.startswith(f"{scope}/")
+        )
+        if int(exact_allowed) + len(matching_scopes) != 1:
+            raise ContractError("revealed Case files must have exactly one path classification")
+        if exact_allowed:
+            allowed.append(path)
+        else:
+            protected.append(path)
+    if set(allowed) != set(allowed_paths):
+        raise ContractError("revealed Case allowed paths must name exact workspace files")
+    return tuple(sorted(allowed)), tuple(sorted(protected))
 
 
 class ControlledTaskFile(StrictV2Contract):
@@ -214,14 +259,21 @@ class ControlledTaskAuthority(StrictV2Contract):
             if self.split_id != "held-out":
                 raise ValueError("held-out projection binding requires the held-out split")
             binding = _HeldoutProjectionBinding.model_validate(projection)
+            classified_allowed, classified_protected = _classify_source_paths(
+                binding.workspace_file_order,
+                binding.allowed_path_order,
+                binding.protected_path_order,
+            )
             if (
                 tuple(item.path for item in self.workspace_files) != self.allowed_paths
                 or tuple(item.path for item in self.test_files) != self.protected_paths
+                or classified_allowed != self.allowed_paths
+                or classified_protected != self.protected_paths
             ):
                 raise ValueError(
                     "held-out files do not match their allowed/protected classification"
                 )
-            if binding.failure_codes != (self.failure_code,):
+            if binding.failure_codes[0] != self.failure_code:
                 raise ValueError("held-out failure synthesis is not canonical")
             expected_fixtures = tuple(
                 FixtureReference(
@@ -398,26 +450,17 @@ def task_from_revealed_case(case: HeldoutArchiveCase) -> ControlledTaskAuthority
         task = _HeldoutTaskProjection.model_validate(case.task)
         workspace = _HeldoutWorkspaceProjection.model_validate(case.workspace)
         evaluation = _HeldoutEvaluationProjection.model_validate(case.evaluation)
-        allowed = tuple(sorted(task.allowed_paths))
-        protected = tuple(sorted(task.protected_paths))
-        if len(set(task.allowed_paths)) != len(task.allowed_paths) or len(
-            set(task.protected_paths)
-        ) != len(task.protected_paths):
-            raise ContractError("revealed Case path policies must be unique")
-        for path in (*allowed, *protected):
-            validate_relative_path(path)
-        if set(allowed).intersection(protected):
-            raise ContractError("revealed Case path policies must be disjoint")
         file_by_path: dict[str, ControlledTaskFile] = {}
         for item in workspace.files:
             validate_relative_path(item.path)
             if item.path in file_by_path:
                 raise ContractError("revealed Case workspace paths must be unique")
             file_by_path[item.path] = _task_file(item.path, item.content_utf8.encode("utf-8"))
-        if set(file_by_path) != set(allowed).union(protected):
-            raise ContractError("revealed Case files must exactly equal its path policy")
-        if len(evaluation.failure_codes) != 1:
-            raise ContractError("revealed Case must declare exactly one versioned failure code")
+        allowed, protected = _classify_source_paths(
+            tuple(file_by_path),
+            task.allowed_paths,
+            task.protected_paths,
+        )
         failure_code = evaluation.failure_codes[0]
         workspace_files = tuple(file_by_path[path] for path in allowed)
         test_files = tuple(file_by_path[path] for path in protected)
@@ -510,12 +553,12 @@ def reconstructed_revealed_case(task: ControlledTaskAuthority) -> HeldoutArchive
             or set(binding.workspace_file_order) != set(file_by_path)
         ):
             raise ContractError("task authority does not bind the revealed file order")
-        if (
-            len(binding.allowed_path_order) != len(set(binding.allowed_path_order))
-            or len(binding.protected_path_order) != len(set(binding.protected_path_order))
-            or set(binding.allowed_path_order) != set(task.allowed_paths)
-            or set(binding.protected_path_order) != set(task.protected_paths)
-        ):
+        classified_allowed, classified_protected = _classify_source_paths(
+            binding.workspace_file_order,
+            binding.allowed_path_order,
+            binding.protected_path_order,
+        )
+        if classified_allowed != task.allowed_paths or classified_protected != task.protected_paths:
             raise ContractError("task authority path order contradicts the revealed workspace")
         workspace_files: list[JsonValue] = []
         for path in binding.workspace_file_order:
