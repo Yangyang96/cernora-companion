@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -10,6 +12,7 @@ from cernora_reference_workflow.controlled_experiment_spec import (
     materialize_controlled_experiment_spec,
 )
 from cernora_reference_workflow.controlled_runtime import (
+    MAX_CAPTURE_BYTES,
     observe_runtime_authority,
     run_subprocess_until,
 )
@@ -38,3 +41,45 @@ def test_subprocess_is_killed_during_active_work_at_global_deadline(tmp_path: Pa
     assert result.status == "timed_out"
     assert result.exit_code is None
     assert result.finished_monotonic - started < 2
+
+
+def test_subprocess_capture_is_bounded_and_receipt_is_path_free(tmp_path: Path) -> None:
+    result = run_subprocess_until(
+        (
+            sys.executable,
+            "-c",
+            f"import sys; sys.stdout.buffer.write(b'x' * {MAX_CAPTURE_BYTES + 4096})",
+            str(tmp_path / "secret-proxy-127.0.0.1-9981"),
+        ),
+        cwd=tmp_path,
+        environment={"https_proxy": "http://127.0.0.1:9981"},
+        deadline_monotonic=time.monotonic() + 5,
+        timeout_seconds=5,
+    )
+
+    assert result.status == "output_limit"
+    assert result.stdout == result.stderr == b""
+    portable = repr(result)
+    assert str(tmp_path) not in portable
+    assert "9981" not in portable
+
+
+def test_deadline_kills_descendant_process_group(tmp_path: Path) -> None:
+    child_pid = tmp_path / "child.pid"
+    script = (
+        "import pathlib,subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(30)"
+    )
+    result = run_subprocess_until(
+        (sys.executable, "-c", script, str(child_pid)),
+        cwd=tmp_path,
+        environment={},
+        deadline_monotonic=time.monotonic() + 0.25,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "timed_out"
+    pid = int(child_pid.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, signal.SIGCONT)

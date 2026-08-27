@@ -59,9 +59,10 @@ def test_repair_result_is_canonical_and_exposes_versioned_failure_codes() -> Non
     records = result.core_result_records(reference)
     assert tuple(item.id for item in records) == (
         "authorized_paths_only_v1",
-        "interval_boundary_v1",
-        "interval_ordinary_v1",
+        "diagnostic.interval_boundary_v1",
+        "diagnostic.interval_ordinary_v1",
         "protected_paths_unchanged_v1",
+        "repair_success_v1",
     )
     assert result == materialize_repair_result(deepcopy(valid_result_payload()))
 

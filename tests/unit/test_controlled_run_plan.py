@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from typing import cast
 
 import pytest
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 from cernora_reference_workflow.common import ContractError
 from cernora_reference_workflow.controlled_experiment_spec import (
     ControlledExperimentSpecV2,
     DatasetCaseAuthority,
+    materialize_authority_source,
     materialize_controlled_experiment_spec,
     materialize_dataset_authority,
 )
@@ -102,6 +104,107 @@ def valid_payload() -> dict[str, object]:
     }
 
 
+def valid_m4_payload(
+    *,
+    case_ids: tuple[str, ...] | None = None,
+    baseline_prompt: str = "Repair the project.",
+    candidate_prompt: str = "Inspect the leading failure, then repair the project.",
+    candidate_failure_binding: dict[str, str] | None = None,
+) -> dict[str, object]:
+    selected_case_ids = case_ids or tuple(f"repair-case-{index}" for index in range(1, 10))
+    if len(selected_case_ids) != 9:
+        raise ValueError("M4 test payload requires exactly nine Case IDs")
+    payloads = [
+        valid_spec_payload(case_id=case_id, configuration_id=config, prompt=prompt)
+        for case_id in sorted(selected_case_ids)
+        for config, prompt in (
+            ("baseline", baseline_prompt),
+            ("candidate", candidate_prompt),
+        )
+    ]
+    if candidate_failure_binding is not None:
+        for payload in payloads:
+            if payload["configuration_id"] != "candidate":
+                continue
+            source = materialize_authority_source(
+                "treatment-prompt",
+                cast(
+                    JsonValue,
+                    {
+                        "selected_failure": candidate_failure_binding,
+                        "text": candidate_prompt,
+                    },
+                ),
+            )
+            payload["prompt_source"] = source.model_dump(mode="json")
+            payload["prompt_sha256"] = source.source_sha256
+    dataset_cases = []
+    for payload in payloads[::2]:
+        dataset = payload["dataset_authority"]
+        assert isinstance(dataset, dict)
+        cases = dataset["cases"]
+        assert isinstance(cases, list)
+        dataset_cases.append(DatasetCaseAuthority.model_validate(cases[0]))
+    dataset = materialize_dataset_authority(tuple(dataset_cases))
+    specs = []
+    for payload in payloads:
+        payload["dataset_authority"] = dataset.model_dump(mode="json")
+        specs.append(materialize_controlled_experiment_spec(payload))
+    return {
+        "schema_version": "cernora.reference.controlled-run-plan/v2",
+        "companion_version": "0.4.0",
+        "cernora_version": "0.1.4",
+        "connector": {
+            "connector_id": "cernora-reference-harbor-codex",
+            "connector_version": "1",
+            "platform_qualification": "macos-arm64",
+        },
+        "experiment_specs": [item.model_dump(mode="json") for item in specs],
+        "cases": [
+            {
+                "case_id": item.task.task_id,
+                "case_version": item.task.task_version,
+                "task_content_sha256": item.task.content_sha256,
+            }
+            for item in specs[::2]
+        ],
+        "configurations": [
+            {"configuration_id": "baseline"},
+            {"configuration_id": "candidate"},
+        ],
+        "cells": [
+            {
+                "case_id": item.task.task_id,
+                "configuration_id": item.configuration_id,
+                "experiment_id": item.experiment_id,
+            }
+            for item in specs
+        ],
+        "repetitions": 3,
+        "pairing_rule": "case-configuration-repetition",
+        "planned_trial_count": 54,
+        "worst_case_attempt_count": 108,
+        "execution": {
+            "concurrency": 1,
+            "max_attempt_count": 108,
+            "max_total_wall_time_seconds": 43200,
+            "token_budget": {
+                "status": "unavailable",
+                "reason": "no-structured-authoritative-source",
+            },
+            "monetary_budget": {
+                "status": "unavailable",
+                "reason": "no-structured-authoritative-source",
+            },
+        },
+        "analysis": {
+            "method": "controlled-comparison",
+            "method_version": "m4",
+            "aggregate_quality_conclusion": False,
+        },
+    }
+
+
 def test_v2_plan_expands_exact_authority_bound_matrix() -> None:
     plan = materialize_controlled_run_plan(valid_payload())
     slots = plan.expand_trial_slots()
@@ -115,6 +218,25 @@ def test_v2_plan_expands_exact_authority_bound_matrix() -> None:
         for item in slots
     )
     assert plan == materialize_controlled_run_plan(deepcopy(valid_payload()))
+
+
+def test_m4_plan_requires_exact_nine_by_two_by_three_matrix() -> None:
+    plan = materialize_controlled_run_plan(valid_m4_payload())
+    assert len(plan.cases) == 9
+    assert len(plan.expand_trial_slots()) == 54
+    assert plan.worst_case_attempt_count == plan.execution.max_attempt_count == 108
+
+
+@pytest.mark.parametrize("planned", (12, 53, 55))
+def test_m4_version_rejects_non_54_trial_declarations(planned: int) -> None:
+    payload = valid_m4_payload() if planned != 12 else valid_payload()
+    payload["companion_version"] = "0.4.0"
+    analysis = payload["analysis"]
+    assert isinstance(analysis, dict)
+    analysis["method_version"] = "m4"
+    payload["planned_trial_count"] = planned
+    with pytest.raises((ValidationError, ValueError), match="planned|frozen M4"):
+        materialize_controlled_run_plan(payload)
 
 
 def test_v2_plan_identity_changes_with_exact_attempt_budget() -> None:

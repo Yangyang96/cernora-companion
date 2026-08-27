@@ -125,11 +125,16 @@ class RepairResultRecord(StrictV2Contract):
         """Project the receipt into Core-native, versioned decision records."""
 
         if not self.evaluation_valid:
-            return (
+            unavailable_records: tuple[tuple[str, Literal["constraint", "outcome"]], ...] = (
+                ("authorized_paths_only_v1", "constraint"),
+                ("protected_paths_unchanged_v1", "constraint"),
+                ("repair_success_v1", "outcome"),
+            )
+            return tuple(
                 ResultRecord(
-                    id="repair_success_v1",
+                    id=record_id,
                     version=RESULT_RECORD_VERSION,
-                    role="outcome",
+                    role=role,
                     value=None,
                     value_type="boolean",
                     validity="unavailable",
@@ -137,14 +142,15 @@ class RepairResultRecord(StrictV2Contract):
                     evidence_refs=(reference,),
                     unit=None,
                     direction=None,
-                ),
+                )
+                for record_id, role in unavailable_records
             )
-        records = [
+        records: list[ResultRecord] = [
             ResultRecord(
-                id=item.failure_code,
+                id="repair_success_v1",
                 version=RESULT_RECORD_VERSION,
                 role="outcome",
-                value=item.passed,
+                value=self.passed,
                 value_type="boolean",
                 validity="valid",
                 failure_reason=None,
@@ -152,7 +158,6 @@ class RepairResultRecord(StrictV2Contract):
                 unit=None,
                 direction=None,
             )
-            for item in self.checks
         ]
         records.extend(
             (
@@ -181,6 +186,21 @@ class RepairResultRecord(StrictV2Contract):
                     direction=None,
                 ),
             )
+        )
+        records.extend(
+            ResultRecord(
+                id=f"diagnostic.{item.failure_code}",
+                version=RESULT_RECORD_VERSION,
+                role="diagnostic",
+                value=item.passed,
+                value_type="boolean",
+                validity="valid",
+                failure_reason=None,
+                evidence_refs=(reference,),
+                unit=None,
+                direction=None,
+            )
+            for item in self.checks
         )
         return tuple(sorted(records, key=lambda item: item.id))
 

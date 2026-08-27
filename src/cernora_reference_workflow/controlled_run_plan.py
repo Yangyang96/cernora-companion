@@ -33,7 +33,7 @@ from cernora_reference_workflow.run_plan import (
 
 class ControlledRunAnalysisPolicy(StrictV2Contract):
     method: Literal["controlled-comparison"]
-    method_version: Literal["m3"]
+    method_version: Literal["m3", "m4"]
     aggregate_quality_conclusion: Literal[False]
 
 
@@ -51,7 +51,7 @@ class ControlledTrialSlotV2(StrictV2Contract):
 class ControlledRunPlanV2(StrictV2Contract):
     schema_version: Literal["cernora.reference.controlled-run-plan/v2"]
     run_plan_id: Digest
-    companion_version: Literal["0.3.0"]
+    companion_version: Literal["0.3.0", "0.4.0"]
     cernora_version: Literal["0.1.4"]
     connector: ConnectorIdentity
     experiment_specs: tuple[ControlledExperimentSpecV2, ...] = Field(min_length=2)
@@ -149,6 +149,19 @@ class ControlledRunPlanV2(StrictV2Contract):
             raise ValueError("controlled execution concurrency must be one")
         if self.execution.max_attempt_count != worst_case_attempt_count:
             raise ValueError("controlled max_attempt_count must equal worst-case Attempts")
+        if self.companion_version == "0.3.0":
+            if self.analysis.method_version != "m3":
+                raise ValueError("Companion 0.3.0 requires the accepted M3 analysis boundary")
+        elif (
+            self.analysis.method_version != "m4"
+            or len(self.cases) != 9
+            or self.repetitions != 3
+            or self.planned_trial_count != 54
+            or self.worst_case_attempt_count != 108
+            or self.execution.max_attempt_count != 108
+            or self.execution.max_total_wall_time_seconds != 43_200
+        ):
+            raise ValueError("Companion 0.4.0 requires the exact frozen M4 execution matrix")
         if self.run_plan_id != self.compute_run_plan_id(self.model_dump(mode="json")):
             raise ValueError("run_plan_id does not match canonical ControlledRunPlan content")
         return self
