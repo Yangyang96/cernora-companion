@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
+from uuid import UUID
 
 from cernora import BatchAttemptResources, BatchLifecycleRecord
 
@@ -67,8 +69,31 @@ _INFRASTRUCTURE_START_EXCEPTIONS = frozenset(
         "TaskNotFoundError",
     }
 )
-_TRANSIENT_STATUSES = ("408", "429", "500", "502", "503", "504")
 _TRANSIENT_MARKERS = ("gateway", "provider", "rate limit", "service unavailable", "upstream")
+_TRANSIENT_STATUS_PATTERN = re.compile(r"(?<!\d)(?:408|429|500|502|503|504)(?!\d)")
+_HARBOR_RESULT_FIELDS = frozenset(
+    {
+        "agent_execution",
+        "agent_info",
+        "agent_result",
+        "agent_setup",
+        "config",
+        "environment_setup",
+        "exception_info",
+        "finished_at",
+        "id",
+        "source",
+        "started_at",
+        "step_results",
+        "task_checksum",
+        "task_id",
+        "task_name",
+        "trial_name",
+        "trial_uri",
+        "verifier",
+        "verifier_result",
+    }
+)
 _CHILD_ENV_ALLOWLIST = frozenset(
     {
         "DOCKER_CONTEXT",
@@ -181,15 +206,37 @@ def attributable_container_ids(
 
 
 def validate_installed_harbor_cli(executable: Path) -> None:
-    result = subprocess.run(
-        (str(executable), "run", "--help"),
-        check=False,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "COLUMNS": "240", "NO_COLOR": "1"},
-    )
-    if result.returncode != 0 or any(
-        option not in result.stdout for option in _REQUIRED_HARBOR_OPTIONS
+    python = executable.with_name("python")
+    environment = {**os.environ, "COLUMNS": "240", "NO_COLOR": "1"}
+    try:
+        version = subprocess.run(
+            (
+                str(python),
+                "-I",
+                "-c",
+                "from importlib.metadata import version; print(version('harbor'))",
+            ),
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        help_result = subprocess.run(
+            (str(executable), "run", "--help"),
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+    except OSError as exc:
+        raise LiveAttemptError(
+            "installed Harbor CLI does not match the qualified 0.16.1 surface"
+        ) from exc
+    if (
+        version.returncode != 0
+        or version.stdout.strip() != "0.16.1"
+        or help_result.returncode != 0
+        or any(option not in help_result.stdout for option in _REQUIRED_HARBOR_OPTIONS)
     ):
         raise LiveAttemptError("installed Harbor CLI does not match the qualified 0.16.1 surface")
 
@@ -316,8 +363,15 @@ def _assert_private_values_absent(
     explicit_proxy_endpoints: tuple[str, ...],
     process: SubprocessResult,
 ) -> None:
+    try:
+        resolved_auth_path = auth_path.resolve(strict=True)
+    except OSError as exc:
+        raise LiveAttemptError(
+            "auth path could not be resolved for private-value scanning"
+        ) from exc
     prohibited = (
         str(auth_path).encode("utf-8"),
+        str(resolved_auth_path).encode("utf-8"),
         *markers,
         *(value.encode("utf-8") for value in proxy_environment.values()),
         *(value.encode("utf-8") for value in explicit_proxy_endpoints),
@@ -769,6 +823,16 @@ def _validate_trial_result(
     spec = request.specification
     agent_info = result.get("agent_info")
     config = result.get("config")
+    if set(result) != _HARBOR_RESULT_FIELDS:
+        raise LiveAttemptError("Harbor result does not match the exact 0.16.1 structure")
+    try:
+        UUID(cast(str, result.get("id")))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise LiveAttemptError("Harbor result identity is malformed") from exc
+    task_id = result.get("task_id")
+    trial_uri = result.get("trial_uri")
+    if task_id != {"path": str(task_root)} or not isinstance(trial_uri, str) or not trial_uri:
+        raise LiveAttemptError("Harbor result task identity is malformed")
     if not isinstance(agent_info, dict) or not isinstance(config, dict):
         raise LiveAttemptError("Harbor result omits agent/config observations")
     model = agent_info.get("model_info")
@@ -791,7 +855,9 @@ def _validate_trial_result(
         "web_search": "disabled",
     }
     if (
-        result.get("task_name") != task.case.case_id
+        set(agent_info) != {"name", "version", "model_info"}
+        or set(model) != {"name", "provider"}
+        or result.get("task_name") != task.case.case_id
         or result.get("task_checksum") != task_checksum
         or agent_info.get("name") != "codex"
         or agent_info.get("version") != spec.runtime.version
@@ -895,6 +961,8 @@ def _trial_result(job_root: Path, job_name: str) -> tuple[Path, dict[str, Any]] 
     result = _object(trials[0] / "result.json", label="Harbor result")
     if result.get("trial_name") != trials[0].name:
         raise LiveAttemptError("Harbor result trial identity contradicts its closed directory")
+    if result.get("trial_uri") != trials[0].resolve().as_uri():
+        raise LiveAttemptError("Harbor result URI contradicts its closed directory")
     return trials[0], result
 
 
@@ -911,28 +979,69 @@ def _trial_name_hint(job_root: Path, job_name: str) -> str | None:
 def _classify_preterminal(
     process: SubprocessResult,
     result: Mapping[str, object] | None,
+    request: ControlledAttemptRequest,
+    task: ControlledTaskAuthority,
+    *,
+    task_root: Path,
+    task_checksum: str,
 ) -> tuple[str, bool] | None:
-    if process.status == "start_failure" and result is None:
-        return "infrastructure_start_failure", True
     if process.status in {"timed_out", "output_limit"}:
         return "runtime_pre_terminal_failure", False
     if result is None:
         return None if process.exit_code == 0 else ("runtime_pre_terminal_failure", False)
+    _validate_trial_result(result, request, task, task_root=task_root, task_checksum=task_checksum)
     exception = result.get("exception_info")
-    exception_type = exception.get("exception_type") if isinstance(exception, dict) else None
-    message = exception.get("exception_message") if isinstance(exception, dict) else None
     agent_result = result.get("agent_result")
     verifier_result = result.get("verifier_result")
-    if process.exit_code == 0 and exception_type is None:
+    if process.exit_code == 0 and exception is None:
         return None
     if agent_result is not None or verifier_result is not None:
         return "runtime_pre_terminal_failure", False
-    if result.get("agent_execution") is None and exception_type in _INFRASTRUCTURE_START_EXCEPTIONS:
+    if not isinstance(exception, dict) or set(exception) != {
+        "exception_type",
+        "exception_message",
+        "exception_traceback",
+        "occurred_at",
+    }:
+        raise LiveAttemptError("pre-terminal Harbor result has malformed exception evidence")
+    exception_type = exception.get("exception_type")
+    message = exception.get("exception_message")
+    traceback_value = exception.get("exception_traceback")
+    occurred_at = exception.get("occurred_at")
+    if not all(
+        isinstance(value, str) and value
+        for value in (exception_type, message, traceback_value, occurred_at)
+    ):
+        raise LiveAttemptError("pre-terminal Harbor result has incomplete exception evidence")
+    assert isinstance(occurred_at, str)
+    try:
+        datetime.fromisoformat(occurred_at)
+    except ValueError as exc:
+        raise LiveAttemptError("pre-terminal Harbor result has invalid exception timing") from exc
+    agent_execution = result.get("agent_execution")
+    if agent_execution is not None and (
+        not isinstance(agent_execution, dict)
+        or set(agent_execution) != {"started_at", "finished_at"}
+        or not all(value is None or isinstance(value, str) for value in agent_execution.values())
+    ):
+        raise LiveAttemptError("pre-terminal Harbor result has malformed execution timing")
+    if isinstance(agent_execution, dict):
+        try:
+            for value in agent_execution.values():
+                if isinstance(value, str):
+                    datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise LiveAttemptError(
+                "pre-terminal Harbor result has invalid execution timing"
+            ) from exc
+    assert isinstance(exception_type, str)
+    assert isinstance(message, str)
+    if agent_execution is None and exception_type in _INFRASTRUCTURE_START_EXCEPTIONS:
         return "infrastructure_start_failure", True
-    normalized = message.lower() if isinstance(message, str) else ""
+    normalized = message.lower()
     transient = (
         exception_type in _TRANSIENT_PROVIDER_EXCEPTIONS
-        and any(status in normalized for status in _TRANSIENT_STATUSES)
+        and _TRANSIENT_STATUS_PATTERN.search(normalized) is not None
         and any(marker in normalized for marker in _TRANSIENT_MARKERS)
     )
     return (
@@ -1234,11 +1343,7 @@ class ControlledHarborAttemptExecutor:
                 trial_result = _trial_result(job_root, job_name)
                 trial = trial_result[0] if trial_result is not None else None
                 result = trial_result[1] if trial_result is not None else None
-                trial_name_value = (
-                    result.get("trial_name")
-                    if result is not None
-                    else trial_name
-                )
+                trial_name_value = result.get("trial_name") if result is not None else trial_name
                 if trial_name_value is not None and not isinstance(trial_name_value, str):
                     raise LiveAttemptError("Harbor trial_name is malformed")
                 trial_name = trial_name_value
@@ -1264,7 +1369,14 @@ class ControlledHarborAttemptExecutor:
                 and process.finished_monotonic >= request.global_deadline_monotonic
             ):
                 raise ControlledActiveSafeStop("hard_wall_deadline_elapsed")
-            classification = _classify_preterminal(process, result)
+            classification = _classify_preterminal(
+                process,
+                result,
+                request,
+                task,
+                task_root=task_root,
+                task_checksum=task_checksum,
+            )
             if classification is not None:
                 category, retry = classification
                 return _lifecycle_attempt(request, process, category=category, retry_eligible=retry)

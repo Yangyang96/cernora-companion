@@ -400,17 +400,29 @@ class FakeProcess:
             "id": "00000000-0000-0000-0000-000000000001",
             "task_name": self.task.case.case_id,
             "trial_name": "trial-1",
+            "trial_uri": verifier.parent.resolve().as_uri(),
+            "task_id": {"path": str(task_root)},
+            "source": None,
             "task_checksum": dirhash(task_root, "sha256"),
             "config": trial_config,
             "agent_info": {
                 "name": "codex",
                 "version": self.spec.runtime.version,
-                "model_info": {"name": self.spec.runtime.model},
+                "model_info": {"name": self.spec.runtime.model, "provider": None},
             },
             "agent_result": {},
             "verifier_result": {},
             "exception_info": None,
-            "agent_execution": {"started_at": "x", "finished_at": "y"},
+            "started_at": "2026-08-27T00:00:00Z",
+            "finished_at": "2026-08-27T00:00:01Z",
+            "environment_setup": None,
+            "agent_setup": None,
+            "agent_execution": {
+                "started_at": "2026-08-27T00:00:00Z",
+                "finished_at": "2026-08-27T00:00:01Z",
+            },
+            "verifier": None,
+            "step_results": None,
         }
         (verifier.parent / "result.json").write_bytes(canonical_json_bytes(result))
         return SubprocessResult(
@@ -515,7 +527,9 @@ class TransientResultProcess(FakeProcess):
         payload["verifier_result"] = None
         payload["exception_info"] = {
             "exception_message": "provider status 503 service unavailable",
+            "exception_traceback": "provider call failed",
             "exception_type": "NonZeroAgentExitCodeError",
+            "occurred_at": "2026-08-27T00:00:00Z",
         }
         result_path.write_bytes(canonical_json_bytes(payload))
         return replace(process, exit_code=1, stderr=b"ordinary stderr")
@@ -698,7 +712,7 @@ def test_live_executor_rejects_actual_harbor_result_drift(
         executor(_request(spec, trial=f"result-{mutation}-drift"))
 
 
-def test_live_executor_marks_only_eligible_preterminal_failure_for_retry(
+def test_unverified_start_failure_does_not_receive_retry(
     tmp_path: Path,
 ) -> None:
     task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
@@ -751,9 +765,9 @@ def test_live_executor_marks_only_eligible_preterminal_failure_for_retry(
 
     attempt = executor(_request(spec, trial="eligible-retry"))
 
-    assert attempt.retry_eligible is True
+    assert attempt.retry_eligible is False
     assert attempt.lifecycle is not None
-    assert attempt.lifecycle.category == "infrastructure_start_failure"
+    assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
 
 
 def test_live_executor_requires_strict_preterminal_result_for_transient_retry(
@@ -782,6 +796,135 @@ def test_live_executor_requires_strict_preterminal_result_for_transient_retry(
     assert attempt.retry_eligible is True
     assert attempt.lifecycle is not None
     assert attempt.lifecycle.category == "transient_provider_pre_terminal"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("wrong-task", "wrong-checksum", "wrong-config", "incomplete", "reidentified", "malformed"),
+)
+def test_unverified_preterminal_result_never_receives_retry(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+
+    class MutatedTransientProcess(TransientResultProcess):
+        def __call__(
+            self,
+            command: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            deadline_monotonic: float,
+            timeout_seconds: int,
+            disk_free: object = None,
+            safe_stop_free_bytes: int | None = None,
+        ) -> SubprocessResult:
+            process = super().__call__(
+                command,
+                cwd=cwd,
+                environment=environment,
+                deadline_monotonic=deadline_monotonic,
+                timeout_seconds=timeout_seconds,
+                disk_free=disk_free,
+                safe_stop_free_bytes=safe_stop_free_bytes,
+            )
+            job_root = Path(command[command.index("-o") + 1])
+            job_name = command[command.index("--job-name") + 1]
+            result_path = job_root / job_name / "trial-1" / "result.json"
+            payload = json.loads(result_path.read_bytes())
+            if mutation == "wrong-task":
+                payload["task_name"] = "different-task"
+            elif mutation == "wrong-checksum":
+                payload["task_checksum"] = digest("different-task")
+            elif mutation == "wrong-config":
+                payload["config"]["agent"]["model_name"] = "different-model"
+            elif mutation == "incomplete":
+                payload.pop("task_id")
+            elif mutation == "reidentified":
+                payload["trial_name"] = "different-trial"
+            else:
+                payload["exception_info"].pop("occurred_at")
+            result_path.write_bytes(canonical_json_bytes(payload))
+            return process
+
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=MutatedTransientProcess(task, spec),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    with pytest.raises(LiveAttemptError):
+        executor(_request(spec, trial=f"unverified-{mutation}"))
+
+
+def test_loose_transient_token_match_is_not_retry_eligible(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+
+    class LooseTokenProcess(TransientResultProcess):
+        def __call__(
+            self,
+            command: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            deadline_monotonic: float,
+            timeout_seconds: int,
+            disk_free: object = None,
+            safe_stop_free_bytes: int | None = None,
+        ) -> SubprocessResult:
+            process = super().__call__(
+                command,
+                cwd=cwd,
+                environment=environment,
+                deadline_monotonic=deadline_monotonic,
+                timeout_seconds=timeout_seconds,
+                disk_free=disk_free,
+                safe_stop_free_bytes=safe_stop_free_bytes,
+            )
+            job_root = Path(command[command.index("-o") + 1])
+            job_name = command[command.index("--job-name") + 1]
+            result_path = job_root / job_name / "trial-1" / "result.json"
+            payload = json.loads(result_path.read_bytes())
+            payload["exception_info"]["exception_message"] = (
+                "provider incident 15003 upstream marker only"
+            )
+            result_path.write_bytes(canonical_json_bytes(payload))
+            return process
+
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=LooseTokenProcess(task, spec),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    attempt = executor(_request(spec, trial="loose-transient-token"))
+
+    assert attempt.retry_eligible is False
+    assert attempt.lifecycle is not None
+    assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
 
 
 def test_behavioral_result_never_retries_despite_transient_stderr(tmp_path: Path) -> None:
@@ -1019,6 +1162,7 @@ def test_private_proxy_endpoint_detection_is_fail_closed_and_value_free(
     }
     root = tmp_path / "job"
     root.mkdir()
+    auth = _auth_file(tmp_path)
     (root / "result.json").write_bytes(b"{}")
     stdout = proxy["HTTP_PROXY"].encode() if location == "stdout" else b""
     stderr = proxy["ALL_PROXY"].encode() if location == "stderr" else b""
@@ -1037,7 +1181,7 @@ def test_private_proxy_endpoint_detection_is_fail_closed_and_value_free(
     with pytest.raises(LiveAttemptError) as raised:
         live_attempt_module._assert_private_values_absent(
             root,
-            auth_path=tmp_path / "private-auth.json",
+            auth_path=auth,
             markers=(b"unit-secret-marker",),
             proxy_environment=proxy,
             explicit_proxy_endpoints=tuple(proxy.values()),
@@ -1046,6 +1190,47 @@ def test_private_proxy_endpoint_detection_is_fail_closed_and_value_free(
 
     assert "18080" not in str(raised.value)
     assert "11080" not in str(raised.value)
+
+
+@pytest.mark.parametrize("path_kind", ("symlink", "canonicalized"))
+def test_private_scan_rejects_resolved_auth_path_without_echoing_it(
+    tmp_path: Path,
+    path_kind: str,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir()
+    target = _auth_file(private)
+    if path_kind == "symlink":
+        auth_path = tmp_path / "auth-link.json"
+        auth_path.symlink_to(target)
+    else:
+        auth_path = private / "nested" / ".." / "auth.json"
+        (private / "nested").mkdir()
+    root = tmp_path / "job"
+    root.mkdir()
+    (root / "result.json").write_bytes(str(target.resolve()).encode("utf-8"))
+    process = SubprocessResult(
+        status="exited",
+        exit_code=1,
+        stdout=b"",
+        stderr=b"",
+        started_monotonic=0.0,
+        finished_monotonic=1.0,
+        receipt_sha256=digest(f"resolved-auth:{path_kind}"),
+    )
+
+    with pytest.raises(LiveAttemptError) as raised:
+        live_attempt_module._assert_private_values_absent(
+            root,
+            auth_path=auth_path,
+            markers=(),
+            proxy_environment={},
+            explicit_proxy_endpoints=(),
+            process=process,
+        )
+
+    assert str(auth_path) not in str(raised.value)
+    assert str(target.resolve()) not in str(raised.value)
 
 
 def test_active_disk_safe_stop_cleans_exact_runtime_containers(tmp_path: Path) -> None:
@@ -1100,3 +1285,19 @@ def test_active_disk_safe_stop_cleans_exact_runtime_containers(tmp_path: Path) -
 
 def test_installed_harbor_help_matches_production_command_surface() -> None:
     validate_installed_harbor_cli(Path(sys.executable).with_name("harbor"))
+
+
+def test_harbor_cli_rejects_wrong_installed_distribution_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    help_text = " ".join(live_attempt_module._REQUIRED_HARBOR_OPTIONS)
+
+    def completed(command: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        output = "0.16.0\n" if "-c" in command else help_text
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(subprocess, "run", completed)
+
+    with pytest.raises(LiveAttemptError, match="qualified 0.16.1"):
+        validate_installed_harbor_cli(Path("/qualified/bin/harbor"))

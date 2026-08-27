@@ -7,14 +7,18 @@ import argparse
 import sys
 from pathlib import Path
 
+from cernora import BatchSummaryPackage, reload_batch_summary_package
+
 from cernora_reference_workflow.common import (
     ContractError,
     read_regular_file_bytes,
     validate_sha256,
 )
+from cernora_reference_workflow.comparison_plan import ComparisonPlanV1
 from cernora_reference_workflow.controlled_batch_summary import (
     publish_controlled_batch_summary,
 )
+from cernora_reference_workflow.controlled_execution import ControlledExecutionResult
 from cernora_reference_workflow.controlled_live_attempt import (
     ControlledHarborAttemptExecutor,
 )
@@ -24,6 +28,48 @@ from cernora_reference_workflow.controlled_runner import (
     execute_or_resume_controlled_run,
 )
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
+from cernora_reference_workflow.heldout_seal import HeldoutManifest, HeldoutRevealReceipt
+from cernora_reference_workflow.improvement_loop import (
+    CandidateFreeze,
+    CandidateFreezeVerificationReceipt,
+    verify_candidate_freeze,
+)
+
+
+class VerifiedM4Execution:
+    """Inputs that crossed the complete CandidateFreeze verification boundary."""
+
+    __slots__ = (
+        "comparison_plan",
+        "freeze",
+        "heldout_manifest",
+        "pilot_package",
+        "plan",
+        "reveal_receipt",
+        "tasks",
+        "verification_receipt",
+    )
+
+    def __init__(
+        self,
+        *,
+        plan: ControlledRunPlanV2,
+        tasks: tuple[ControlledTaskAuthority, ...],
+        freeze: CandidateFreeze,
+        comparison_plan: ComparisonPlanV1,
+        pilot_package: BatchSummaryPackage,
+        heldout_manifest: HeldoutManifest,
+        reveal_receipt: HeldoutRevealReceipt,
+        verification_receipt: CandidateFreezeVerificationReceipt,
+    ) -> None:
+        self.plan = plan
+        self.tasks = tasks
+        self.freeze = freeze
+        self.comparison_plan = comparison_plan
+        self.pilot_package = pilot_package
+        self.heldout_manifest = heldout_manifest
+        self.reveal_receipt = reveal_receipt
+        self.verification_receipt = verification_receipt
 
 
 def _task(path: Path) -> ControlledTaskAuthority:
@@ -63,9 +109,88 @@ def validate_task_suite(
                 raise ContractError("RunPlan Experiment does not bind the exact task authority")
 
 
+def load_verified_execution(
+    *,
+    run_plan_path: Path,
+    candidate_freeze_path: Path,
+    comparison_plan_path: Path,
+    pilot_package_root: Path,
+    visible_corpus_root: Path,
+    heldout_manifest_path: Path,
+    reveal_receipt_path: Path,
+    task_authority_paths: tuple[Path, ...],
+) -> VerifiedM4Execution:
+    """Strictly load and verify every authority before exposing an executable plan."""
+
+    plan = ControlledRunPlanV2.from_file(run_plan_path)
+    freeze = CandidateFreeze.from_file(candidate_freeze_path)
+    comparison_plan = ComparisonPlanV1.from_file(comparison_plan_path)
+    pilot_package = reload_batch_summary_package(pilot_package_root)
+    heldout_manifest = HeldoutManifest.from_file(heldout_manifest_path)
+    reveal_receipt = HeldoutRevealReceipt.from_bytes(read_regular_file_bytes(reveal_receipt_path))
+    tasks = tuple(_task(path) for path in task_authority_paths)
+    validate_task_suite(plan, tasks)
+    verification_receipt = verify_candidate_freeze(
+        freeze,
+        pilot_package=pilot_package,
+        run_plan=plan,
+        comparison_plan=comparison_plan,
+        visible_corpus_root=visible_corpus_root,
+        heldout_manifest=heldout_manifest,
+        reveal_receipt=reveal_receipt,
+        task_authorities=tasks,
+    )
+    return VerifiedM4Execution(
+        plan=plan,
+        tasks=tasks,
+        freeze=freeze,
+        comparison_plan=comparison_plan,
+        pilot_package=pilot_package,
+        heldout_manifest=heldout_manifest,
+        reveal_receipt=reveal_receipt,
+        verification_receipt=verification_receipt,
+    )
+
+
+def execute_verified_run(
+    verified: VerifiedM4Execution,
+    executor: ControlledHarborAttemptExecutor,
+    *,
+    store_root: Path,
+    nonce: str,
+) -> ControlledExecutionResult:
+    """Execute only through the complete immutable verification receipt."""
+
+    receipt = verified.verification_receipt
+    if (
+        receipt.run_plan_id != verified.plan.run_plan_id
+        or receipt.candidate_freeze_id != verified.freeze.candidate_freeze_id
+        or receipt.candidate_freeze_sha256 != verified.freeze.candidate_freeze_sha256
+        or receipt.comparison_plan_id != verified.comparison_plan.comparison_plan_id
+        or receipt.comparison_plan_sha256 != verified.comparison_plan.comparison_plan_sha256
+        or receipt.pilot_id != verified.freeze.pilot.pilot_id
+        or receipt.heldout_manifest_id != verified.heldout_manifest.manifest_id
+        or receipt.reveal_receipt_id != verified.reveal_receipt.receipt_id
+        or receipt.task_authority_ids != tuple(sorted(item.authority_id for item in verified.tasks))
+    ):
+        raise ContractError("M4 Runtime lacks its complete CandidateFreeze verification receipt")
+    return execute_or_resume_controlled_run(
+        verified.plan,
+        executor,
+        store_root=store_root,
+        nonce=nonce,
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-plan", type=Path, required=True)
+    parser.add_argument("--candidate-freeze", type=Path, required=True)
+    parser.add_argument("--comparison-plan", type=Path, required=True)
+    parser.add_argument("--pilot-package", type=Path, required=True)
+    parser.add_argument("--visible-corpus-root", type=Path, required=True)
+    parser.add_argument("--heldout-manifest", type=Path, required=True)
+    parser.add_argument("--reveal-receipt", type=Path, required=True)
     parser.add_argument("--task-authority", action="append", type=Path, required=True)
     parser.add_argument("--store", type=Path, required=True)
     parser.add_argument("--evaluation-root", type=Path, required=True)
@@ -102,27 +227,34 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         nonce = validate_sha256(args.nonce, label="execution nonce")
-        plan = ControlledRunPlanV2.from_file(args.run_plan)
-        tasks = tuple(_task(path) for path in args.task_authority)
-        validate_task_suite(plan, tasks)
+        verified = load_verified_execution(
+            run_plan_path=args.run_plan,
+            candidate_freeze_path=args.candidate_freeze,
+            comparison_plan_path=args.comparison_plan,
+            pilot_package_root=args.pilot_package,
+            visible_corpus_root=args.visible_corpus_root,
+            heldout_manifest_path=args.heldout_manifest,
+            reveal_receipt_path=args.reveal_receipt,
+            task_authority_paths=tuple(args.task_authority),
+        )
         if not args.repository_root.is_dir() or args.repository_root.is_symlink():
             raise ContractError("repository root must be one real directory")
         if not args.evaluation_root.is_dir() or args.evaluation_root.is_symlink():
             raise ContractError("evaluation root must be one existing real directory")
         executor = ControlledHarborAttemptExecutor(
             repository_root=args.repository_root,
-            tasks=tasks,
+            tasks=verified.tasks,
             evaluation_root=args.evaluation_root,
             auth_file=args.auth_file,
             proxy_environment=_proxy_inputs(args.proxy),
         )
-        execution = execute_or_resume_controlled_run(
-            plan,
+        execution = execute_verified_run(
+            verified,
             executor,
             store_root=args.store,
             nonce=nonce,
         )
-        publish_controlled_batch_summary(execution, plan, args.batch_output)
+        publish_controlled_batch_summary(execution, verified.plan, args.batch_output)
     except ControlledRunStopped as exc:
         print(f"M4 execution safely stopped: {exc.reason}", file=sys.stderr)
         return 75

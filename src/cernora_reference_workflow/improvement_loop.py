@@ -137,6 +137,59 @@ class CandidateFreeze(StrictV2Contract):
             raise ValueError("CandidateFreeze identity is not canonical")
         return self
 
+    def canonical_bytes(self) -> bytes:
+        return canonical_json_bytes(self.model_dump(mode="json"))
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> CandidateFreeze:
+        payload = load_json_bytes(data)
+        if not isinstance(payload, dict):
+            raise ContractError("CandidateFreeze must be a JSON object")
+        freeze = cls.model_validate(payload)
+        if freeze.canonical_bytes() != data:
+            raise ContractError("CandidateFreeze is not canonical JSON")
+        return freeze
+
+    @classmethod
+    def from_file(cls, path: Path) -> CandidateFreeze:
+        return cls.from_bytes(read_regular_file_bytes(path))
+
+
+class CandidateFreezeVerificationReceipt(StrictV2Contract):
+    """Content-bound proof that every final M4 authority was verified together."""
+
+    schema_version: Literal["cernora.reference.candidate-freeze-verification/v1"]
+    verification_id: Digest
+    candidate_freeze_id: str = Field(min_length=1)
+    candidate_freeze_sha256: Digest
+    pilot_id: Digest
+    run_plan_id: Digest
+    comparison_plan_id: str = Field(min_length=1)
+    comparison_plan_sha256: Digest
+    visible_corpus_sha256: Digest
+    heldout_manifest_id: str = Field(min_length=1)
+    heldout_manifest_sha256: Digest
+    reveal_receipt_id: Digest
+    task_authority_ids: Annotated[tuple[Identifier, ...], Field(min_length=1)]
+
+    @field_validator("task_authority_ids", mode="before")
+    @classmethod
+    def tuple_task_authorities(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def canonical_verification(self) -> Self:
+        if self.task_authority_ids != tuple(sorted(self.task_authority_ids)) or len(
+            self.task_authority_ids
+        ) != len(set(self.task_authority_ids)):
+            raise ValueError("verified task authorities must be sorted and unique")
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"verification_id"})
+        )
+        if self.verification_id != expected:
+            raise ValueError("CandidateFreeze verification identity mismatch")
+        return self
+
 
 def select_leading_failure(
     pilot_batch: BatchInput,
@@ -328,7 +381,7 @@ def verify_candidate_freeze(
     heldout_manifest: HeldoutManifest,
     reveal_receipt: HeldoutRevealReceipt,
     task_authorities: tuple[ControlledTaskAuthority, ...],
-) -> None:
+) -> CandidateFreezeVerificationReceipt:
     """Bind one Freeze to the exact final 54-Trial declaration and reveal."""
 
     if run_plan.companion_version != "0.4.0":
@@ -458,6 +511,22 @@ def verify_candidate_freeze(
     }
     if actual_guardrails != expected_guardrails:
         raise ContractError("final hard Guardrails do not equal the frozen M4 policy")
+    payload: dict[str, object] = {
+        "schema_version": "cernora.reference.candidate-freeze-verification/v1",
+        "candidate_freeze_id": freeze.candidate_freeze_id,
+        "candidate_freeze_sha256": freeze.candidate_freeze_sha256,
+        "pilot_id": freeze.pilot.pilot_id,
+        "run_plan_id": run_plan.run_plan_id,
+        "comparison_plan_id": comparison_plan.comparison_plan_id,
+        "comparison_plan_sha256": comparison_plan.comparison_plan_sha256,
+        "visible_corpus_sha256": freeze.visible_corpus_sha256,
+        "heldout_manifest_id": heldout_manifest.manifest_id,
+        "heldout_manifest_sha256": sha256_bytes(heldout_manifest.canonical_bytes()),
+        "reveal_receipt_id": reveal_receipt.receipt_id,
+        "task_authority_ids": sorted(item.authority_id for item in task_authorities),
+    }
+    payload["verification_id"] = canonical_content_id(payload, excluded=frozenset())
+    return CandidateFreezeVerificationReceipt.model_validate(payload)
 
 
 def visible_corpus_digest(root: Path) -> str:
@@ -479,14 +548,22 @@ def assemble_final_comparison_input(
     batch_package: BatchSummaryPackage,
     run_plan: ControlledRunPlanV2,
     comparison_plan: ComparisonPlanV1,
+    verification_receipt: CandidateFreezeVerificationReceipt,
 ) -> ComparisonInput:
     """Delegate final statistics and conclusion to the accepted M3/Core seam."""
 
+    if (
+        verification_receipt.run_plan_id != run_plan.run_plan_id
+        or verification_receipt.comparison_plan_id != comparison_plan.comparison_plan_id
+        or verification_receipt.comparison_plan_sha256 != comparison_plan.comparison_plan_sha256
+    ):
+        raise ContractError("final comparison authorities lack their CandidateFreeze verification")
     return assemble_comparison_input(batch_package, run_plan, comparison_plan)
 
 
 __all__ = [
     "CandidateFreeze",
+    "CandidateFreezeVerificationReceipt",
     "DevelopmentPilotBinding",
     "FrozenM4Policy",
     "LeadingFailure",

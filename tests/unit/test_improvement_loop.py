@@ -45,6 +45,7 @@ from cernora_reference_workflow.heldout_seal import (
 )
 from cernora_reference_workflow.improvement_loop import (
     CandidateFreeze,
+    assemble_final_comparison_input,
     derive_candidate_freeze,
     verify_candidate_freeze,
     visible_corpus_digest,
@@ -349,7 +350,7 @@ def test_candidate_freeze_is_derived_from_real_strict_three_case_pilot(
     freeze, pilot, plan, comparison, manifest = _freeze_and_final(tmp_path)
     reveal = _reveal(manifest, freeze)
 
-    verify_candidate_freeze(
+    receipt = verify_candidate_freeze(
         freeze,
         pilot_package=pilot,
         run_plan=plan,
@@ -365,6 +366,12 @@ def test_candidate_freeze_is_derived_from_real_strict_three_case_pilot(
     assert freeze.leading_failure.code == "interval_boundary_v1"
     assert freeze.leading_failure.count == 1
     assert len(plan.expand_trial_slots()) == 54
+    assert receipt.candidate_freeze_id == freeze.candidate_freeze_id
+    assert receipt.run_plan_id == plan.run_plan_id
+
+    drifted = receipt.model_copy(update={"run_plan_id": "0" * 64})
+    with pytest.raises(ContractError, match="lack their CandidateFreeze verification"):
+        assemble_final_comparison_input(pilot, plan, comparison, drifted)
 
 
 @pytest.mark.parametrize("drift", ("freeze", "run-plan", "policy", "seal", "reveal"))
