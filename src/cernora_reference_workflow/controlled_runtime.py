@@ -28,6 +28,7 @@ from cernora_reference_workflow.controlled_experiment_spec import (
 )
 
 Clock = Callable[[], float]
+DiskProbe = Callable[[], int]
 MAX_CAPTURE_BYTES = 1_048_576
 
 
@@ -55,7 +56,7 @@ def runtime_invocation_sha256(spec: ControlledExperimentSpecV2) -> str:
                 "override_cpus": spec.limits.cpu_millis // 1000,
                 "override_memory_mb": spec.limits.memory_mebibytes,
                 "proxy_variables": ["ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"],
-                "task_authority_sha256": spec.task.task_source.source_sha256,
+                "task_authority_sha256": spec.task.authority_sha256,
             }
         )
     )
@@ -103,7 +104,7 @@ class RuntimeAuthorityObservation(StrictV2Contract):
             spec.runtime.configuration_sha256,
             spec.prompt_sha256,
             spec.instruction_sha256,
-            spec.task.task_source.source_sha256,
+            spec.task.authority_sha256,
             expected_image_digest,
             runtime_invocation_sha256(spec),
             projection.runtime_version_sha256,
@@ -152,7 +153,7 @@ def observe_runtime_authority(spec: ControlledExperimentSpecV2) -> RuntimeAuthor
         "runtime_configuration_sha256": spec.runtime.configuration_sha256,
         "prompt_sha256": spec.prompt_sha256,
         "instruction_sha256": spec.instruction_sha256,
-        "task_source_sha256": spec.task.task_source.source_sha256,
+        "task_source_sha256": spec.task.authority_sha256,
         "task_image_sha256": spec.container.image.rsplit("@sha256:", 1)[1],
         "invocation_sha256": runtime_invocation_sha256(spec),
         "runtime_version_sha256": projection.runtime_version_sha256,
@@ -174,7 +175,7 @@ def observe_runtime_authority(spec: ControlledExperimentSpecV2) -> RuntimeAuthor
 
 @dataclass(frozen=True)
 class SubprocessResult:
-    status: Literal["exited", "timed_out", "start_failure", "output_limit"]
+    status: Literal["exited", "timed_out", "start_failure", "output_limit", "safe_stopped"]
     exit_code: int | None
     stdout: bytes
     stderr: bytes
@@ -205,6 +206,8 @@ def run_subprocess_until(
     deadline_monotonic: float,
     timeout_seconds: int,
     clock: Clock = time.monotonic,
+    disk_free: DiskProbe | None = None,
+    safe_stop_free_bytes: int | None = None,
 ) -> SubprocessResult:
     """Run one process group and terminate it at the earlier frozen deadline."""
 
@@ -244,8 +247,18 @@ def run_subprocess_until(
                     finished_monotonic=finished,
                     receipt_sha256=receipt,
                 )
-            status: Literal["exited", "timed_out", "start_failure", "output_limit"] = "exited"
+            status: Literal[
+                "exited", "timed_out", "start_failure", "output_limit", "safe_stopped"
+            ] = "exited"
             while process.poll() is None:
+                if (
+                    disk_free is not None
+                    and safe_stop_free_bytes is not None
+                    and disk_free() < safe_stop_free_bytes
+                ):
+                    status = "safe_stopped"
+                    _kill_process_group(process)
+                    break
                 if stdout_path.stat().st_size > MAX_CAPTURE_BYTES or (
                     stderr_path.stat().st_size > MAX_CAPTURE_BYTES
                 ):

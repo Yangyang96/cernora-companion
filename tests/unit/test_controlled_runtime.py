@@ -49,10 +49,10 @@ def test_subprocess_capture_is_bounded_and_receipt_is_path_free(tmp_path: Path) 
             sys.executable,
             "-c",
             f"import sys; sys.stdout.buffer.write(b'x' * {MAX_CAPTURE_BYTES + 4096})",
-            str(tmp_path / "secret-proxy-127.0.0.1-9981"),
+            str(tmp_path / "secret-proxy-example-18080"),
         ),
         cwd=tmp_path,
-        environment={"https_proxy": "http://127.0.0.1:9981"},
+        environment={"https_proxy": "http://proxy.example:18080"},
         deadline_monotonic=time.monotonic() + 5,
         timeout_seconds=5,
     )
@@ -61,7 +61,23 @@ def test_subprocess_capture_is_bounded_and_receipt_is_path_free(tmp_path: Path) 
     assert result.stdout == result.stderr == b""
     portable = repr(result)
     assert str(tmp_path) not in portable
-    assert "9981" not in portable
+    assert "18080" not in portable
+
+
+def test_active_disk_drop_kills_process_group_as_resumable_safe_stop(tmp_path: Path) -> None:
+    probes = iter((20 * 1024**3, 7 * 1024**3))
+    result = run_subprocess_until(
+        (sys.executable, "-c", "import time; time.sleep(30)"),
+        cwd=tmp_path,
+        environment={},
+        deadline_monotonic=time.monotonic() + 10,
+        timeout_seconds=10,
+        disk_free=lambda: next(probes, 7 * 1024**3),
+        safe_stop_free_bytes=8 * 1024**3,
+    )
+
+    assert result.status == "safe_stopped"
+    assert result.exit_code is None
 
 
 def test_deadline_kills_descendant_process_group(tmp_path: Path) -> None:

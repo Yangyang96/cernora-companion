@@ -34,6 +34,11 @@ def valid_payload(
     task_source = materialize_authority_source(
         "task", {"case": case_id, "files": {"src/main.py": "def value(): return 0\n"}}
     )
+    task_authority_id = sha256_bytes(canonical_json_bytes({"case_id": case_id}))
+    task_authority_source = materialize_authority_source(
+        "controlled-task-authority",
+        {"authority_id": task_authority_id, "case_id": case_id},
+    )
     task_prompt_source = materialize_authority_source(
         "task-prompt", {"case": case_id, "text": "Fix the supplied project."}
     )
@@ -118,6 +123,8 @@ def valid_payload(
             DatasetCaseAuthority(
                 case=EvaluationCaseIdentitySource.model_validate(case_identity),
                 task_source_sha256=task_source.source_sha256,
+                task_authority_id=task_authority_id,
+                task_authority_sha256=task_authority_source.source_sha256,
                 task_prompt_sha256=task_prompt_source.source_sha256,
                 task_instruction_sha256=task_instruction_source.source_sha256,
                 allowed_paths=("src/main.py",),
@@ -144,6 +151,9 @@ def valid_payload(
             "case_set": "synthetic-python-repair",
             "content_sha256": task_source.source_sha256,
             "task_source": task_source.model_dump(mode="json"),
+            "authority_id": task_authority_id,
+            "authority_sha256": task_authority_source.source_sha256,
+            "authority_source": task_authority_source.model_dump(mode="json"),
             "prompt_sha256": task_prompt_source.source_sha256,
             "prompt_source": task_prompt_source.model_dump(mode="json"),
             "instruction_sha256": task_instruction_source.source_sha256,

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import base64
 import hashlib
-import shutil
+import json
+import os
+import subprocess
 import sys
+import time
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -11,6 +16,7 @@ import pytest
 from cernora import component_identity
 from pydantic import JsonValue
 
+import cernora_reference_workflow.controlled_live_attempt as live_attempt_module
 from cernora_reference_workflow.common import canonical_json_bytes, sha256_bytes
 from cernora_reference_workflow.controlled_execution import ControlledAttemptRequest
 from cernora_reference_workflow.controlled_experiment_spec import (
@@ -24,8 +30,11 @@ from cernora_reference_workflow.controlled_experiment_spec import (
     materialize_expected_evaluation_policy,
 )
 from cernora_reference_workflow.controlled_live_attempt import (
+    ContainerRecord,
+    ContainerSnapshot,
     ControlledHarborAttemptExecutor,
     LiveAttemptError,
+    attributable_container_ids,
     validate_installed_harbor_cli,
 )
 from cernora_reference_workflow.controlled_profile import (
@@ -37,10 +46,12 @@ from cernora_reference_workflow.controlled_profile import (
     build_controlled_profile_authority,
 )
 from cernora_reference_workflow.controlled_run_plan import ControlledTrialSlotV2
+from cernora_reference_workflow.controlled_runner import ControlledActiveSafeStop
 from cernora_reference_workflow.controlled_runtime import SubprocessResult
 from cernora_reference_workflow.controlled_task import (
     ControlledTaskAuthority,
     load_visible_task,
+    materialize_controlled_task,
 )
 from cernora_reference_workflow.runtime_policy import (
     CODEX_RUNTIME_INSTALLATION,
@@ -58,10 +69,16 @@ def digest(value: str) -> str:
 
 def _proxy_environment() -> dict[str, str]:
     return {
-        "http_proxy": "http://proxy.invalid:8080",
-        "https_proxy": "http://proxy.invalid:8080",
-        "all_proxy": "socks5://proxy.invalid:1080",
+        "CERNORA_HTTP_PROXY": "http://proxy.example:18080",
+        "CERNORA_HTTPS_PROXY": "http://proxy.example:18080",
+        "CERNORA_ALL_PROXY": "socks5://proxy.example:11080",
     }
+
+
+def _auth_file(root: Path) -> Path:
+    path = root / "auth.json"
+    path.write_text(json.dumps({"tokens": {"access_token": "unit-secret-marker"}}))
+    return path
 
 
 def _spec(task: ControlledTaskAuthority) -> ControlledExperimentSpecV2:
@@ -89,6 +106,9 @@ def _spec(task: ControlledTaskAuthority) -> ControlledExperimentSpecV2:
     runtime["configuration_source"] = runtime_source.model_dump(mode="json")
     task_source = materialize_authority_source(
         "task", cast(JsonValue, task.case.model_dump(mode="json"))
+    )
+    task_authority_source = materialize_authority_source(
+        "controlled-task-authority", cast(JsonValue, task.model_dump(mode="json"))
     )
     task_prompt = materialize_authority_source(
         "task-prompt", {"case": task.case.case_id, "text": task.case.input.prompt}
@@ -158,6 +178,8 @@ def _spec(task: ControlledTaskAuthority) -> ControlledExperimentSpecV2:
     dataset_case = DatasetCaseAuthority(
         case=EvaluationCaseIdentitySource.model_validate(case_identity),
         task_source_sha256=task_source.source_sha256,
+        task_authority_id=task.authority_id,
+        task_authority_sha256=task_authority_source.source_sha256,
         task_prompt_sha256=task_prompt.source_sha256,
         task_instruction_sha256=task_instruction.source_sha256,
         allowed_paths=task.allowed_paths,
@@ -179,6 +201,9 @@ def _spec(task: ControlledTaskAuthority) -> ControlledExperimentSpecV2:
         "case_set": task.case.case_set,
         "content_sha256": task_source.source_sha256,
         "task_source": task_source.model_dump(mode="json"),
+        "authority_id": task.authority_id,
+        "authority_sha256": task_authority_source.source_sha256,
+        "authority_source": task_authority_source.model_dump(mode="json"),
         "prompt_sha256": task_prompt.source_sha256,
         "prompt_source": task_prompt.model_dump(mode="json"),
         "instruction_sha256": task_instruction.source_sha256,
@@ -247,16 +272,84 @@ class FakeProcess:
         environment: Mapping[str, str],
         deadline_monotonic: float,
         timeout_seconds: int,
+        disk_free: object = None,
+        safe_stop_free_bytes: int | None = None,
     ) -> SubprocessResult:
-        del cwd, deadline_monotonic, timeout_seconds
+        del cwd, deadline_monotonic, timeout_seconds, disk_free, safe_stop_free_bytes
         self.commands.append(command)
-        del environment
+        assert "OPENAI_API_KEY" not in environment
+        assert environment["HTTP_PROXY"] == _proxy_environment()["CERNORA_HTTP_PROXY"]
+        assert environment["HTTPS_PROXY"] == _proxy_environment()["CERNORA_HTTPS_PROXY"]
+        assert environment["ALL_PROXY"] == _proxy_environment()["CERNORA_ALL_PROXY"]
+        assert environment["NO_PROXY"] == "localhost,127.0.0.1"
+        assert set(environment).issubset(
+            {
+                "PATH",
+                "HOME",
+                "TMPDIR",
+                "LANG",
+                "LC_ALL",
+                "CODEX_AUTH_JSON_PATH",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "ALL_PROXY",
+                "DOCKER_CONTEXT",
+                "DOCKER_HOST",
+                "NO_COLOR",
+                "NO_PROXY",
+                "REQUESTS_CA_BUNDLE",
+                "SSL_CERT_FILE",
+            }
+        )
         task_root = Path(command[command.index("-p") + 1])
         job_root = Path(command[command.index("-o") + 1])
         job_name = command[command.index("--job-name") + 1]
         verifier = job_root / job_name / "trial-1" / "verifier"
         verifier.mkdir(parents=True)
-        (verifier.parent / "result.json").write_bytes(b"{}")
+        kwargs = cast(
+            dict[str, object],
+            dict(
+                value.split("=", 1)
+                for value in command
+                if "=" in value
+                and value.split("=", 1)[0]
+                in {
+                    "version",
+                    "reasoning_effort",
+                    "reasoning_summary",
+                    "web_search",
+                    "strict_config",
+                }
+            ),
+        )
+        kwargs["strict_config"] = True
+        environment_config: dict[str, object] = {
+            "type": "docker",
+            "delete": True,
+            "override_cpus": self.spec.limits.cpu_millis // 1000,
+            "override_memory_mb": self.spec.limits.memory_mebibytes,
+        }
+        agent_config: dict[str, object] = {
+            "import_path": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
+            "model_name": self.spec.runtime.model,
+            "n_concurrent": 1,
+            "kwargs": kwargs,
+            "env": {},
+        }
+        config: dict[str, object] = {
+            "job_name": job_name,
+            "jobs_dir": str(job_root),
+            "n_attempts": 1,
+            "n_concurrent_trials": 1,
+            "agent_setup_timeout_multiplier": 4.0,
+            "agent_timeout_multiplier": 1.0,
+            "retry": {"max_retries": 0},
+            "environment": environment_config,
+            "agents": [agent_config],
+            "datasets": [{"path": str(task_root)}],
+        }
+        job = verifier.parents[1]
+        (job / "config.json").write_bytes(canonical_json_bytes(config))
         agent = verifier.parent / "agent"
         agent.mkdir()
         (agent / "effective-config.toml").write_text(TELEMETRY_CONFIG_TOML, encoding="utf-8")
@@ -265,17 +358,205 @@ class FakeProcess:
         (agent / "effective-features.txt").write_text(
             "plugins stable false\nunified_exec stable true\n", encoding="utf-8"
         )
-        shutil.copytree(task_root / "environment/workspace", verifier / "candidate")
+        candidate = verifier / "candidate"
+        candidate.mkdir()
+        for item in (*self.task.workspace_files, *self.task.test_files):
+            path = candidate / item.path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(item.content())
+        before = {
+            item.path: item.sha256 for item in (*self.task.workspace_files, *self.task.test_files)
+        }
+        stdout = b"behavioral verifier output\n"
+        stderr = b""
+        (verifier / "stdout.txt").write_bytes(stdout)
+        (verifier / "stderr.txt").write_bytes(stderr)
+        receipt = {
+            "allowed_paths": list(self.task.allowed_paths),
+            "authority_workspace": {item.path: item.sha256 for item in self.task.workspace_files},
+            "candidate_before": before,
+            "candidate_after": before,
+            "duration_milliseconds": 1,
+            "exit_code": 1,
+            "schema_version": "cernora.reference.controlled-verifier-execution/v1",
+            "stderr_sha256": sha256_bytes(stderr),
+            "stdout_sha256": sha256_bytes(stdout),
+            "test_command": list(self.task.test_command),
+            "test_files": {item.path: item.sha256 for item in self.task.test_files},
+            "working_directory": "candidate",
+        }
+        (verifier / "execution-receipt.json").write_bytes(canonical_json_bytes(receipt))
         (verifier / "exit-code.txt").write_text("1\n", encoding="ascii")
+        from dirhash import dirhash  # type: ignore[import-untyped]
+
+        trial_config = {
+            "task": {"path": str(task_root)},
+            "agent": agent_config,
+            "environment": environment_config,
+            "agent_setup_timeout_multiplier": 4.0,
+            "agent_timeout_multiplier": 1.0,
+        }
+        result = {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "task_name": self.task.case.case_id,
+            "trial_name": "trial-1",
+            "task_checksum": dirhash(task_root, "sha256"),
+            "config": trial_config,
+            "agent_info": {
+                "name": "codex",
+                "version": self.spec.runtime.version,
+                "model_info": {"name": self.spec.runtime.model},
+            },
+            "agent_result": {},
+            "verifier_result": {},
+            "exception_info": None,
+            "agent_execution": {"started_at": "x", "finished_at": "y"},
+        }
+        (verifier.parent / "result.json").write_bytes(canonical_json_bytes(result))
         return SubprocessResult(
             status="exited",
             exit_code=0,
             stdout=b"provider output is not portable evidence",
-            stderr=b"http://127.0.0.1:9981/private/user/path",
+            stderr=b"status 503 provider service unavailable",
             started_monotonic=0.0,
             finished_monotonic=1.0,
             receipt_sha256=digest("process"),
         )
+
+
+class FakeContainers:
+    def __init__(self) -> None:
+        self.cleaned: list[tuple[str, str | None]] = []
+
+    def snapshot(self) -> ContainerSnapshot:
+        return ContainerSnapshot(time.time(), {})
+
+    def cleanup_new(
+        self,
+        before: ContainerSnapshot,
+        *,
+        expected_image_id: str,
+        job_name: str,
+        trial_name: str | None,
+    ) -> tuple[str, ...]:
+        del before, expected_image_id
+        self.cleaned.append((job_name, trial_name))
+        return ()
+
+
+class ResultDriftProcess(FakeProcess):
+    def __init__(
+        self,
+        task: ControlledTaskAuthority,
+        spec: ControlledExperimentSpecV2,
+        mutation: str,
+    ) -> None:
+        super().__init__(task, spec)
+        self.mutation = mutation
+
+    def __call__(
+        self,
+        command: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        deadline_monotonic: float,
+        timeout_seconds: int,
+        disk_free: object = None,
+        safe_stop_free_bytes: int | None = None,
+    ) -> SubprocessResult:
+        process = super().__call__(
+            command,
+            cwd=cwd,
+            environment=environment,
+            deadline_monotonic=deadline_monotonic,
+            timeout_seconds=timeout_seconds,
+            disk_free=disk_free,
+            safe_stop_free_bytes=safe_stop_free_bytes,
+        )
+        job_root = Path(command[command.index("-o") + 1])
+        job_name = command[command.index("--job-name") + 1]
+        result_path = job_root / job_name / "trial-1" / "result.json"
+        payload = json.loads(result_path.read_bytes())
+        if self.mutation == "agent":
+            payload["agent_info"]["name"] = "unexpected-agent"
+        else:
+            payload["config"]["environment"]["delete"] = False
+        result_path.write_bytes(canonical_json_bytes(payload))
+        return process
+
+
+class TransientResultProcess(FakeProcess):
+    def __call__(
+        self,
+        command: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        deadline_monotonic: float,
+        timeout_seconds: int,
+        disk_free: object = None,
+        safe_stop_free_bytes: int | None = None,
+    ) -> SubprocessResult:
+        process = super().__call__(
+            command,
+            cwd=cwd,
+            environment=environment,
+            deadline_monotonic=deadline_monotonic,
+            timeout_seconds=timeout_seconds,
+            disk_free=disk_free,
+            safe_stop_free_bytes=safe_stop_free_bytes,
+        )
+        job_root = Path(command[command.index("-o") + 1])
+        job_name = command[command.index("--job-name") + 1]
+        result_path = job_root / job_name / "trial-1" / "result.json"
+        payload = json.loads(result_path.read_bytes())
+        payload["agent_result"] = None
+        payload["verifier_result"] = None
+        payload["exception_info"] = {
+            "exception_message": "provider status 503 service unavailable",
+            "exception_type": "NonZeroAgentExitCodeError",
+        }
+        result_path.write_bytes(canonical_json_bytes(payload))
+        return replace(process, exit_code=1, stderr=b"ordinary stderr")
+
+
+def test_container_selection_removes_only_exact_new_goal_containers() -> None:
+    captured = 1_000.0
+    image = "a" * 64
+    existing = ContainerRecord("existing", f"sha256:{image}", 900.0, {"project": "m4-job"})
+    before = ContainerSnapshot(captured, {existing.container_id: existing})
+    exact = ContainerRecord(
+        "exact", f"sha256:{image}", 1_001.0, {"com.docker.compose.project": "trial-1__env"}
+    )
+    unrelated = ContainerRecord(
+        "unrelated", f"sha256:{image}", 1_001.0, {"com.docker.compose.project": "other"}
+    )
+    near_match = ContainerRecord(
+        "near-match",
+        f"sha256:{image}",
+        1_001.0,
+        {"com.docker.compose.project": "prefix-trial-1-suffix"},
+    )
+    wrong_image = ContainerRecord(
+        "wrong-image", f"sha256:{'b' * 64}", 1_001.0, {"project": "m4-job"}
+    )
+    stale = ContainerRecord("stale", f"sha256:{image}", 800.0, {"project": "m4-job"})
+    after = ContainerSnapshot(
+        1_002.0,
+        {
+            item.container_id: item
+            for item in (existing, exact, near_match, unrelated, wrong_image, stale)
+        },
+    )
+
+    assert attributable_container_ids(
+        before,
+        after,
+        expected_image_id=image,
+        job_name="m4-job",
+        trial_name="trial-1",
+    ) == ("exact",)
 
 
 def test_live_executor_observes_authorities_and_emits_real_core_package(
@@ -284,21 +565,27 @@ def test_live_executor_observes_authorities_and_emits_real_core_package(
     task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
     spec = _spec(task)
     process = FakeProcess(task, spec)
-    cleanups: list[str] = []
+    containers = FakeContainers()
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
     evaluation_root = tmp_path / "evaluations"
     evaluation_root.mkdir()
     executor = ControlledHarborAttemptExecutor(
-        repository_root=tmp_path,
+        repository_root=repository_root,
         tasks=(task,),
         evaluation_root=evaluation_root,
-        environment_provider=lambda: {
-            **_proxy_environment(),
-            "CERNORA_AUTH_FILE": "/private/auth.json",
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        ambient_environment=lambda: {
+            "PATH": "/usr/bin",
+            "HOME": "/example/home",
+            "OPENAI_API_KEY": "ambient-must-not-leak",
+            "HTTP_PROXY": "http://ambient.example:19090",
         },
         process_runner=process,
-        cleanup_verifier=cleanups.append,
+        container_controller=containers,
         cli_validator=lambda _: None,
-        image_verifier=lambda value: value.container.image.rsplit("@sha256:", 1)[1],
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
     )
 
     attempt = executor(_request(spec))
@@ -309,9 +596,9 @@ def test_live_executor_observes_authorities_and_emits_real_core_package(
     assert attempt.runtime_observation is not None
     attempt.runtime_observation.verify(spec)
     portable = canonical_json_bytes(attempt.model_dump(mode="json"))
-    assert b"9981" not in portable
+    assert b"18080" not in portable
     assert b"/private/" not in portable
-    assert cleanups and process.commands
+    assert containers.cleaned and process.commands
     command = process.commands[0]
     assert command[1:3] == ("run", "-p")
     assert all(
@@ -327,10 +614,16 @@ def test_live_executor_observes_authorities_and_emits_real_core_package(
     )
 
 
-def test_live_executor_fails_closed_on_applied_prompt_or_image_drift(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mutation", ("agent", "environment", "delete", "memory"))
+def test_live_executor_rejects_actual_harbor_argv_drift(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
     task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
     spec = _spec(task)
     process = FakeProcess(task, spec)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
     evaluation_root = tmp_path / "evaluations"
     evaluation_root.mkdir()
 
@@ -352,22 +645,57 @@ def test_live_executor_fails_closed_on_applied_prompt_or_image_drift(tmp_path: P
                     proxy_environment,
                 )
             )
-            command[command.index("--override-memory-mb") + 1] = "2048"
+            if mutation == "agent":
+                command[command.index("-a") + 1] = "unexpected.agent:Drift"
+            elif mutation == "environment":
+                command[command.index("-e") + 1] = "local"
+            elif mutation == "delete":
+                command.remove("--delete")
+            else:
+                command[command.index("--override-memory-mb") + 1] = "2048"
             return tuple(command)
 
     executor = DriftedExecutor(
-        repository_root=tmp_path,
+        repository_root=repository_root,
         tasks=(task,),
         evaluation_root=evaluation_root,
-        environment_provider=_proxy_environment,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
         process_runner=process,
-        cleanup_verifier=lambda _: None,
+        container_controller=FakeContainers(),
         cli_validator=lambda _: None,
-        image_verifier=lambda value: value.container.image.rsplit("@sha256:", 1)[1],
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
     )
 
-    with pytest.raises(LiveAttemptError, match="drifts"):
+    with pytest.raises(LiveAttemptError, match="drifts|delete/yes"):
         executor(_request(spec, trial="drift"))
+
+
+@pytest.mark.parametrize("mutation", ("agent", "environment"))
+def test_live_executor_rejects_actual_harbor_result_drift(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=ResultDriftProcess(task, spec, mutation),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    with pytest.raises(LiveAttemptError, match="actual Harbor result"):
+        executor(_request(spec, trial=f"result-{mutation}-drift"))
 
 
 def test_live_executor_marks_only_eligible_preterminal_failure_for_retry(
@@ -385,8 +713,18 @@ def test_live_executor_marks_only_eligible_preterminal_failure_for_retry(
         environment: Mapping[str, str],
         deadline_monotonic: float,
         timeout_seconds: int,
+        disk_free: object = None,
+        safe_stop_free_bytes: int | None = None,
     ) -> SubprocessResult:
-        del command, cwd, environment, deadline_monotonic, timeout_seconds
+        del (
+            command,
+            cwd,
+            environment,
+            deadline_monotonic,
+            timeout_seconds,
+            disk_free,
+            safe_stop_free_bytes,
+        )
         return SubprocessResult(
             status="start_failure",
             exit_code=None,
@@ -397,15 +735,18 @@ def test_live_executor_marks_only_eligible_preterminal_failure_for_retry(
             receipt_sha256=digest("start-failure"),
         )
 
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
     executor = ControlledHarborAttemptExecutor(
-        repository_root=tmp_path,
+        repository_root=repository_root,
         tasks=(task,),
         evaluation_root=evaluation_root,
-        environment_provider=_proxy_environment,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
         process_runner=start_failure,
-        cleanup_verifier=lambda _: None,
+        container_controller=FakeContainers(),
         cli_validator=lambda _: None,
-        image_verifier=lambda value: value.container.image.rsplit("@sha256:", 1)[1],
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
     )
 
     attempt = executor(_request(spec, trial="eligible-retry"))
@@ -413,6 +754,348 @@ def test_live_executor_marks_only_eligible_preterminal_failure_for_retry(
     assert attempt.retry_eligible is True
     assert attempt.lifecycle is not None
     assert attempt.lifecycle.category == "infrastructure_start_failure"
+
+
+def test_live_executor_requires_strict_preterminal_result_for_transient_retry(
+    tmp_path: Path,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=TransientResultProcess(task, spec),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    attempt = executor(_request(spec, trial="transient-result"))
+
+    assert attempt.retry_eligible is True
+    assert attempt.lifecycle is not None
+    assert attempt.lifecycle.category == "transient_provider_pre_terminal"
+
+
+def test_behavioral_result_never_retries_despite_transient_stderr(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=FakeProcess(task, spec),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    attempt = executor(_request(spec, trial="behavioral-no-retry"))
+
+    assert attempt.retry_eligible is False
+    assert attempt.lifecycle is None
+
+
+@pytest.mark.parametrize("mutation", ("command", "workspace"))
+def test_reidentified_task_command_or_workspace_drift_is_rejected(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    payload = task.model_dump(mode="json", exclude={"authority_id"})
+    case = payload["case"]
+    assert isinstance(case, dict)
+    case_input = case["input"]
+    assert isinstance(case_input, dict)
+    parameters = case_input["parameters"]
+    assert isinstance(parameters, dict)
+    if mutation == "command":
+        command = [*task.test_command, "--unexpected"]
+        payload["test_command"] = command
+        parameters["test_command"] = command
+    else:
+        workspace = payload["workspace_files"]
+        assert isinstance(workspace, list) and isinstance(workspace[0], dict)
+        changed = b"def merge_intervals(values):\n    return []\n"
+        workspace[0]["content_base64"] = base64.b64encode(changed).decode("ascii")
+        workspace[0]["size_bytes"] = len(changed)
+        workspace[0]["sha256"] = sha256_bytes(changed)
+    drifted = materialize_controlled_task(payload)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(drifted,),
+        evaluation_root=evaluation_root,
+        auth_file=tmp_path / "not-read.json",
+        proxy_environment=_proxy_environment(),
+        process_runner=FakeProcess(drifted, spec),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    with pytest.raises(LiveAttemptError, match="exact controlled task"):
+        executor(_request(spec, trial=f"task-{mutation}-drift"))
+
+
+def test_wrong_or_missing_image_workspace_is_rejected_before_auth_read(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+
+    def wrong_workspace(
+        specification: ControlledExperimentSpecV2,
+        authority: ControlledTaskAuthority,
+    ) -> str:
+        del specification, authority
+        raise LiveAttemptError("pinned task image workspace contradicts task authority")
+
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=tmp_path / "not-read.json",
+        proxy_environment=_proxy_environment(),
+        process_runner=FakeProcess(task, spec),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=wrong_workspace,
+    )
+
+    with pytest.raises(LiveAttemptError, match="image workspace"):
+        executor(_request(spec, trial="wrong-image-workspace"))
+
+
+def test_generated_verifier_executes_exact_authority_command_and_all_files(
+    tmp_path: Path,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    task_root = tmp_path / task.case.case_id
+    task_root.mkdir()
+    live_attempt_module._materialize_task(_request(spec), task, task_root)
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    for item in task.workspace_files:
+        path = candidate / item.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(item.content())
+    logs = tmp_path / "logs"
+
+    completed = subprocess.run(
+        (
+            sys.executable,
+            str(task_root / "tests/verifier_driver.py"),
+            "--candidate",
+            str(candidate),
+            "--authority",
+            str(task_root / "tests/verifier-authority.json"),
+            "--test-root",
+            str(task_root / "tests/authority"),
+            "--logs",
+            str(logs),
+        ),
+        check=False,
+        capture_output=True,
+        env={
+            **os.environ,
+            "PATH": f"{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
+        },
+    )
+
+    assert completed.returncode == 0
+    receipt = json.loads((logs / "execution-receipt.json").read_bytes())
+    assert tuple(receipt["test_command"]) == task.test_command
+    assert receipt["test_files"] == {item.path: item.sha256 for item in task.test_files}
+    assert receipt["authority_workspace"] == {
+        item.path: item.sha256 for item in task.workspace_files
+    }
+    assert receipt["exit_code"] == 1
+
+
+def test_generated_verifier_rejects_added_test_file(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    task_root = tmp_path / task.case.case_id
+    task_root.mkdir()
+    live_attempt_module._materialize_task(_request(spec), task, task_root)
+    unexpected = task_root / "tests/authority/tests/unexpected.py"
+    unexpected.parent.mkdir(parents=True, exist_ok=True)
+    unexpected.write_text("raise AssertionError\n", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    for item in task.workspace_files:
+        path = candidate / item.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(item.content())
+
+    completed = subprocess.run(
+        (
+            sys.executable,
+            str(task_root / "tests/verifier_driver.py"),
+            "--candidate",
+            str(candidate),
+            "--authority",
+            str(task_root / "tests/verifier-authority.json"),
+            "--test-root",
+            str(task_root / "tests/authority"),
+            "--logs",
+            str(tmp_path / "logs"),
+        ),
+        check=False,
+        capture_output=True,
+        env={
+            **os.environ,
+            "PATH": f"{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
+        },
+    )
+
+    assert completed.returncode != 0
+    assert not (tmp_path / "logs/execution-receipt.json").exists()
+
+
+@pytest.mark.parametrize("repository_kind", ("current", "main", "linked", "core"))
+def test_auth_is_rejected_inside_every_git_worktree(
+    tmp_path: Path,
+    repository_kind: str,
+) -> None:
+    worktree = tmp_path / repository_kind
+    worktree.mkdir()
+    marker = worktree / ".git"
+    if repository_kind == "linked":
+        marker.write_text("gitdir: /outside/example\n", encoding="utf-8")
+    else:
+        marker.mkdir()
+    auth = _auth_file(worktree)
+
+    with pytest.raises(LiveAttemptError, match="outside every Git worktree"):
+        live_attempt_module._stable_auth_markers(auth, tmp_path / "unrelated")
+
+
+def test_auth_hardlink_is_rejected_even_when_external_name_is_outside_repo(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    (repository / ".git").mkdir()
+    tracked = _auth_file(repository)
+    external = tmp_path / "external-auth.json"
+    os.link(tracked, external)
+
+    with pytest.raises(LiveAttemptError, match="regular file"):
+        live_attempt_module._stable_auth_markers(external, repository)
+
+
+@pytest.mark.parametrize("location", ("stdout", "stderr", "artifact"))
+def test_private_proxy_endpoint_detection_is_fail_closed_and_value_free(
+    tmp_path: Path,
+    location: str,
+) -> None:
+    proxy = {
+        "HTTP_PROXY": "http://proxy.example:18080",
+        "HTTPS_PROXY": "http://proxy.example:18080",
+        "ALL_PROXY": "socks5://proxy.example:11080",
+        "NO_PROXY": "localhost,127.0.0.1,::1",
+    }
+    root = tmp_path / "job"
+    root.mkdir()
+    (root / "result.json").write_bytes(b"{}")
+    stdout = proxy["HTTP_PROXY"].encode() if location == "stdout" else b""
+    stderr = proxy["ALL_PROXY"].encode() if location == "stderr" else b""
+    if location == "artifact":
+        (root / "config.json").write_text(proxy["HTTPS_PROXY"], encoding="utf-8")
+    process = SubprocessResult(
+        status="exited",
+        exit_code=0,
+        stdout=stdout,
+        stderr=stderr,
+        started_monotonic=0.0,
+        finished_monotonic=1.0,
+        receipt_sha256=digest("private-scan"),
+    )
+
+    with pytest.raises(LiveAttemptError) as raised:
+        live_attempt_module._assert_private_values_absent(
+            root,
+            auth_path=tmp_path / "private-auth.json",
+            markers=(b"unit-secret-marker",),
+            proxy_environment=proxy,
+            explicit_proxy_endpoints=tuple(proxy.values()),
+            process=process,
+        )
+
+    assert "18080" not in str(raised.value)
+    assert "11080" not in str(raised.value)
+
+
+def test_active_disk_safe_stop_cleans_exact_runtime_containers(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    containers = FakeContainers()
+
+    def disk_stop(
+        command: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        deadline_monotonic: float,
+        timeout_seconds: int,
+        disk_free: object = None,
+        safe_stop_free_bytes: int | None = None,
+    ) -> SubprocessResult:
+        del command, cwd, environment, deadline_monotonic, timeout_seconds
+        assert disk_free is not None
+        assert safe_stop_free_bytes == 8 * 1024**3
+        return SubprocessResult(
+            status="safe_stopped",
+            exit_code=None,
+            stdout=b"",
+            stderr=b"",
+            started_monotonic=0.0,
+            finished_monotonic=1.0,
+            receipt_sha256=digest("disk-stop"),
+        )
+
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=disk_stop,
+        container_controller=containers,
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    with pytest.raises(ControlledActiveSafeStop, match="disk_safe_stop"):
+        executor(_request(spec, trial="disk-safe-stop"))
+
+    assert len(containers.cleaned) == 1
 
 
 def test_installed_harbor_help_matches_production_command_surface() -> None:

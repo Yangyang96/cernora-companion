@@ -37,6 +37,7 @@ from cernora_reference_workflow.controlled_run_plan import (
 from cernora_reference_workflow.controlled_task import (
     ControlledTaskAuthority,
     load_visible_task,
+    materialize_controlled_task,
 )
 from cernora_reference_workflow.heldout_seal import (
     HeldoutManifest,
@@ -167,6 +168,36 @@ def _pilot(tmp_path: Path, *, pass_all: bool = False) -> BatchSummaryPackage:
 
 def _manifest() -> HeldoutManifest:
     return HeldoutManifest.from_file(Path("examples/m4-heldout-sealed/manifest.json"))
+
+
+def _all_task_authorities(manifest: HeldoutManifest) -> tuple[ControlledTaskAuthority, ...]:
+    visible = _tasks((*DEV_NAMES, *REG_NAMES))
+    template = visible[0]
+    heldout: list[ControlledTaskAuthority] = []
+    for commitment in manifest.case_commitments:
+        case = template.case.model_dump(mode="json")
+        case["case_id"] = commitment.case_id
+        fixtures = case["fixture_references"]
+        assert isinstance(fixtures, list)
+        fixtures[0]["fixture_id"] = f"{commitment.case_id}-tests"
+        heldout.append(
+            materialize_controlled_task(
+                {
+                    "schema_version": "cernora.reference.controlled-task-authority/v1",
+                    "case": case,
+                    "split_id": "held-out",
+                    "failure_code": template.failure_code,
+                    "workspace_files": [
+                        item.model_dump(mode="json") for item in template.workspace_files
+                    ],
+                    "test_files": [item.model_dump(mode="json") for item in template.test_files],
+                    "allowed_paths": list(template.allowed_paths),
+                    "protected_paths": list(template.protected_paths),
+                    "test_command": list(template.test_command),
+                }
+            )
+        )
+    return (*visible, *heldout)
 
 
 def _final_plan(
@@ -326,6 +357,7 @@ def test_candidate_freeze_is_derived_from_real_strict_three_case_pilot(
         visible_corpus_root=VISIBLE_ROOT,
         heldout_manifest=manifest,
         reveal_receipt=reveal,
+        task_authorities=_all_task_authorities(manifest),
     )
 
     assert freeze.pilot.prohibited_from_final_live_batch is True
@@ -369,6 +401,7 @@ def test_final_verifier_rejects_freeze_plan_policy_seal_and_reveal_drift(
             visible_corpus_root=VISIBLE_ROOT,
             heldout_manifest=manifest,
             reveal_receipt=reveal,
+            task_authorities=_all_task_authorities(manifest),
         )
 
 
@@ -432,6 +465,7 @@ def test_final_verifier_rejects_canonically_reidentified_pilot_mutations(
             visible_corpus_root=VISIBLE_ROOT,
             heldout_manifest=manifest,
             reveal_receipt=reveal,
+            task_authorities=_all_task_authorities(manifest),
         )
 
 
@@ -453,6 +487,31 @@ def test_no_development_failure_fails_closed(tmp_path: Path) -> None:
             ),
             visible_corpus_root=VISIBLE_ROOT,
             heldout_manifest=manifest,
+        )
+
+
+def test_final_verifier_rejects_canonically_reidentified_regression_split(
+    tmp_path: Path,
+) -> None:
+    freeze, pilot, plan, comparison, manifest = _freeze_and_final(tmp_path)
+    reveal = _reveal(manifest, freeze)
+    tasks = list(_all_task_authorities(manifest))
+    index = next(index for index, task in enumerate(tasks) if task.split_id == "regression")
+    task = tasks[index]
+    payload = task.model_dump(mode="json", exclude={"authority_id"})
+    payload["split_id"] = "development"
+    tasks[index] = materialize_controlled_task(payload)
+
+    with pytest.raises(ContractError, match="task split"):
+        verify_candidate_freeze(
+            freeze,
+            pilot_package=pilot,
+            run_plan=plan,
+            comparison_plan=comparison,
+            visible_corpus_root=VISIBLE_ROOT,
+            heldout_manifest=manifest,
+            reveal_receipt=reveal,
+            task_authorities=tuple(tasks),
         )
 
 

@@ -1,16 +1,19 @@
-"""Production Harbor/Codex Attempt executor for controlled task authorities."""
+"""Production Harbor/Codex executor for authority-bound controlled repairs."""
 
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
+import time
 import tomllib
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from cernora import BatchAttemptResources, BatchLifecycleRecord
 
@@ -19,6 +22,7 @@ from cernora_reference_workflow.common import (
     canonical_content_id,
     canonical_json_bytes,
     closed_regular_tree,
+    load_json_bytes,
     read_regular_file_bytes,
     sha256_bytes,
 )
@@ -33,6 +37,10 @@ from cernora_reference_workflow.controlled_execution import (
 )
 from cernora_reference_workflow.controlled_experiment_spec import ControlledExperimentSpecV2
 from cernora_reference_workflow.controlled_profile import evaluate_repair_result_package
+from cernora_reference_workflow.controlled_runner import (
+    SAFE_STOP_FREE_BYTES,
+    ControlledActiveSafeStop,
+)
 from cernora_reference_workflow.controlled_runtime import (
     RuntimeAuthorityObservation,
     SubprocessResult,
@@ -49,12 +57,37 @@ from cernora_reference_workflow.runtime_policy import (
 )
 
 AGENT_IMPORT = "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex"
+_AUTH_MAX_BYTES = 4 * 1024 * 1024
+_TRANSIENT_PROVIDER_EXCEPTIONS = frozenset({"NonZeroAgentExitCodeError"})
+_INFRASTRUCTURE_START_EXCEPTIONS = frozenset(
+    {
+        "DockerComposeError",
+        "EnvironmentBuildError",
+        "EnvironmentStartError",
+        "TaskNotFoundError",
+    }
+)
+_TRANSIENT_STATUSES = ("408", "429", "500", "502", "503", "504")
+_TRANSIENT_MARKERS = ("gateway", "provider", "rate limit", "service unavailable", "upstream")
+_CHILD_ENV_ALLOWLIST = frozenset(
+    {
+        "DOCKER_CONTEXT",
+        "DOCKER_HOST",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "NO_COLOR",
+        "PATH",
+        "REQUESTS_CA_BUNDLE",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+    }
+)
 
-ProcessRunner = Callable[..., SubprocessResult]
 EnvironmentProvider = Callable[[], Mapping[str, str]]
-CleanupVerifier = Callable[[str], None]
 CliValidator = Callable[[Path], None]
-ImageVerifier = Callable[[ControlledExperimentSpecV2], str]
+ImageVerifier = Callable[[ControlledExperimentSpecV2, ControlledTaskAuthority], str]
+DiskProbe = Callable[[Path], int]
 
 _REQUIRED_HARBOR_OPTIONS = (
     "--agent",
@@ -75,7 +108,7 @@ _REQUIRED_HARBOR_OPTIONS = (
 
 
 class LiveAttemptError(ContractError):
-    """The live Runtime could not produce a closed controlled Attempt."""
+    """The live Runtime could not produce one closed controlled Attempt."""
 
 
 class _ProcessRunner(Protocol):
@@ -87,12 +120,67 @@ class _ProcessRunner(Protocol):
         environment: Mapping[str, str],
         deadline_monotonic: float,
         timeout_seconds: int,
+        disk_free: Callable[[], int] | None = None,
+        safe_stop_free_bytes: int | None = None,
     ) -> SubprocessResult: ...
 
 
-def validate_installed_harbor_cli(executable: Path) -> None:
-    """Require the exact real option surface used by the production argv."""
+@dataclass(frozen=True)
+class ContainerRecord:
+    container_id: str
+    image_id: str
+    created_unix_seconds: float
+    labels: Mapping[str, str]
 
+
+@dataclass(frozen=True)
+class ContainerSnapshot:
+    captured_unix_seconds: float
+    records: Mapping[str, ContainerRecord]
+
+
+class ContainerController(Protocol):
+    def snapshot(self) -> ContainerSnapshot: ...
+
+    def cleanup_new(
+        self,
+        before: ContainerSnapshot,
+        *,
+        expected_image_id: str,
+        job_name: str,
+        trial_name: str | None,
+    ) -> tuple[str, ...]: ...
+
+
+def attributable_container_ids(
+    before: ContainerSnapshot,
+    after: ContainerSnapshot,
+    *,
+    expected_image_id: str,
+    job_name: str,
+    trial_name: str | None,
+) -> tuple[str, ...]:
+    """Select only newly-created, exact-image, exact-label Goal containers."""
+
+    target_values = [job_name]
+    if trial_name is not None:
+        target_values.extend((trial_name, f"{trial_name}__env", f"{trial_name}__agent"))
+    targets = tuple(value.lower().replace("_", "-") for value in target_values)
+    selected: list[str] = []
+    for identifier in sorted(set(after.records) - set(before.records)):
+        record = after.records[identifier]
+        label_values = {value.lower().replace("_", "-") for value in record.labels.values()}
+        if (
+            record.image_id == f"sha256:{expected_image_id}"
+            and record.created_unix_seconds >= before.captured_unix_seconds - 1.0
+            and targets
+            and any(target in label_values for target in targets)
+        ):
+            selected.append(identifier)
+    return tuple(selected)
+
+
+def validate_installed_harbor_cli(executable: Path) -> None:
     result = subprocess.run(
         (str(executable), "run", "--help"),
         check=False,
@@ -106,29 +194,281 @@ def validate_installed_harbor_cli(executable: Path) -> None:
         raise LiveAttemptError("installed Harbor CLI does not match the qualified 0.16.1 surface")
 
 
-def _verify_local_task_image(specification: ControlledExperimentSpecV2) -> str:
-    image = specification.container.image
-    platform = specification.container.platform
-    expected = f"sha256:{image.rsplit('@sha256:', 1)[1]}"
-    result = subprocess.run(
+def _object(path: Path, *, label: str) -> dict[str, Any]:
+    payload = load_json_bytes(read_regular_file_bytes(path))
+    if not isinstance(payload, dict):
+        raise LiveAttemptError(f"{label} must contain one JSON object")
+    return cast(dict[str, Any], payload)
+
+
+def _path_is_inside_git_worktree(path: Path) -> bool:
+    resolved = path.resolve()
+    start = resolved if resolved.is_dir() else resolved.parent
+    for parent in (start, *start.parents):
+        marker = parent / ".git"
+        try:
+            metadata = marker.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode):
+            return True
+    return False
+
+
+def _stable_auth_markers(auth_path: Path, repository_root: Path) -> tuple[bytes, ...]:
+    del repository_root
+    if not auth_path.is_absolute() or auth_path.name in {"", ".", ".."}:
+        raise LiveAttemptError("auth file must be an explicit absolute regular file")
+    if _path_is_inside_git_worktree(auth_path):
+        raise LiveAttemptError("auth file must remain outside every Git worktree")
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_fd = os.open(auth_path.parent, parent_flags)
+    except OSError as exc:
+        raise LiveAttemptError("auth parent must be one no-follow directory") from exc
+    try:
+        parent_before = os.fstat(parent_fd)
+        path_before = os.stat(auth_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(path_before.st_mode) or path_before.st_nlink != 1:
+            raise LiveAttemptError("auth file must be one no-follow regular file")
+        file_fd = os.open(auth_path.name, file_flags, dir_fd=parent_fd)
+        try:
+            file_before = os.fstat(file_fd)
+            chunks: list[bytes] = []
+            total = 0
+            while chunk := os.read(file_fd, 64 * 1024):
+                total += len(chunk)
+                if total > _AUTH_MAX_BYTES:
+                    raise LiveAttemptError("auth file exceeds the private read limit")
+                chunks.append(chunk)
+            file_after = os.fstat(file_fd)
+        finally:
+            os.close(file_fd)
+        path_after = os.stat(auth_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        parent_after = os.fstat(parent_fd)
+    except OSError as exc:
+        raise LiveAttemptError("auth file changed during stable no-follow read") from exc
+    finally:
+        os.close(parent_fd)
+
+    def metadata(value: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_nlink,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+
+    if (
+        metadata(parent_before) != metadata(parent_after)
+        or metadata(path_before) != metadata(path_after)
+        or metadata(file_before) != metadata(file_after)
+        or (file_before.st_dev, file_before.st_ino) != (path_before.st_dev, path_before.st_ino)
+    ):
+        raise LiveAttemptError("auth file changed during stable no-follow read")
+    payload = load_json_bytes(b"".join(chunks))
+    if not isinstance(payload, dict):
+        raise LiveAttemptError("auth file must contain one JSON object")
+    sensitive_names = ("account", "email", "key", "organization", "secret", "token")
+    markers: set[bytes] = set()
+
+    def collect(value: object, *, sensitive: bool = False) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                collect(
+                    item,
+                    sensitive=sensitive
+                    or any(name in str(key).lower() for name in sensitive_names),
+                )
+        elif isinstance(value, list):
+            for item in value:
+                collect(item, sensitive=sensitive)
+        elif sensitive and isinstance(value, str) and len(value) >= 6:
+            markers.add(value.encode("utf-8"))
+
+    collect(payload)
+    if not markers:
+        raise LiveAttemptError("auth file has no privately verifiable secret markers")
+    return tuple(sorted(markers))
+
+
+def _child_environment(
+    ambient: Mapping[str, str],
+    auth_path: Path,
+    proxy_environment: Mapping[str, str],
+) -> dict[str, str]:
+    child = {key: ambient[key] for key in _CHILD_ENV_ALLOWLIST if ambient.get(key)}
+    child["CODEX_AUTH_JSON_PATH"] = str(auth_path)
+    child.update(proxy_environment)
+    return child
+
+
+def _assert_private_values_absent(
+    root: Path,
+    *,
+    auth_path: Path,
+    markers: tuple[bytes, ...],
+    proxy_environment: Mapping[str, str],
+    explicit_proxy_endpoints: tuple[str, ...],
+    process: SubprocessResult,
+) -> None:
+    prohibited = (
+        str(auth_path).encode("utf-8"),
+        *markers,
+        *(value.encode("utf-8") for value in proxy_environment.values()),
+        *(value.encode("utf-8") for value in explicit_proxy_endpoints),
+    )
+    if any(marker in process.stdout or marker in process.stderr for marker in prohibited):
+        raise LiveAttemptError("private value appeared in Harbor process output")
+    if not root.is_dir():
+        return
+    for path in closed_regular_tree(root).values():
+        if path.name == "auth.json":
+            raise LiveAttemptError("Harbor retained a prohibited authentication artifact")
+        data = read_regular_file_bytes(path, maximum=8 * 1024 * 1024)
+        if any(marker in data for marker in prohibited):
+            raise LiveAttemptError("private value appeared in a Harbor artifact")
+
+
+class DockerContainerController:
+    def snapshot(self) -> ContainerSnapshot:
+        listed = subprocess.run(
+            ("docker", "ps", "-a", "--no-trunc", "--format", "{{.ID}}"),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        identifiers = tuple(item for item in listed.stdout.splitlines() if item)
+        records: dict[str, ContainerRecord] = {}
+        if identifiers:
+            inspected = subprocess.run(
+                ("docker", "inspect", *identifiers),
+                check=True,
+                capture_output=True,
+            )
+            payload = load_json_bytes(inspected.stdout)
+            if not isinstance(payload, list):
+                raise LiveAttemptError("Docker inspect did not return one container list")
+            for item in payload:
+                if not isinstance(item, dict):
+                    raise LiveAttemptError("Docker container observation is malformed")
+                config = item.get("Config")
+                if not isinstance(config, dict) or not isinstance(config.get("Labels"), dict):
+                    raise LiveAttemptError("Docker container labels are unavailable")
+                created = item.get("Created")
+                identifier = item.get("Id")
+                image = item.get("Image")
+                if not all(isinstance(value, str) for value in (created, identifier, image)):
+                    raise LiveAttemptError("Docker container identity is malformed")
+                assert isinstance(created, str)
+                assert isinstance(identifier, str)
+                assert isinstance(image, str)
+                created_at = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+                labels = {
+                    str(key): str(value)
+                    for key, value in cast(dict[object, object], config["Labels"]).items()
+                }
+                records[identifier] = ContainerRecord(identifier, image, created_at, labels)
+        return ContainerSnapshot(time.time(), records)
+
+    def cleanup_new(
+        self,
+        before: ContainerSnapshot,
+        *,
+        expected_image_id: str,
+        job_name: str,
+        trial_name: str | None,
+    ) -> tuple[str, ...]:
+        after = self.snapshot()
+        selected = list(
+            attributable_container_ids(
+                before,
+                after,
+                expected_image_id=expected_image_id,
+                job_name=job_name,
+                trial_name=trial_name,
+            )
+        )
+        for identifier in selected:
+            subprocess.run(("docker", "rm", "-f", identifier), check=True, capture_output=True)
+        remaining = self.snapshot().records
+        if any(identifier in remaining for identifier in selected):
+            raise LiveAttemptError("exact Goal container survived force removal")
+        return tuple(selected)
+
+
+def _verify_local_task_image(
+    specification: ControlledExperimentSpecV2,
+    task: ControlledTaskAuthority,
+) -> str:
+    expected = f"sha256:{specification.container.image.rsplit('@sha256:', 1)[1]}"
+    inspected = subprocess.run(
         ("docker", "image", "inspect", expected, "--format", "{{.Id}} {{.Os}}/{{.Architecture}}"),
         check=False,
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0 or result.stdout.strip() != f"{expected} {platform}":
+    if inspected.returncode != 0 or inspected.stdout.strip() != (
+        f"{expected} {specification.container.platform}"
+    ):
         raise LiveAttemptError("local task image identity or platform is unavailable")
+    created = subprocess.run(
+        ("docker", "create", "--entrypoint", "/bin/true", expected),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if not created:
+        raise LiveAttemptError("task image workspace probe did not create one container")
+    probe = Path(tempfile.mkdtemp(prefix="cernora-image-workspace-"))
+    try:
+        subprocess.run(("docker", "cp", f"{created}:/workspace/.", str(probe)), check=True)
+        observed = {
+            path: read_regular_file_bytes(source)
+            for path, source in closed_regular_tree(probe).items()
+        }
+        expected_workspace = {item.path: item.content() for item in task.workspace_files}
+        if observed != expected_workspace:
+            raise LiveAttemptError("pinned task image workspace contradicts task authority")
+    finally:
+        subprocess.run(("docker", "rm", "-f", created), check=False, capture_output=True)
+        removal = subprocess.run(
+            ("docker", "container", "inspect", created),
+            check=False,
+            capture_output=True,
+        )
+        shutil.rmtree(probe, ignore_errors=True)
+    if removal.returncode == 0:
+        raise LiveAttemptError("task image workspace probe container survived cleanup")
     return expected.removeprefix("sha256:")
+
+
+def _verify_task_binding(spec: ControlledExperimentSpecV2, task: ControlledTaskAuthority) -> None:
+    if (
+        spec.task.task_id != task.case.case_id
+        or spec.task.task_version != task.case.case_version
+        or spec.task.case_set != task.case.case_set
+        or spec.task.content_sha256 != task.case_sha256
+        or spec.task.task_source.payload != task.case.model_dump(mode="json")
+        or spec.task.authority_id != task.authority_id
+        or spec.task.authority_sha256 != task.authority_sha256
+        or spec.task.authority_source.payload != task.model_dump(mode="json")
+        or spec.task.allowed_paths != task.allowed_paths
+        or spec.task.protected_paths != task.protected_paths
+        or spec.test_runner.command != task.test_command
+        or spec.test_runner.test_source_sha256 != task.test_source_sha256
+    ):
+        raise LiveAttemptError("Experiment does not bind the exact controlled task authority")
 
 
 def compose_controlled_instruction(
     task: ControlledTaskAuthority,
     request: ControlledAttemptRequest,
 ) -> str:
-    """Compose only task-owned prose and selected canonical Treatment sources."""
-
-    spec = request.specification
-
     def text(source: object, label: str) -> str:
         payload = getattr(source, "payload", None)
         allowed = {"text"} if label == "Instruction" else {"selected_failure", "text"}
@@ -138,56 +478,378 @@ def compose_controlled_instruction(
             or not isinstance(payload["text"], str)
         ):
             raise LiveAttemptError(f"{label} authority has an invalid strict text payload")
-        if "selected_failure" in payload:
-            selected = payload["selected_failure"]
-            if not isinstance(selected, dict) or set(selected) != {
-                "code",
-                "profile_id",
-                "profile_version",
-            }:
-                raise LiveAttemptError(f"{label} selected_failure binding is invalid")
         return payload["text"]
 
-    sections = (
-        task.case.input.prompt,
-        text(spec.prompt_source, "Prompt"),
-        text(spec.instruction_source, "Instruction"),
+    spec = request.specification
+    return (
+        "\n\n".join(
+            (
+                task.case.input.prompt,
+                text(spec.prompt_source, "Prompt"),
+                text(spec.instruction_source, "Instruction"),
+            )
+        )
+        + "\n"
     )
-    return "\n\n".join(sections) + "\n"
+
+
+_VERIFIER_DRIVER = r"""from __future__ import annotations
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import stat
+import subprocess
+import time
+from pathlib import Path
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+def tree(root: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for base, dirs, files in os.walk(root, followlinks=False):
+        dirs.sort(); files.sort()
+        base_path = Path(base)
+        for name in (*dirs, *files):
+            path = base_path / name
+            if path.is_symlink():
+                raise RuntimeError("verifier tree contains a symlink")
+        for name in files:
+            path = base_path / name
+            if not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
+                raise RuntimeError("verifier tree contains a non-regular file")
+            result[path.relative_to(root).as_posix()] = digest(path.read_bytes())
+    return result
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--candidate", type=Path, required=True)
+parser.add_argument("--authority", type=Path, required=True)
+parser.add_argument("--test-root", type=Path, required=True)
+parser.add_argument("--logs", type=Path, required=True)
+args = parser.parse_args()
+authority_raw = args.authority.read_bytes()
+authority = json.loads(authority_raw)
+if authority_raw != json.dumps(authority, sort_keys=True, separators=(",", ":")).encode():
+    raise RuntimeError("verifier authority is not canonical JSON")
+if set(authority) != {"allowed_paths", "test_command", "test_files", "workspace_files"}:
+    raise RuntimeError("verifier authority has an unknown or missing field")
+if not isinstance(authority["test_command"], list) or not authority["test_command"] or not all(
+    isinstance(value, str) and value for value in authority["test_command"]
+):
+    raise RuntimeError("verifier command is malformed")
+if tree(args.test_root) != authority["test_files"]:
+    raise RuntimeError("verifier test tree does not exactly equal authority")
+for relative, expected in authority["test_files"].items():
+    source = args.test_root / relative
+    if digest(source.read_bytes()) != expected:
+        raise RuntimeError("bound test file digest mismatch")
+    destination = args.candidate / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+before = tree(args.candidate)
+for relative, expected in authority["test_files"].items():
+    if before.get(relative) != expected:
+        raise RuntimeError("candidate test file did not bind authority")
+args.logs.mkdir(parents=True, exist_ok=True)
+stdout_path = args.logs / "stdout.txt"
+stderr_path = args.logs / "stderr.txt"
+started = time.monotonic()
+with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+    completed = subprocess.run(
+        authority["test_command"], cwd=args.candidate, stdout=stdout, stderr=stderr
+    )
+duration = max(0, int((time.monotonic() - started) * 1000))
+after = tree(args.candidate)
+receipt = {
+    "allowed_paths": authority["allowed_paths"],
+    "authority_workspace": authority["workspace_files"],
+    "candidate_before": before,
+    "candidate_after": after,
+    "duration_milliseconds": duration,
+    "exit_code": completed.returncode,
+    "schema_version": "cernora.reference.controlled-verifier-execution/v1",
+    "stderr_sha256": digest(stderr_path.read_bytes()),
+    "stdout_sha256": digest(stdout_path.read_bytes()),
+    "test_command": authority["test_command"],
+    "test_files": authority["test_files"],
+    "working_directory": "candidate",
+}
+(args.logs / "execution-receipt.json").write_bytes(
+    json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+)
+(args.logs / "exit-code.txt").write_text(f"{completed.returncode}\n", encoding="ascii")
+(args.logs / "duration-milliseconds.txt").write_text(f"{duration}\n", encoding="ascii")
+(args.logs / "reward.txt").write_text(
+    "1\n" if completed.returncode == 0 else "0\n", encoding="ascii"
+)
+"""
+
+
+def _verifier_authority(task: ControlledTaskAuthority) -> dict[str, object]:
+    return {
+        "allowed_paths": list(task.allowed_paths),
+        "test_command": list(task.test_command),
+        "test_files": {item.path: item.sha256 for item in task.test_files},
+        "workspace_files": {item.path: item.sha256 for item in task.workspace_files},
+    }
+
+
+def _materialize_task(
+    request: ControlledAttemptRequest,
+    task: ControlledTaskAuthority,
+    task_root: Path,
+) -> None:
+    spec = request.specification
+    environment = task_root / "environment"
+    tests = task_root / "tests"
+    bound_tests = tests / "authority"
+    environment.mkdir(parents=True)
+    bound_tests.mkdir(parents=True)
+    for item in task.test_files:
+        path = bound_tests / item.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(item.content())
+    (tests / "verifier_driver.py").write_text(_VERIFIER_DRIVER, encoding="utf-8")
+    (tests / "verifier-authority.json").write_bytes(canonical_json_bytes(_verifier_authority(task)))
+    instruction = compose_controlled_instruction(task, request)
+    (task_root / "instruction.md").write_text(instruction, encoding="utf-8")
+    image_digest = spec.container.image.rsplit("@sha256:", 1)[1]
+    task_toml = (
+        'schema_version = "1.3"\n\n'
+        "[metadata]\n"
+        'author_name = "Cernora contributors"\n'
+        'author_email = "noreply@example.invalid"\n'
+        'difficulty = "hard"\n'
+        'category = "software-engineering"\n'
+        'tags = ["python", "repair", "deterministic"]\n\n'
+        "[verifier]\n"
+        f"timeout_sec = {float(spec.limits.timeout_seconds)!r}\n\n"
+        "[agent]\n"
+        f"timeout_sec = {float(spec.limits.timeout_seconds)!r}\n\n"
+        "[environment]\n"
+        f'docker_image = "sha256:{image_digest}"\n'
+        'workdir = "/workspace"\n'
+        'network_mode = "public"\n'
+    )
+    (task_root / "task.toml").write_text(task_toml, encoding="utf-8")
+    test_script = (
+        "#!/bin/sh\nset -eu\n"
+        "mkdir -p /logs/verifier/candidate\n"
+        "cp -a /workspace/. /logs/verifier/candidate/\n"
+        "python /tests/verifier_driver.py "
+        "--candidate /logs/verifier/candidate "
+        "--authority /tests/verifier-authority.json "
+        "--test-root /tests/authority --logs /logs/verifier\n"
+    )
+    test_sh = tests / "test.sh"
+    test_sh.write_text(test_script, encoding="utf-8")
+    test_sh.chmod(0o755)
+
+
+def _single_value(command: tuple[str, ...], option: str) -> str:
+    positions = [index for index, value in enumerate(command) if value == option]
+    if len(positions) != 1 or positions[0] + 1 >= len(command):
+        raise LiveAttemptError(f"actual Harbor argv has invalid {option}")
+    return command[positions[0] + 1]
+
+
+def _repeated_values(command: tuple[str, ...], option: str) -> tuple[str, ...]:
+    positions = [index for index, value in enumerate(command) if value == option]
+    if any(index + 1 >= len(command) for index in positions):
+        raise LiveAttemptError(f"actual Harbor argv has invalid {option}")
+    return tuple(command[index + 1] for index in positions)
+
+
+def _validate_actual_argv(
+    command: tuple[str, ...],
+    request: ControlledAttemptRequest,
+    *,
+    task_root: Path,
+    job_root: Path,
+    job_name: str,
+    proxy_environment: Mapping[str, str],
+) -> None:
+    spec = request.specification
+    flags = {"--delete", "--yes"}
+    if command[:2] != (str(command[0]), "run") or any(command.count(flag) != 1 for flag in flags):
+        raise LiveAttemptError("actual Harbor argv omits exact delete/yes controls")
+    expected = {
+        "-p": str(task_root),
+        "-a": AGENT_IMPORT,
+        "-m": spec.runtime.model,
+        "-e": "docker",
+        "--agent-setup-timeout-multiplier": "4",
+        "--agent-timeout-multiplier": "1",
+        "--override-cpus": str(spec.limits.cpu_millis // 1000),
+        "--override-memory-mb": str(spec.limits.memory_mebibytes),
+        "-o": str(job_root),
+        "--job-name": job_name,
+        "-n": "1",
+        "-k": "1",
+        "-r": "0",
+    }
+    if any(_single_value(command, option) != value for option, value in expected.items()):
+        raise LiveAttemptError("actual Harbor argv drifts from Experiment authority")
+    kwargs = set(_repeated_values(command, "--ak"))
+    if kwargs != {
+        f"version={spec.runtime.version}",
+        f"reasoning_effort={spec.runtime.reasoning_effort}",
+        "reasoning_summary=none",
+        "web_search=disabled",
+        "strict_config=true",
+    }:
+        raise LiveAttemptError("actual Harbor agent kwargs drift from Runtime authority")
+    if _repeated_values(command, "--ae"):
+        raise LiveAttemptError("actual Harbor argv must not persist private proxy endpoints")
+    if tuple(sorted(proxy_environment)) != ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"):
+        raise LiveAttemptError("explicit proxy projection is incomplete")
+
+
+def _validate_job_config(
+    config: Mapping[str, object],
+    request: ControlledAttemptRequest,
+    *,
+    task_root: Path,
+    job_root: Path,
+    job_name: str,
+    proxy_environment: Mapping[str, str],
+) -> None:
+    spec = request.specification
+    retry = config.get("retry")
+    environment = config.get("environment")
+    agents = config.get("agents")
+    datasets = config.get("datasets")
+    if not isinstance(retry, dict) or not isinstance(environment, dict):
+        raise LiveAttemptError("Harbor config omits retry/environment authority")
+    if not isinstance(agents, list) or len(agents) != 1 or not isinstance(agents[0], dict):
+        raise LiveAttemptError("Harbor config must resolve one exact Agent")
+    if not isinstance(datasets, list) or len(datasets) != 1 or not isinstance(datasets[0], dict):
+        raise LiveAttemptError("Harbor config must resolve one exact task path")
+    agent = agents[0]
+    expected_kwargs = {
+        "reasoning_effort": spec.runtime.reasoning_effort,
+        "reasoning_summary": "none",
+        "strict_config": True,
+        "version": spec.runtime.version,
+        "web_search": "disabled",
+    }
+    checks = (
+        config.get("job_name") == job_name,
+        config.get("jobs_dir") == str(job_root),
+        config.get("n_attempts") == 1,
+        config.get("n_concurrent_trials") == 1,
+        config.get("agent_setup_timeout_multiplier") == 4.0,
+        config.get("agent_timeout_multiplier") == 1.0,
+        retry.get("max_retries") == 0,
+        environment.get("type") == "docker",
+        environment.get("delete") is True,
+        environment.get("override_cpus") == spec.limits.cpu_millis // 1000,
+        environment.get("override_memory_mb") == spec.limits.memory_mebibytes,
+        agent.get("import_path") == AGENT_IMPORT,
+        agent.get("model_name") == spec.runtime.model,
+        agent.get("n_concurrent") == 1,
+        agent.get("kwargs") == expected_kwargs,
+        agent.get("env") == {},
+        datasets[0].get("path") == str(task_root),
+    )
+    if not all(checks):
+        raise LiveAttemptError("resolved Harbor job config drifts from actual argv authority")
+
+
+def _validate_trial_result(
+    result: Mapping[str, object],
+    request: ControlledAttemptRequest,
+    task: ControlledTaskAuthority,
+    *,
+    task_root: Path,
+    task_checksum: str,
+) -> None:
+    spec = request.specification
+    agent_info = result.get("agent_info")
+    config = result.get("config")
+    if not isinstance(agent_info, dict) or not isinstance(config, dict):
+        raise LiveAttemptError("Harbor result omits agent/config observations")
+    model = agent_info.get("model_info")
+    trial_agent = config.get("agent")
+    trial_environment = config.get("environment")
+    trial_task = config.get("task")
+    if not all(
+        isinstance(item, dict) for item in (model, trial_agent, trial_environment, trial_task)
+    ):
+        raise LiveAttemptError("Harbor result has malformed runtime observations")
+    assert isinstance(model, dict)
+    assert isinstance(trial_agent, dict)
+    assert isinstance(trial_environment, dict)
+    assert isinstance(trial_task, dict)
+    expected_kwargs = {
+        "reasoning_effort": spec.runtime.reasoning_effort,
+        "reasoning_summary": "none",
+        "strict_config": True,
+        "version": spec.runtime.version,
+        "web_search": "disabled",
+    }
+    if (
+        result.get("task_name") != task.case.case_id
+        or result.get("task_checksum") != task_checksum
+        or agent_info.get("name") != "codex"
+        or agent_info.get("version") != spec.runtime.version
+        or model.get("name") != spec.runtime.model
+        or trial_agent.get("import_path") != AGENT_IMPORT
+        or trial_agent.get("model_name") != spec.runtime.model
+        or trial_agent.get("n_concurrent") != 1
+        or trial_agent.get("kwargs") != expected_kwargs
+        or trial_agent.get("env") != {}
+        or trial_environment.get("type") != "docker"
+        or trial_environment.get("delete") is not True
+        or trial_environment.get("override_cpus") != spec.limits.cpu_millis // 1000
+        or trial_environment.get("override_memory_mb") != spec.limits.memory_mebibytes
+        or trial_task.get("path") != str(task_root)
+        or config.get("agent_setup_timeout_multiplier") != 4.0
+        or config.get("agent_timeout_multiplier") != 1.0
+    ):
+        raise LiveAttemptError("actual Harbor result drifts from Runtime/task authority")
 
 
 def _runtime_observation(
     request: ControlledAttemptRequest,
     task: ControlledTaskAuthority,
     command: tuple[str, ...],
+    *,
     task_root: Path,
+    job_root: Path,
+    job_name: str,
+    proxy_environment: Mapping[str, str],
+    result: Mapping[str, object],
+    task_checksum: str,
 ) -> RuntimeAuthorityObservation:
-    """Parse the actual invocation and derive the authority observation."""
-
     spec = request.specification
-    agent_kwargs = {
-        command[index + 1] for index, value in enumerate(command[:-1]) if value == "--ak"
-    }
+    _validate_actual_argv(
+        command,
+        request,
+        task_root=task_root,
+        job_root=job_root,
+        job_name=job_name,
+        proxy_environment=proxy_environment,
+    )
+    job_config = _object(job_root / job_name / "config.json", label="Harbor job config")
+    _validate_job_config(
+        job_config,
+        request,
+        task_root=task_root,
+        job_root=job_root,
+        job_name=job_name,
+        proxy_environment=proxy_environment,
+    )
+    _validate_trial_result(result, request, task, task_root=task_root, task_checksum=task_checksum)
     task_config = tomllib.loads(read_regular_file_bytes(task_root / "task.toml").decode("utf-8"))
     environment = task_config.get("environment")
-    if not isinstance(environment, dict):
-        raise LiveAttemptError("materialized Harbor task omits its environment authority")
-    task_image = environment.get("docker_image")
-    expected_image = f"sha256:{spec.container.image.rsplit('@sha256:', 1)[1]}"
-    if (
-        command[command.index("-m") + 1] != spec.runtime.model
-        or f"version={spec.runtime.version}" not in agent_kwargs
-        or f"reasoning_effort={spec.runtime.reasoning_effort}" not in agent_kwargs
-        or command[command.index("--override-cpus") + 1] != str(spec.limits.cpu_millis // 1000)
-        or command[command.index("--override-memory-mb") + 1] != str(spec.limits.memory_mebibytes)
-        or command[command.index("-n") + 1] != "1"
-        or command[command.index("-k") + 1] != "1"
-        or command[command.index("-r") + 1] != "0"
-        or task_image != expected_image
+    expected_image = spec.container.image.rsplit("@sha256:", 1)[1]
+    if not isinstance(environment, dict) or environment.get("docker_image") != (
+        f"sha256:{expected_image}"
     ):
-        raise LiveAttemptError("actual Harbor invocation drifts from Experiment authority")
-    if task.case.case_id != spec.task.task_id or task.case_sha256 != spec.task.content_sha256:
-        raise LiveAttemptError("actual task authority drifts from Experiment Case")
+        raise LiveAttemptError("materialized Harbor task image contradicts authority")
     projection = spec.core_projection()
     payload: dict[str, object] = {
         "schema_version": "cernora.reference.runtime-authority-observation/v1",
@@ -195,8 +857,8 @@ def _runtime_observation(
         "runtime_configuration_sha256": spec.runtime.configuration_sha256,
         "prompt_sha256": spec.prompt_source.source_sha256,
         "instruction_sha256": spec.instruction_source.source_sha256,
-        "task_source_sha256": spec.task.task_source.source_sha256,
-        "task_image_sha256": expected_image.removeprefix("sha256:"),
+        "task_source_sha256": spec.task.authority_sha256,
+        "task_image_sha256": expected_image,
         "invocation_sha256": runtime_invocation_sha256(spec),
         "runtime_version_sha256": projection.runtime_version_sha256,
         "model_sha256": projection.model_sha256,
@@ -217,16 +879,67 @@ def _runtime_observation(
     return observation
 
 
-def _default_cleanup(job_name: str) -> None:
-    result = subprocess.run(
-        ("docker", "ps", "-a", "--format", "{{.Names}}"),
-        check=True,
-        capture_output=True,
-        text=True,
+def _trial_result(job_root: Path, job_name: str) -> tuple[Path, dict[str, Any]] | None:
+    job = job_root / job_name
+    if not job.is_dir() or job.is_symlink():
+        return None
+    trials = tuple(
+        item
+        for item in job.iterdir()
+        if item.is_dir() and not item.is_symlink() and (item / "result.json").is_file()
     )
-    normalized = job_name.lower().replace("_", "-")
-    if any(normalized in item.lower().replace("_", "-") for item in result.stdout.splitlines()):
-        raise LiveAttemptError("Harbor container cleanup was not exact")
+    if len(trials) > 1:
+        raise LiveAttemptError("Harbor job contains more than one closed Trial")
+    if not trials:
+        return None
+    result = _object(trials[0] / "result.json", label="Harbor result")
+    if result.get("trial_name") != trials[0].name:
+        raise LiveAttemptError("Harbor result trial identity contradicts its closed directory")
+    return trials[0], result
+
+
+def _trial_name_hint(job_root: Path, job_name: str) -> str | None:
+    job = job_root / job_name
+    if not job.is_dir() or job.is_symlink():
+        return None
+    trials = tuple(item for item in job.iterdir() if item.is_dir() and not item.is_symlink())
+    if len(trials) > 1:
+        raise LiveAttemptError("Harbor job contains more than one Trial directory")
+    return trials[0].name if trials else None
+
+
+def _classify_preterminal(
+    process: SubprocessResult,
+    result: Mapping[str, object] | None,
+) -> tuple[str, bool] | None:
+    if process.status == "start_failure" and result is None:
+        return "infrastructure_start_failure", True
+    if process.status in {"timed_out", "output_limit"}:
+        return "runtime_pre_terminal_failure", False
+    if result is None:
+        return None if process.exit_code == 0 else ("runtime_pre_terminal_failure", False)
+    exception = result.get("exception_info")
+    exception_type = exception.get("exception_type") if isinstance(exception, dict) else None
+    message = exception.get("exception_message") if isinstance(exception, dict) else None
+    agent_result = result.get("agent_result")
+    verifier_result = result.get("verifier_result")
+    if process.exit_code == 0 and exception_type is None:
+        return None
+    if agent_result is not None or verifier_result is not None:
+        return "runtime_pre_terminal_failure", False
+    if result.get("agent_execution") is None and exception_type in _INFRASTRUCTURE_START_EXCEPTIONS:
+        return "infrastructure_start_failure", True
+    normalized = message.lower() if isinstance(message, str) else ""
+    transient = (
+        exception_type in _TRANSIENT_PROVIDER_EXCEPTIONS
+        and any(status in normalized for status in _TRANSIENT_STATUSES)
+        and any(marker in normalized for marker in _TRANSIENT_MARKERS)
+    )
+    return (
+        ("transient_provider_pre_terminal", True)
+        if transient
+        else ("runtime_pre_terminal_failure", False)
+    )
 
 
 def _lifecycle_attempt(
@@ -273,8 +986,104 @@ def _lifecycle_attempt(
     )
 
 
+def _result_from_job(
+    request: ControlledAttemptRequest,
+    task: ControlledTaskAuthority,
+    trial: Path,
+) -> RepairResultRecord:
+    verifier = trial / "verifier"
+    agent = trial / "agent"
+    runtime_artifacts = {
+        "effective-config.toml": TELEMETRY_CONFIG_TOML.encode("utf-8"),
+        "runtime-policy.json": canonical_json_bytes(RUNTIME_POLICY),
+        "runtime-cleanup.json": canonical_json_bytes(RUNTIME_CLEANUP_RECEIPT),
+    }
+    for name, expected in runtime_artifacts.items():
+        if read_regular_file_bytes(agent / name) != expected:
+            raise LiveAttemptError("Harbor Runtime artifact contradicts pinned authority")
+    features = read_regular_file_bytes(agent / "effective-features.txt").decode("utf-8")
+    feature_rows = {tuple(line.split()) for line in features.splitlines()}
+    if not {("plugins", "stable", "false"), ("unified_exec", "stable", "true")}.issubset(
+        feature_rows
+    ):
+        raise LiveAttemptError("Harbor Runtime features do not prove pinned policy")
+    if request.specification.runtime.configuration_sha256 != RUNTIME_CONFIGURATION_SHA256:
+        raise LiveAttemptError("Experiment Runtime configuration is not pinned authority")
+    receipt_raw = read_regular_file_bytes(verifier / "execution-receipt.json")
+    receipt = load_json_bytes(receipt_raw)
+    if not isinstance(receipt, dict) or receipt_raw != canonical_json_bytes(receipt):
+        raise LiveAttemptError("controlled verifier receipt is not canonical JSON")
+    candidate = {
+        path: sha256_bytes(read_regular_file_bytes(source))
+        for path, source in closed_regular_tree(verifier / "candidate").items()
+    }
+    stdout = read_regular_file_bytes(verifier / "stdout.txt")
+    stderr = read_regular_file_bytes(verifier / "stderr.txt")
+    expected_receipt = {
+        "allowed_paths": list(task.allowed_paths),
+        "authority_workspace": {item.path: item.sha256 for item in task.workspace_files},
+        "candidate_before": receipt.get("candidate_before"),
+        "candidate_after": candidate,
+        "duration_milliseconds": receipt.get("duration_milliseconds"),
+        "exit_code": receipt.get("exit_code"),
+        "schema_version": "cernora.reference.controlled-verifier-execution/v1",
+        "stderr_sha256": sha256_bytes(stderr),
+        "stdout_sha256": sha256_bytes(stdout),
+        "test_command": list(task.test_command),
+        "test_files": {item.path: item.sha256 for item in task.test_files},
+        "working_directory": "candidate",
+    }
+    if receipt != expected_receipt or not isinstance(receipt.get("exit_code"), int):
+        raise LiveAttemptError("controlled verifier receipt contradicts exact task authority")
+    before = receipt.get("candidate_before")
+    if not isinstance(before, dict) or any(
+        before.get(item.path) != item.sha256 for item in task.test_files
+    ):
+        raise LiveAttemptError("controlled verifier did not execute all bound test files")
+    initial = {
+        **{item.path: item.sha256 for item in task.workspace_files},
+        **{item.path: item.sha256 for item in task.test_files},
+    }
+    changed = tuple(
+        sorted(
+            path
+            for path in set(initial) | set(candidate)
+            if initial.get(path) != candidate.get(path)
+        )
+    )
+    protected_before = {path: initial.get(path) for path in task.protected_paths}
+    protected_after = {path: candidate.get(path) for path in task.protected_paths}
+    return materialize_repair_result(
+        {
+            "schema_version": "cernora.reference.repair-result/v1",
+            "case_id": task.case.case_id,
+            "result_record_version": "agent.evaluator.result-record/v1",
+            "test_authority_sha256": request.specification.test_runner.authority_sha256,
+            "test_plan_sha256": request.specification.test_runner.test_plan_sha256,
+            "test_source_sha256": request.specification.test_runner.test_source_sha256,
+            "termination": "exited",
+            "exit_code": receipt["exit_code"],
+            "checks": [
+                {
+                    "check_id": "frozen-verifier",
+                    "failure_code": task.failure_code,
+                    "passed": receipt["exit_code"] == 0,
+                }
+            ],
+            "allowed_paths": list(task.allowed_paths),
+            "changed_paths": list(changed),
+            "protected_paths": list(task.protected_paths),
+            "protected_path_receipt": {
+                "before_sha256": sha256_bytes(canonical_json_bytes(protected_before)),
+                "after_sha256": sha256_bytes(canonical_json_bytes(protected_after)),
+                "unchanged": protected_before == protected_after,
+            },
+        }
+    )
+
+
 class ControlledHarborAttemptExecutor:
-    """One serial qualified executor; secrets exist only in the child environment."""
+    """One serial executor; auth/proxy exist only in the spawned child."""
 
     def __init__(
         self,
@@ -282,20 +1091,27 @@ class ControlledHarborAttemptExecutor:
         repository_root: Path,
         tasks: tuple[ControlledTaskAuthority, ...],
         evaluation_root: Path,
-        environment_provider: EnvironmentProvider,
+        auth_file: Path,
+        proxy_environment: Mapping[str, str],
+        ambient_environment: EnvironmentProvider = lambda: os.environ,
         process_runner: _ProcessRunner = run_subprocess_until,
-        cleanup_verifier: CleanupVerifier = _default_cleanup,
+        container_controller: ContainerController | None = None,
         cli_validator: CliValidator = validate_installed_harbor_cli,
         image_verifier: ImageVerifier = _verify_local_task_image,
+        disk_free: DiskProbe = lambda path: shutil.disk_usage(path).free,
     ) -> None:
         self._repository_root = repository_root
         self._tasks = {item.case.case_id: item for item in tasks}
         self._task_suite = tasks
         self._evaluation_root = evaluation_root
-        self._environment_provider = environment_provider
+        self._auth_file = auth_file
+        self._explicit_proxy_endpoints = tuple(sorted(set(proxy_environment.values())))
+        self._proxy_environment = resolve_provider_proxy_environment(proxy_environment)
+        self._ambient_environment = ambient_environment
         self._process_runner = process_runner
-        self._cleanup_verifier = cleanup_verifier
+        self._containers = container_controller or DockerContainerController()
         self._image_verifier = image_verifier
+        self._disk_free = disk_free
         cli_validator(repository_root / ".venv/bin/harbor")
 
     @property
@@ -312,7 +1128,7 @@ class ControlledHarborAttemptExecutor:
     ) -> tuple[str, ...]:
         spec = request.specification
         if spec.limits.cpu_millis < 1000 or spec.limits.cpu_millis % 1000:
-            raise LiveAttemptError("Harbor CPU override cannot exactly represent Experiment limits")
+            raise LiveAttemptError("Harbor CPU override cannot exactly represent limits")
         command = [
             str(self._repository_root / ".venv/bin/harbor"),
             "run",
@@ -355,237 +1171,128 @@ class ControlledHarborAttemptExecutor:
             "0",
             "--yes",
         ]
-        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
-            command.extend(("--ae", f"{name}={proxy_environment[name]}"))
+        if tuple(sorted(proxy_environment)) != (
+            "ALL_PROXY",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+        ):
+            raise LiveAttemptError("explicit proxy projection is incomplete")
         return tuple(command)
-
-    def _materialize_task(
-        self,
-        request: ControlledAttemptRequest,
-        task: ControlledTaskAuthority,
-        task_root: Path,
-    ) -> None:
-        spec = request.specification
-        environment = task_root / "environment"
-        tests = task_root / "tests"
-        workspace = environment / "workspace"
-        environment.mkdir()
-        tests.mkdir()
-        workspace.mkdir()
-        for item in task.workspace_files:
-            path = workspace / item.path
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(item.content())
-        for item in task.test_files:
-            relative = item.path.removeprefix("tests/")
-            path = tests / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(item.content())
-        instruction = compose_controlled_instruction(task, request)
-        (task_root / "instruction.md").write_text(instruction, encoding="utf-8")
-        image_digest = spec.container.image.rsplit("@sha256:", 1)[1]
-        task_toml = (
-            'schema_version = "1.3"\n\n'
-            "[metadata]\n"
-            'author_name = "Cernora contributors"\n'
-            'author_email = "noreply@example.invalid"\n'
-            'difficulty = "hard"\n'
-            'category = "software-engineering"\n'
-            'tags = ["python", "repair", "deterministic"]\n\n'
-            "[verifier]\n"
-            f"timeout_sec = {float(spec.limits.timeout_seconds)!r}\n\n"
-            "[agent]\n"
-            f"timeout_sec = {float(spec.limits.timeout_seconds)!r}\n\n"
-            "[environment]\n"
-            "build_timeout_sec = 600.0\n"
-            f'docker_image = "sha256:{image_digest}"\n'
-            'workdir = "/workspace"\n'
-            'network_mode = "public"\n'
-        )
-        (task_root / "task.toml").write_text(task_toml, encoding="utf-8")
-        dockerfile = (
-            f"FROM {spec.container.build_base_image}\n"
-            "WORKDIR /workspace\n"
-            "COPY workspace/ /workspace/\n"
-        )
-        (environment / "Dockerfile").write_text(dockerfile, encoding="utf-8")
-        test_target = task.allowed_paths[0]
-        test_script = (
-            "#!/bin/sh\n"
-            "set -u\n"
-            "mkdir -p /logs/verifier/candidate\n"
-            "cp -a /workspace/. /logs/verifier/candidate/\n"
-            "started_milliseconds=$(date +%s%3N)\n"
-            "cd /logs/verifier/candidate\n"
-            f"python /tests/{shlex.quote(task.test_files[0].path.removeprefix('tests/'))} "
-            f"{shlex.quote(test_target)} > /logs/verifier/stdout.txt "
-            "2> /logs/verifier/stderr.txt\n"
-            "status=$?\n"
-            "finished_milliseconds=$(date +%s%3N)\n"
-            "printf '%s\\n' \"$status\" > /logs/verifier/exit-code.txt\n"
-            "printf '%s\\n' \"$((finished_milliseconds - started_milliseconds))\" "
-            "> /logs/verifier/duration-milliseconds.txt\n"
-            "if [ \"$status\" -eq 0 ]; then printf '1\\n'; else printf '0\\n'; fi "
-            "> /logs/verifier/reward.txt\n"
-            "exit 0\n"
-        )
-        test_sh = tests / "test.sh"
-        test_sh.write_text(test_script, encoding="utf-8")
-        test_sh.chmod(0o755)
-
-    def _result_from_job(
-        self,
-        request: ControlledAttemptRequest,
-        task: ControlledTaskAuthority,
-        job_root: Path,
-        job_name: str,
-    ) -> RepairResultRecord:
-        job = job_root / job_name
-        if not job.is_dir() or job.is_symlink():
-            raise LiveAttemptError("Harbor did not publish one real job directory")
-        trials = tuple(
-            item
-            for item in job.iterdir()
-            if item.is_dir() and not item.is_symlink() and (item / "result.json").is_file()
-        )
-        if len(trials) != 1:
-            raise LiveAttemptError("Harbor job does not contain exactly one closed Trial")
-        verifier = trials[0] / "verifier"
-        agent = trials[0] / "agent"
-        runtime_artifacts = {
-            "effective-config.toml": TELEMETRY_CONFIG_TOML.encode("utf-8"),
-            "runtime-policy.json": canonical_json_bytes(RUNTIME_POLICY),
-            "runtime-cleanup.json": canonical_json_bytes(RUNTIME_CLEANUP_RECEIPT),
-        }
-        for name, expected in runtime_artifacts.items():
-            if read_regular_file_bytes(agent / name) != expected:
-                raise LiveAttemptError("Harbor Runtime artifact contradicts the pinned authority")
-        features = read_regular_file_bytes(agent / "effective-features.txt").decode("utf-8")
-        feature_rows = {tuple(line.split()) for line in features.splitlines()}
-        if not {
-            ("plugins", "stable", "false"),
-            ("unified_exec", "stable", "true"),
-        }.issubset(feature_rows):
-            raise LiveAttemptError("Harbor Runtime features do not prove the pinned policy")
-        if request.specification.runtime.configuration_sha256 != RUNTIME_CONFIGURATION_SHA256:
-            raise LiveAttemptError("Experiment Runtime configuration is not the pinned authority")
-        try:
-            exit_code = int(read_regular_file_bytes(verifier / "exit-code.txt").strip())
-        except (OSError, ValueError) as exc:
-            raise LiveAttemptError("Harbor verifier exit receipt is invalid") from exc
-        candidate = closed_regular_tree(verifier / "candidate")
-        initial = {item.path: item.sha256 for item in task.workspace_files}
-        observed = {
-            path: sha256_bytes(read_regular_file_bytes(source))
-            for path, source in candidate.items()
-        }
-        changed = tuple(
-            sorted(
-                path
-                for path in set(initial) | set(observed)
-                if initial.get(path) != observed.get(path)
-            )
-        )
-        protected = task.test_source_sha256
-        return materialize_repair_result(
-            {
-                "schema_version": "cernora.reference.repair-result/v1",
-                "case_id": task.case.case_id,
-                "result_record_version": "agent.evaluator.result-record/v1",
-                "test_authority_sha256": request.specification.test_runner.authority_sha256,
-                "test_plan_sha256": request.specification.test_runner.test_plan_sha256,
-                "test_source_sha256": request.specification.test_runner.test_source_sha256,
-                "termination": "exited",
-                "exit_code": exit_code,
-                "checks": [
-                    {
-                        "check_id": "frozen-verifier",
-                        "failure_code": task.failure_code,
-                        "passed": exit_code == 0,
-                    }
-                ],
-                "allowed_paths": list(task.allowed_paths),
-                "changed_paths": list(changed),
-                "protected_paths": list(task.protected_paths),
-                "protected_path_receipt": {
-                    "before_sha256": protected,
-                    "after_sha256": protected,
-                    "unchanged": True,
-                },
-            }
-        )
 
     def __call__(self, request: ControlledAttemptRequest) -> ControlledAttempt:
         task = self._tasks.get(request.slot.case_id)
         if task is None:
             raise LiveAttemptError("selected Case has no controlled task authority")
+        _verify_task_binding(request.specification, task)
         temporary = Path(tempfile.mkdtemp(prefix="cernora-m4-attempt-", dir=self._evaluation_root))
         job_name = f"m4-{request.trial_id[:12]}-{request.ordinal}"
         try:
-            task_root = temporary / "task"
+            task_root = temporary / task.case.case_id
             job_root = temporary / "job"
             task_root.mkdir()
             job_root.mkdir()
-            self._materialize_task(request, task, task_root)
-            observed_image_sha256 = self._image_verifier(request.specification)
-            if (
-                observed_image_sha256
-                != request.specification.container.image.rsplit("@sha256:", 1)[1]
-            ):
-                raise LiveAttemptError("observed local task image contradicts Experiment authority")
-            environment = dict(self._environment_provider())
-            proxy_environment = resolve_provider_proxy_environment(environment)
-            command = self._command(
-                request,
-                task_root,
-                job_root,
-                job_name,
-                proxy_environment,
+            _materialize_task(request, task, task_root)
+            observed_image = self._image_verifier(request.specification, task)
+            expected_image = request.specification.container.image.rsplit("@sha256:", 1)[1]
+            if observed_image != expected_image:
+                raise LiveAttemptError("observed local task image contradicts authority")
+
+            # Authentication is deliberately read only after the image/task bytes pass.
+            auth_markers = _stable_auth_markers(self._auth_file, self._repository_root)
+            environment = _child_environment(
+                self._ambient_environment(), self._auth_file, self._proxy_environment
             )
-            observation = _runtime_observation(request, task, command, task_root)
-            process = self._process_runner(
+            command = self._command(request, task_root, job_root, job_name, self._proxy_environment)
+            _validate_actual_argv(
                 command,
-                cwd=self._repository_root,
-                environment=environment,
-                deadline_monotonic=request.global_deadline_monotonic,
-                timeout_seconds=request.specification.limits.timeout_seconds,
+                request,
+                task_root=task_root,
+                job_root=job_root,
+                job_name=job_name,
+                proxy_environment=self._proxy_environment,
             )
-            self._cleanup_verifier(job_name)
-            if process.status == "start_failure":
-                return _lifecycle_attempt(
-                    request,
-                    process,
-                    category="infrastructure_start_failure",
-                    retry_eligible=True,
+            try:
+                from dirhash import dirhash  # type: ignore[import-untyped]
+
+                task_checksum = cast(str, dirhash(task_root, "sha256"))
+            except (ImportError, OSError, ValueError) as exc:
+                raise LiveAttemptError("cannot compute the real Harbor task checksum") from exc
+            before = self._containers.snapshot()
+            trial_name: str | None = None
+            try:
+                process = self._process_runner(
+                    command,
+                    cwd=self._repository_root,
+                    environment=environment,
+                    deadline_monotonic=request.global_deadline_monotonic,
+                    timeout_seconds=request.specification.limits.timeout_seconds,
+                    disk_free=lambda: self._disk_free(self._evaluation_root),
+                    safe_stop_free_bytes=SAFE_STOP_FREE_BYTES,
                 )
-            if process.status in {"timed_out", "output_limit"}:
-                return _lifecycle_attempt(
-                    request,
-                    process,
-                    category="runtime_pre_terminal_failure",
-                    retry_eligible=False,
+                trial_name = _trial_name_hint(job_root, job_name)
+                trial_result = _trial_result(job_root, job_name)
+                trial = trial_result[0] if trial_result is not None else None
+                result = trial_result[1] if trial_result is not None else None
+                trial_name_value = (
+                    result.get("trial_name")
+                    if result is not None
+                    else trial_name
                 )
-            if process.exit_code != 0:
-                transient = any(
-                    marker in process.stderr.lower()
-                    for marker in (b"status 429", b"status 502", b"status 503", b"status 504")
+                if trial_name_value is not None and not isinstance(trial_name_value, str):
+                    raise LiveAttemptError("Harbor trial_name is malformed")
+                trial_name = trial_name_value
+            finally:
+                self._containers.cleanup_new(
+                    before,
+                    expected_image_id=expected_image,
+                    job_name=job_name,
+                    trial_name=trial_name,
                 )
-                return _lifecycle_attempt(
-                    request,
-                    process,
-                    category=(
-                        "transient_provider_pre_terminal"
-                        if transient
-                        else "runtime_pre_terminal_failure"
-                    ),
-                    retry_eligible=transient,
-                )
-            result = self._result_from_job(request, task, job_root, job_name)
-            raw = canonical_json_bytes(result.model_dump(mode="json"))
+            _assert_private_values_absent(
+                job_root / job_name,
+                auth_path=self._auth_file,
+                markers=auth_markers,
+                proxy_environment=self._proxy_environment,
+                explicit_proxy_endpoints=self._explicit_proxy_endpoints,
+                process=process,
+            )
+            if process.status == "safe_stopped":
+                raise ControlledActiveSafeStop("disk_safe_stop_below_8_gib")
+            if (
+                process.status == "timed_out"
+                and process.finished_monotonic >= request.global_deadline_monotonic
+            ):
+                raise ControlledActiveSafeStop("hard_wall_deadline_elapsed")
+            classification = _classify_preterminal(process, result)
+            if classification is not None:
+                category, retry = classification
+                return _lifecycle_attempt(request, process, category=category, retry_eligible=retry)
+            if process.exit_code != 0 or trial is None or result is None:
+                raise LiveAttemptError("Harbor did not publish one terminal Trial result")
+            if (
+                result.get("agent_result") is None
+                or result.get("verifier_result") is None
+                or (result.get("exception_info") is not None)
+            ):
+                raise LiveAttemptError("terminal Harbor result is incomplete")
+            repair = _result_from_job(request, task, trial)
+            observation = _runtime_observation(
+                request,
+                task,
+                command,
+                task_root=task_root,
+                job_root=job_root,
+                job_name=job_name,
+                proxy_environment=self._proxy_environment,
+                result=result,
+                task_checksum=task_checksum,
+            )
+            raw = canonical_json_bytes(repair.model_dump(mode="json"))
             source_attempt_id = canonical_content_id(
                 {
                     "process_receipt_sha256": process.receipt_sha256,
-                    "result_id": result.result_id,
+                    "result_id": repair.result_id,
                     "trial_id": request.trial_id,
                 },
                 excluded=frozenset(),
@@ -597,7 +1304,7 @@ class ControlledHarborAttemptExecutor:
             package = evaluate_repair_result_package(
                 task=task,
                 tasks=self._task_suite,
-                result=result,
+                result=repair,
                 source_attempt_id=source_attempt_id,
                 output=evaluation_output,
             )
@@ -624,7 +1331,7 @@ class ControlledHarborAttemptExecutor:
                         )
                     ).model_dump(mode="json"),
                     "runtime_observation": observation.model_dump(mode="json"),
-                    "repair_result": result.model_dump(mode="json"),
+                    "repair_result": repair.model_dump(mode="json"),
                     "evaluation": package.model_dump(mode="python"),
                     "lifecycle": None,
                 }
@@ -633,16 +1340,14 @@ class ControlledHarborAttemptExecutor:
             shutil.rmtree(temporary, ignore_errors=True)
 
 
-def inherited_ephemeral_environment() -> Mapping[str, str]:
-    """Return a child-only environment; callers must inject auth just before spawn."""
-
-    return dict(os.environ)
-
-
 __all__ = [
+    "ContainerController",
+    "ContainerRecord",
+    "ContainerSnapshot",
     "ControlledHarborAttemptExecutor",
+    "DockerContainerController",
     "LiveAttemptError",
+    "attributable_container_ids",
     "compose_controlled_instruction",
-    "inherited_ephemeral_environment",
     "validate_installed_harbor_cli",
 ]

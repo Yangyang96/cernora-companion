@@ -98,6 +98,25 @@ class StoredCheckpoint(StrictV2Contract):
         return self
 
 
+class StoredSafeStop(StrictV2Contract):
+    schema_version: Literal["cernora.reference.stored-active-safe-stop/v1"]
+    stop_id: Digest
+    execution_id: Digest
+    active_id: Digest
+    reason: Literal["disk_safe_stop_below_8_gib", "hard_wall_deadline_elapsed"]
+    observed_unix_milliseconds: Annotated[int, Field(ge=0)]
+    elapsed_milliseconds: Annotated[int, Field(ge=0)]
+
+    @model_validator(mode="after")
+    def identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"stop_id"})
+        )
+        if self.stop_id != expected:
+            raise ValueError("stored active safe-stop identity mismatch")
+        return self
+
+
 @dataclass(frozen=True)
 class ControlledStoreState:
     record: StoredExecutionRecord
@@ -105,6 +124,7 @@ class ControlledStoreState:
     active: tuple[StoredActiveAttempt, ...]
     attempts: tuple[ControlledAttempt, ...]
     checkpoints: tuple[StoredCheckpoint, ...]
+    safe_stops: tuple[StoredSafeStop, ...]
     adopted_attempt_ids: tuple[str, ...]
 
     @property
@@ -170,6 +190,7 @@ class ControlledExecutionStore:
             (staging / "active").mkdir()
             (staging / "attempts").mkdir()
             (staging / "checkpoints").mkdir()
+            (staging / "safe-stops").mkdir()
             (staging / "record.json").write_bytes(
                 canonical_json_bytes(record.model_dump(mode="json"))
             )
@@ -205,10 +226,38 @@ class ControlledExecutionStore:
         payload["active_id"] = canonical_content_id(payload, excluded=frozenset())
         active = StoredActiveAttempt.model_validate(payload)
         _write_once(
-            self.root / "active" / trial_id / f"{ordinal:04d}.json",
+            self.root / "active" / trial_id / f"{ordinal:04d}" / f"{active.active_id}.json",
             canonical_json_bytes(active.model_dump(mode="json")),
         )
         return active
+
+    def safe_stop_active(
+        self,
+        active: StoredActiveAttempt,
+        *,
+        reason: Literal["disk_safe_stop_below_8_gib", "hard_wall_deadline_elapsed"],
+        observed_unix_milliseconds: int,
+        elapsed_milliseconds: int,
+    ) -> StoredSafeStop:
+        record = _model(self.root / "record.json", StoredExecutionRecord)
+        assert isinstance(record, StoredExecutionRecord)
+        if active.execution_id != record.execution_id:
+            raise ContractError("active safe-stop does not bind this execution")
+        payload: dict[str, object] = {
+            "schema_version": "cernora.reference.stored-active-safe-stop/v1",
+            "execution_id": record.execution_id,
+            "active_id": active.active_id,
+            "reason": reason,
+            "observed_unix_milliseconds": observed_unix_milliseconds,
+            "elapsed_milliseconds": elapsed_milliseconds,
+        }
+        payload["stop_id"] = canonical_content_id(payload, excluded=frozenset())
+        stop = StoredSafeStop.model_validate(payload)
+        _write_once(
+            self.root / "safe-stops" / f"{stop.stop_id}.json",
+            canonical_json_bytes(stop.model_dump(mode="json")),
+        )
+        return stop
 
     def publish_attempt(self, active: StoredActiveAttempt, attempt: ControlledAttempt) -> None:
         if (
@@ -271,7 +320,12 @@ class ControlledExecutionStore:
         plan = ControlledRunPlanV2.from_file(self.root / "run-plan.json")
         if plan.run_plan_id != record.run_plan_id:
             raise ContractError("stored RunPlan does not bind execution record")
-        active_paths = sorted((self.root / "active").glob("*/*.json"))
+        active_paths = sorted(
+            {
+                *(self.root / "active").glob("*/*/*.json"),
+                *(self.root / "active").glob("*/*.json"),
+            }
+        )
         active_values = tuple(_model(path, StoredActiveAttempt) for path in active_paths)
         active = tuple(item for item in active_values if isinstance(item, StoredActiveAttempt))
         attempt_paths = sorted((self.root / "attempts").glob("*/*/attempt.json"))
@@ -282,6 +336,9 @@ class ControlledExecutionStore:
         checkpoints = tuple(
             item for item in checkpoint_values if isinstance(item, StoredCheckpoint)
         )
+        stop_paths = sorted((self.root / "safe-stops").glob("*.json"))
+        stop_values = tuple(_model(path, StoredSafeStop) for path in stop_paths)
+        safe_stops = tuple(item for item in stop_values if isinstance(item, StoredSafeStop))
         if tuple(item.sequence for item in checkpoints) != tuple(range(1, len(checkpoints) + 1)):
             raise ContractError("stored checkpoint sequence is not contiguous")
         for previous, current in pairwise(checkpoints):
@@ -293,9 +350,26 @@ class ControlledExecutionStore:
         attempt_keys = {(item.trial_id, item.ordinal): item for item in attempts}
         if len(attempt_keys) != len(attempts):
             raise ContractError("stored Attempts are duplicated")
-        active_keys = {(item.trial_id, item.ordinal): item for item in active}
-        if len(active_keys) != len(active):
-            raise ContractError("stored active Attempts are duplicated")
+        active_ids = {item.active_id: item for item in active}
+        if len(active_ids) != len(active):
+            raise ContractError("stored active Attempt identities are duplicated")
+        stopped_ids = {item.active_id for item in safe_stops}
+        if len(stopped_ids) != len(safe_stops) or not stopped_ids.issubset(active_ids):
+            raise ContractError("stored active safe-stop does not bind one active Attempt")
+        if any(
+            item.execution_id != record.execution_id
+            or item.elapsed_milliseconds
+            < active_ids[item.active_id].elapsed_before_attempt_milliseconds
+            for item in safe_stops
+        ):
+            raise ContractError("stored active safe-stop contradicts its execution boundary")
+        active_keys = {
+            (item.trial_id, item.ordinal): item
+            for item in active
+            if item.active_id not in stopped_ids
+        }
+        if len(active_keys) != len(active) - len(stopped_ids):
+            raise ContractError("multiple unstopped active Attempts share one ordinal")
         missing = sorted(set(active_keys) - set(attempt_keys))
         if missing:
             raise ContractError("active Attempt has no verifiable closed artifact; resume blocked")
@@ -319,6 +393,7 @@ class ControlledExecutionStore:
             active=active,
             attempts=attempts,
             checkpoints=checkpoints,
+            safe_stops=safe_stops,
             adopted_attempt_ids=adopted,
         )
 
@@ -370,4 +445,5 @@ __all__ = [
     "StoredActiveAttempt",
     "StoredCheckpoint",
     "StoredExecutionRecord",
+    "StoredSafeStop",
 ]

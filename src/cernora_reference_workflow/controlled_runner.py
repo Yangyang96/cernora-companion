@@ -6,6 +6,7 @@ import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 from cernora_reference_workflow.common import canonical_content_id
 from cernora_reference_workflow.controlled_execution import (
@@ -38,6 +39,19 @@ class ControlledRunStopped(RuntimeError):
         self.reason = reason
         self.completed_trials = completed_trials
         self.attempt_count = attempt_count
+
+
+class ControlledActiveSafeStop(RuntimeError):
+    """An active executor stopped safely before producing an Attempt."""
+
+    def __init__(
+        self,
+        reason: Literal["disk_safe_stop_below_8_gib", "hard_wall_deadline_elapsed"],
+    ) -> None:
+        super().__init__(reason)
+        if reason not in {"disk_safe_stop_below_8_gib", "hard_wall_deadline_elapsed"}:
+            raise ValueError("active safe-stop reason is not frozen")
+        self.reason = reason
 
 
 def _disk_free(path: Path) -> int:
@@ -116,7 +130,14 @@ def execute_controlled_run(
                 predecessor_attempt_id=attempts[-1].attempt_id if attempts else None,
                 global_deadline_monotonic=deadline,
             )
-            attempt = executor(request)
+            try:
+                attempt = executor(request)
+            except ControlledActiveSafeStop as exc:
+                raise ControlledRunStopped(
+                    exc.reason,
+                    completed_trials=len(completed),
+                    attempt_count=attempt_count,
+                ) from exc
             attempt_count += 1
             if clock() > deadline:
                 raise ControlledRunStopped(
@@ -203,6 +224,15 @@ def execute_or_resume_controlled_run(
             raise ValueError("resume store does not bind the supplied RunPlan and nonce")
     if state.checkpoints and state.checkpoints[-1].status == "completed":
         return store.completed_result()
+    if disk_free(store_root) < PREFLIGHT_FREE_BYTES:
+        completed_trials = (
+            len(state.checkpoints[-1].completed_trial_ids) if state.checkpoints else 0
+        )
+        raise ControlledRunStopped(
+            "disk_preflight_below_15_gib",
+            completed_trials=completed_trials,
+            attempt_count=len(state.attempts),
+        )
 
     def elapsed() -> int:
         observed = int(wall_clock() * 1000)
@@ -297,7 +327,28 @@ def execute_or_resume_controlled_run(
                 predecessor_attempt_id=predecessor,
                 global_deadline_monotonic=deadline,
             )
-            attempt = executor(request)
+            try:
+                attempt = executor(request)
+            except ControlledActiveSafeStop as exc:
+                stopped_at = int(wall_clock() * 1000)
+                elapsed_at_stop = elapsed()
+                store.safe_stop_active(
+                    active,
+                    reason=exc.reason,
+                    observed_unix_milliseconds=stopped_at,
+                    elapsed_milliseconds=elapsed_at_stop,
+                )
+                store.checkpoint(
+                    status="safe-stopped",
+                    elapsed_milliseconds=elapsed_at_stop,
+                    completed_trial_ids=tuple(sorted(completed_ids)),
+                    observed_unix_milliseconds=stopped_at,
+                )
+                raise ControlledRunStopped(
+                    exc.reason,
+                    completed_trials=len(completed_ids),
+                    attempt_count=len(state.attempts),
+                ) from exc
             if clock() > deadline:
                 raise ControlledRunStopped(
                     "attempt_returned_after_hard_deadline",
@@ -350,6 +401,7 @@ __all__ = [
     "MAX_ATTEMPT_COUNT",
     "PREFLIGHT_FREE_BYTES",
     "SAFE_STOP_FREE_BYTES",
+    "ControlledActiveSafeStop",
     "ControlledRunStopped",
     "execute_controlled_run",
     "execute_or_resume_controlled_run",

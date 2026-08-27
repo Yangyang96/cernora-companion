@@ -31,6 +31,7 @@ from cernora_reference_workflow.controlled_experiment_spec import (
 )
 from cernora_reference_workflow.controlled_profile import PROFILE_ID, PROFILE_VERSION
 from cernora_reference_workflow.controlled_run_plan import ControlledRunPlanV2
+from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
 from cernora_reference_workflow.heldout_seal import (
     HeldoutManifest,
     HeldoutRevealReceipt,
@@ -326,6 +327,7 @@ def verify_candidate_freeze(
     visible_corpus_root: Path,
     heldout_manifest: HeldoutManifest,
     reveal_receipt: HeldoutRevealReceipt,
+    task_authorities: tuple[ControlledTaskAuthority, ...],
 ) -> None:
     """Bind one Freeze to the exact final 54-Trial declaration and reveal."""
 
@@ -368,6 +370,17 @@ def verify_candidate_freeze(
         len(items) != 3 for items in splits.values()
     ):
         raise ContractError("final comparison requires exact 3/3/3 Case splits")
+    task_splits: dict[str, list[str]] = {}
+    task_ids: set[str] = set()
+    for task in task_authorities:
+        if task.case.case_id in task_ids:
+            raise ContractError("final task authorities contain duplicate Cases")
+        task_ids.add(task.case.case_id)
+        task_splits.setdefault(task.split_id, []).append(task.case.case_id)
+    if task_ids != {item.case_id for item in run_plan.cases} or {
+        key: tuple(sorted(value)) for key, value in task_splits.items()
+    } != {key: tuple(sorted(value)) for key, value in splits.items()}:
+        raise ContractError("Comparison splits do not equal strict task split authorities")
     if tuple(sorted(splits["development"])) != freeze.pilot.development_case_ids:
         raise ContractError("CandidateFreeze pilot Cases do not equal the development split")
     heldout_ids = tuple(sorted(splits["held-out"]))

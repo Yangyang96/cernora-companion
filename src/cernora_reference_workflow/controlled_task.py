@@ -134,6 +134,10 @@ class ControlledTaskAuthority(StrictV2Contract):
         return sha256_bytes(canonical_json_bytes(self.case.model_dump(mode="json")))
 
     @property
+    def authority_sha256(self) -> str:
+        return sha256_bytes(self.canonical_bytes())
+
+    @property
     def test_source_sha256(self) -> str:
         return canonical_content_id(
             {

@@ -88,6 +88,9 @@ class ControlledTaskContract(StrictV2Contract):
     case_set: NonEmpty
     content_sha256: Digest
     task_source: CanonicalAuthoritySource
+    authority_id: Digest
+    authority_sha256: Digest
+    authority_source: CanonicalAuthoritySource
     prompt_sha256: Digest
     prompt_source: CanonicalAuthoritySource
     instruction_sha256: Digest
@@ -104,6 +107,13 @@ class ControlledTaskContract(StrictV2Contract):
     def validate_sources_and_paths(self) -> Self:
         if self.content_sha256 != self.task_source.source_sha256:
             raise ValueError("task content digest does not match its canonical source")
+        authority_payload = self.authority_source.payload
+        if (
+            self.authority_sha256 != self.authority_source.source_sha256
+            or not isinstance(authority_payload, dict)
+            or authority_payload.get("authority_id") != self.authority_id
+        ):
+            raise ValueError("controlled task authority is not bound to its canonical source")
         if self.prompt_sha256 != self.prompt_source.source_sha256 or (
             self.instruction_sha256 != self.instruction_source.source_sha256
         ):
@@ -407,6 +417,8 @@ def materialize_statistical_policy(
 class DatasetCaseAuthority(StrictV2Contract):
     case: EvaluationCaseIdentitySource
     task_source_sha256: Digest
+    task_authority_id: Digest
+    task_authority_sha256: Digest
     task_prompt_sha256: Digest
     task_instruction_sha256: Digest
     allowed_paths: tuple[NonEmpty, ...]
@@ -533,6 +545,8 @@ class ControlledExperimentSpecSource(StrictV2Contract):
         if (
             dataset_case.case.model_dump(mode="json") != self.case_identity()
             or dataset_case.task_source_sha256 != self.task.task_source.source_sha256
+            or dataset_case.task_authority_id != self.task.authority_id
+            or dataset_case.task_authority_sha256 != self.task.authority_sha256
             or dataset_case.task_prompt_sha256 != self.task.prompt_sha256
             or dataset_case.task_instruction_sha256 != self.task.instruction_sha256
             or dataset_case.allowed_paths != self.task.allowed_paths

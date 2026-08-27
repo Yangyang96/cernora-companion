@@ -11,6 +11,7 @@ from cernora_reference_workflow.controlled_execution_store import ControlledExec
 from cernora_reference_workflow.controlled_run_plan import materialize_controlled_run_plan
 from cernora_reference_workflow.controlled_runner import (
     GIBIBYTE,
+    ControlledActiveSafeStop,
     ControlledRunStopped,
     execute_or_resume_controlled_run,
 )
@@ -103,7 +104,7 @@ def test_safe_stop_resume_preserves_wall_disk_and_attempt_budgets(tmp_path: Path
     plan = materialize_controlled_run_plan(valid_m4_payload())
     nonce = digest("safe-stop")
     store_root = tmp_path / "store"
-    free = iter((20 * GIBIBYTE, 7 * GIBIBYTE))
+    free = iter((20 * GIBIBYTE, 20 * GIBIBYTE, 7 * GIBIBYTE))
 
     with pytest.raises(ControlledRunStopped, match="disk_safe_stop"):
         execute_or_resume_controlled_run(
@@ -137,3 +138,67 @@ def test_safe_stop_resume_preserves_wall_disk_and_attempt_budgets(tmp_path: Path
     assert result.attempt_count == 54
     assert resumed.checkpoints[-1].elapsed_milliseconds == 5_000
     assert resumed.checkpoints[-1].attempt_count == 54
+
+
+def test_resume_reapplies_fifteen_gibibyte_preflight_gate(tmp_path: Path) -> None:
+    plan = materialize_controlled_run_plan(valid_m4_payload())
+    nonce = digest("resume-preflight")
+    store_root = tmp_path / "store"
+    store = ControlledExecutionStore(store_root)
+    store.initialize(plan, nonce=nonce, started_unix_milliseconds=1_000_000)
+
+    with pytest.raises(ControlledRunStopped, match="disk_preflight_below_15_gib"):
+        execute_or_resume_controlled_run(
+            plan,
+            FakeExecutor(),
+            store_root=store_root,
+            nonce=nonce,
+            clock=lambda: 0.0,
+            wall_clock=lambda: 1_001.0,
+            sleeper=lambda _: None,
+            disk_free=lambda _: 14 * GIBIBYTE,
+        )
+
+    state = store.reload()
+    assert state.attempts == ()
+    assert state.checkpoints == ()
+
+
+def test_active_disk_safe_stop_is_append_only_and_resumable(tmp_path: Path) -> None:
+    plan = materialize_controlled_run_plan(valid_m4_payload())
+    nonce = digest("active-disk-stop")
+    store_root = tmp_path / "store"
+
+    class DiskStopExecutor(FakeExecutor):
+        def __call__(self, request: ControlledAttemptRequest):  # type: ignore[no-untyped-def]
+            self.requests.append(request)
+            raise ControlledActiveSafeStop("disk_safe_stop_below_8_gib")
+
+    with pytest.raises(ControlledRunStopped, match="disk_safe_stop"):
+        execute_or_resume_controlled_run(
+            plan,
+            DiskStopExecutor(),
+            store_root=store_root,
+            nonce=nonce,
+            clock=lambda: 0.0,
+            wall_clock=lambda: 1_000.0,
+            sleeper=lambda _: None,
+            disk_free=lambda _: 20 * GIBIBYTE,
+        )
+
+    stopped = ControlledExecutionStore(store_root).reload()
+    assert len(stopped.safe_stops) == 1
+    assert stopped.checkpoints[-1].status == "safe-stopped"
+    assert stopped.attempts == ()
+
+    result = execute_or_resume_controlled_run(
+        plan,
+        FakeExecutor(),
+        store_root=store_root,
+        nonce=nonce,
+        clock=lambda: 0.0,
+        wall_clock=lambda: 1_001.0,
+        sleeper=lambda _: None,
+        disk_free=lambda _: 20 * GIBIBYTE,
+    )
+    assert result.attempt_count == 54

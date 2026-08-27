@@ -17,7 +17,6 @@ from cernora_reference_workflow.controlled_batch_summary import (
 )
 from cernora_reference_workflow.controlled_live_attempt import (
     ControlledHarborAttemptExecutor,
-    inherited_ephemeral_environment,
 )
 from cernora_reference_workflow.controlled_run_plan import ControlledRunPlanV2
 from cernora_reference_workflow.controlled_runner import (
@@ -49,6 +48,19 @@ def validate_task_suite(
             or task.case_sha256 != case.task_content_sha256
         ):
             raise ContractError("controlled task authority contradicts its RunPlan Case")
+        for spec in plan.experiment_specs:
+            if spec.task.task_id != case.case_id:
+                continue
+            if (
+                spec.task.authority_id != task.authority_id
+                or spec.task.authority_sha256 != task.authority_sha256
+                or spec.task.authority_source.payload != task.model_dump(mode="json")
+                or spec.task.allowed_paths != task.allowed_paths
+                or spec.task.protected_paths != task.protected_paths
+                or spec.test_runner.command != task.test_command
+                or spec.test_runner.test_source_sha256 != task.test_source_sha256
+            ):
+                raise ContractError("RunPlan Experiment does not bind the exact task authority")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -59,8 +71,31 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--evaluation-root", type=Path, required=True)
     parser.add_argument("--batch-output", type=Path, required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
+    parser.add_argument("--auth-file", type=Path, required=True)
+    parser.add_argument(
+        "--proxy",
+        action="append",
+        required=True,
+        metavar="NAME=URL",
+        help="Explicit HTTP_PROXY, HTTPS_PROXY, or ALL_PROXY input; repeat three times.",
+    )
     parser.add_argument("--nonce", required=True)
     return parser
+
+
+def _proxy_inputs(values: list[str]) -> dict[str, str]:
+    allowed = {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"}
+    parsed: dict[str, str] = {}
+    for value in values:
+        name, separator, endpoint = value.partition("=")
+        if separator != "=" or name not in allowed or not endpoint or name in parsed:
+            raise ContractError("--proxy requires each explicit proxy variable exactly once")
+        parsed[f"CERNORA_{name}"] = endpoint
+    if set(parsed) != {f"CERNORA_{name}" for name in allowed}:
+        raise ContractError(
+            "--proxy must explicitly provide HTTP_PROXY, HTTPS_PROXY, and ALL_PROXY"
+        )
+    return parsed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -78,7 +113,8 @@ def main(argv: list[str] | None = None) -> int:
             repository_root=args.repository_root,
             tasks=tasks,
             evaluation_root=args.evaluation_root,
-            environment_provider=inherited_ephemeral_environment,
+            auth_file=args.auth_file,
+            proxy_environment=_proxy_inputs(args.proxy),
         )
         execution = execute_or_resume_controlled_run(
             plan,
