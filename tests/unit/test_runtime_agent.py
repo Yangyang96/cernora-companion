@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import io
+import logging
+
 import pytest
 
+import cernora_reference_workflow.runtime_agent as runtime_agent_module
 from cernora_reference_workflow.common import ContractError, canonical_json_bytes, sha256_bytes
 from cernora_reference_workflow.runtime_agent import (
     RUNTIME_CONFIGURATION_SHA256,
@@ -31,6 +35,31 @@ def test_runtime_configuration_identity_is_frozen_and_strict_config_is_enabled()
     strict = [flag for flag in TelemetryDisabledCodex.CLI_FLAGS if flag.kwarg == "strict_config"]
     assert len(strict) == 1
     assert strict[0].default is True
+
+
+def test_explicit_auth_log_is_redacted_before_harbor_persists_it() -> None:
+    private_path = "/private/auth-location/auth.json"
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    logger = logging.getLogger("cernora-test-auth-redaction")
+    logger.handlers = [handler]
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    private_filter = runtime_agent_module._PrivateAuthLogFilter()
+    logger.addFilter(private_filter)
+    try:
+        logger.debug("Codex auth: using auth.json from %s", private_path)
+        logger.debug("unrelated runtime observation")
+    finally:
+        logger.removeFilter(private_filter)
+        handler.close()
+        logger.handlers = []
+
+    persisted = output.getvalue()
+    assert private_path not in persisted
+    assert "auth.json from" not in persisted
+    assert "Codex auth: using explicit private authority" in persisted
+    assert "unrelated runtime observation" in persisted
 
 
 def test_runtime_policy_disables_non_provider_network_and_telemetry_features() -> None:

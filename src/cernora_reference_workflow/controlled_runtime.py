@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -18,7 +19,6 @@ from pydantic import model_validator
 from cernora_reference_workflow.common import (
     canonical_content_id,
     canonical_json_bytes,
-    read_regular_file_bytes,
     sha256_bytes,
 )
 from cernora_reference_workflow.controlled_experiment_spec import (
@@ -30,6 +30,103 @@ from cernora_reference_workflow.controlled_experiment_spec import (
 Clock = Callable[[], float]
 DiskProbe = Callable[[], int]
 MAX_CAPTURE_BYTES = 1_048_576
+
+
+def _path_is_inside_git_worktree(path: Path) -> bool:
+    resolved = path.resolve(strict=True)
+    for parent in (resolved, *resolved.parents):
+        marker = parent / ".git"
+        try:
+            metadata = marker.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode):
+            return True
+    return False
+
+
+def _private_capture_parent() -> Path:
+    try:
+        parent = Path(tempfile.gettempdir()).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("private subprocess capture parent is unavailable") from exc
+    if not parent.is_dir() or _path_is_inside_git_worktree(parent):
+        raise RuntimeError("subprocess capture must remain outside every Git worktree")
+    return parent
+
+
+def _capture_identity(metadata: os.stat_result) -> tuple[int, int, int, int]:
+    return (metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_nlink)
+
+
+def _read_bound_capture(
+    directory_fd: int,
+    name: str,
+    expected: tuple[int, int, int, int],
+) -> tuple[bytes, bool]:
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        dir_fd=directory_fd,
+    )
+    try:
+        before = os.fstat(descriptor)
+        if (
+            _capture_identity(before) != expected
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+        ):
+            raise RuntimeError("subprocess capture file identity changed")
+        before_snapshot = (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        chunks: list[bytes] = []
+        total = 0
+        while chunk := os.read(descriptor, 64 * 1024):
+            total += len(chunk)
+            if total > MAX_CAPTURE_BYTES:
+                return b"", True
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        after_snapshot = (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+        if _capture_identity(after) != expected or after_snapshot != before_snapshot:
+            raise RuntimeError("subprocess capture file changed during stable read")
+        return b"".join(chunks), False
+    finally:
+        os.close(descriptor)
+
+
+def _cleanup_bound_capture(
+    capture_root: Path,
+    directory_fd: int,
+    directory_identity: tuple[int, int, int, int],
+    file_identities: Mapping[str, tuple[int, int, int, int]],
+) -> None:
+    """Remove only the exact private capture entries created by this invocation."""
+
+    try:
+        current_root = capture_root.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise RuntimeError("subprocess capture directory ownership became ambiguous") from exc
+    if (
+        _capture_identity(os.fstat(directory_fd)) != directory_identity
+        or _capture_identity(current_root) != directory_identity
+        or not stat.S_ISDIR(current_root.st_mode)
+        or set(os.listdir(directory_fd)) != set(file_identities)
+    ):
+        raise RuntimeError("subprocess capture directory ownership became ambiguous")
+    for name, expected in file_identities.items():
+        try:
+            current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeError("subprocess capture file ownership became ambiguous") from exc
+        if (
+            _capture_identity(current) != expected
+            or not stat.S_ISREG(current.st_mode)
+            or current.st_nlink != 1
+        ):
+            raise RuntimeError("subprocess capture file ownership became ambiguous")
+    for name in sorted(file_identities):
+        os.unlink(name, dir_fd=directory_fd)
+    capture_root.rmdir()
 
 
 def runtime_invocation_sha256(spec: ControlledExperimentSpecV2) -> str:
@@ -217,11 +314,42 @@ def run_subprocess_until(
     available = min(float(timeout_seconds), deadline_monotonic - started)
     if available <= 0:
         raise TimeoutError("controlled subprocess deadline elapsed before start")
-    capture_root = Path(tempfile.mkdtemp(prefix="cernora-capture-", dir=cwd))
+    capture_parent = _private_capture_parent()
+    capture_root = Path(tempfile.mkdtemp(prefix="cernora-capture-", dir=capture_parent))
+    directory_fd = os.open(
+        capture_root,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    directory_identity = _capture_identity(os.fstat(directory_fd))
+    file_identities: dict[str, tuple[int, int, int, int]] = {}
     try:
-        stdout_path = capture_root / "stdout.bin"
-        stderr_path = capture_root / "stderr.bin"
-        with stdout_path.open("xb") as stdout_handle, stderr_path.open("xb") as stderr_handle:
+        if (
+            capture_root.resolve(strict=True).parent != capture_parent
+            or _path_is_inside_git_worktree(capture_root)
+            or (_capture_identity(capture_root.stat(follow_symlinks=False)) != directory_identity)
+        ):
+            raise RuntimeError("subprocess capture must remain outside every Git worktree")
+        file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        stdout_fd: int | None = None
+        stderr_fd: int | None = None
+        try:
+            stdout_fd = os.open("stdout.bin", file_flags, 0o600, dir_fd=directory_fd)
+            file_identities["stdout.bin"] = _capture_identity(os.fstat(stdout_fd))
+            stderr_fd = os.open("stderr.bin", file_flags, 0o600, dir_fd=directory_fd)
+            file_identities["stderr.bin"] = _capture_identity(os.fstat(stderr_fd))
+            directory_identity = _capture_identity(os.fstat(directory_fd))
+        except BaseException:
+            if stdout_fd is not None:
+                os.close(stdout_fd)
+            if stderr_fd is not None:
+                os.close(stderr_fd)
+            directory_identity = _capture_identity(os.fstat(directory_fd))
+            raise
+        assert stdout_fd is not None and stderr_fd is not None
+        with (
+            os.fdopen(stdout_fd, "wb") as stdout_handle,
+            os.fdopen(stderr_fd, "wb") as stderr_handle,
+        ):
             try:
                 process = subprocess.Popen(
                     command,
@@ -259,8 +387,8 @@ def run_subprocess_until(
                     status = "safe_stopped"
                     _kill_process_group(process)
                     break
-                if stdout_path.stat().st_size > MAX_CAPTURE_BYTES or (
-                    stderr_path.stat().st_size > MAX_CAPTURE_BYTES
+                if os.fstat(stdout_handle.fileno()).st_size > MAX_CAPTURE_BYTES or (
+                    os.fstat(stderr_handle.fileno()).st_size > MAX_CAPTURE_BYTES
                 ):
                     status = "output_limit"
                     _kill_process_group(process)
@@ -275,20 +403,34 @@ def run_subprocess_until(
                 except subprocess.TimeoutExpired:
                     continue
         finished = clock()
-        if stdout_path.stat().st_size > MAX_CAPTURE_BYTES or (
-            stderr_path.stat().st_size > MAX_CAPTURE_BYTES
-        ):
+        stdout_size = os.stat("stdout.bin", dir_fd=directory_fd, follow_symlinks=False).st_size
+        stderr_size = os.stat("stderr.bin", dir_fd=directory_fd, follow_symlinks=False).st_size
+        if stdout_size > MAX_CAPTURE_BYTES or stderr_size > MAX_CAPTURE_BYTES:
             status = "output_limit"
             stdout = b""
             stderr = b""
         else:
-            stdout = read_regular_file_bytes(stdout_path, maximum=MAX_CAPTURE_BYTES)
-            stderr = read_regular_file_bytes(stderr_path, maximum=MAX_CAPTURE_BYTES)
+            stdout, stdout_overflow = _read_bound_capture(
+                directory_fd, "stdout.bin", file_identities["stdout.bin"]
+            )
+            stderr, stderr_overflow = _read_bound_capture(
+                directory_fd, "stderr.bin", file_identities["stderr.bin"]
+            )
+            if stdout_overflow or stderr_overflow:
+                status = "output_limit"
+                stdout = b""
+                stderr = b""
         exit_code = process.returncode if status == "exited" else None
     finally:
-        for child in capture_root.iterdir():
-            child.unlink(missing_ok=True)
-        capture_root.rmdir()
+        try:
+            _cleanup_bound_capture(
+                capture_root,
+                directory_fd,
+                directory_identity,
+                file_identities,
+            )
+        finally:
+            os.close(directory_fd)
     receipt = canonical_content_id(
         {
             "command_identity_sha256": sha256_bytes(canonical_json_bytes(list(command))),

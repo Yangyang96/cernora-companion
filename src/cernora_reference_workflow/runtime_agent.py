@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shlex
 from typing import ClassVar, override
 
@@ -19,6 +20,16 @@ from cernora_reference_workflow.runtime_policy import (
     RUNTIME_POLICY,
     TELEMETRY_CONFIG_TOML,
 )
+
+
+class _PrivateAuthLogFilter(logging.Filter):
+    """Prevent Harbor's debug artifact from persisting the operator auth path."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.msg == "Codex auth: using auth.json from %s":
+            record.msg = "Codex auth: using explicit private authority"
+            record.args = ()
+        return True
 
 
 class TelemetryDisabledCodex(Codex):  # type: ignore[misc]
@@ -70,9 +81,12 @@ class TelemetryDisabledCodex(Codex):  # type: ignore[misc]
             ),
             env={"CODEX_HOME": remote_home},
         )
+        private_auth_filter = _PrivateAuthLogFilter()
+        self.logger.addFilter(private_auth_filter)
         try:
             await super().run(instruction, environment, context)
         finally:
+            self.logger.removeFilter(private_auth_filter)
             cleanup_receipt = shlex.quote(
                 canonical_json_bytes(RUNTIME_CLEANUP_RECEIPT).decode("utf-8")
             )
