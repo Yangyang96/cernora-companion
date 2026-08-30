@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fcntl
+import os
 import shutil
 from copy import deepcopy
 from pathlib import Path
@@ -7,8 +9,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import cernora_reference_workflow.controlled_study as controlled_study_module
 from cernora_reference_workflow.controlled_study import (
     ControlledStudyError,
+    advance,
     compile_study_protocol,
     materialize_execution_outcome,
     materialize_implementation_lock,
@@ -275,3 +279,115 @@ def test_prepare_rejects_temporary_custody(tmp_path: Path) -> None:
         prepare(materialize_study_intent(study_intent_payload()), tmp_path / "study")
 
     assert raised.value.code == "invalid-intent"
+
+
+def test_advance_is_idempotent_and_binds_fresh_acceptance(tmp_path: Path) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    custody_parent = repository / ".agent" / "test-controlled-study"
+    custody_parent.mkdir(parents=True, exist_ok=True)
+    destination = custody_parent / f"advance-{tmp_path.name}"
+
+    try:
+        prepared = prepare(materialize_study_intent(study_intent_payload()), destination)
+        reveal = {
+            "schema_version": "cernora.reference.advance-directive/v1",
+            "action": "request-reveal",
+        }
+        awaiting_reveal = advance(destination, reveal)
+        assert advance(destination, reveal) == awaiting_reveal
+        assert awaiting_reveal.status == "awaiting-reveal"
+
+        awaiting_acceptance = advance(
+            destination,
+            {
+                "schema_version": "cernora.reference.advance-directive/v1",
+                "action": "bind-reveal",
+                "reveal_receipt_sha256": "6" * 64,
+            },
+        )
+        assert awaiting_acceptance.status == "awaiting-acceptance"
+
+        with pytest.raises(ControlledStudyError) as stale:
+            advance(
+                destination,
+                {
+                    "schema_version": "cernora.reference.advance-directive/v1",
+                    "action": "accept",
+                    "acceptance_id": "0" * 64,
+                },
+            )
+        assert stale.value.code == "stale-acceptance"
+
+        accepted = {
+            "schema_version": "cernora.reference.advance-directive/v1",
+            "action": "accept",
+            "acceptance_id": awaiting_acceptance.acceptance_id,
+        }
+        running = advance(destination, accepted)
+        assert advance(destination, accepted) == running
+        assert running.status == "running"
+        assert running.study_id == prepared.study_id
+        assert len(tuple((destination / "ledger").glob("*.json"))) == 4
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)
+
+
+def test_advance_rejects_a_concurrent_writer(tmp_path: Path) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    custody_parent = repository / ".agent" / "test-controlled-study"
+    custody_parent.mkdir(parents=True, exist_ok=True)
+    destination = custody_parent / f"writer-{tmp_path.name}"
+
+    try:
+        prepare(materialize_study_intent(study_intent_payload()), destination)
+        descriptor = os.open(destination / ".writer.lock", os.O_RDWR)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with pytest.raises(ControlledStudyError) as busy:
+                advance(
+                    destination,
+                    {
+                        "schema_version": "cernora.reference.advance-directive/v1",
+                        "action": "request-reveal",
+                    },
+                )
+            assert busy.value.code == "concurrent-writer"
+            assert len(tuple((destination / "ledger").glob("*.json"))) == 1
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)
+
+
+def test_advance_adopts_an_entry_after_post_link_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    custody_parent = repository / ".agent" / "test-controlled-study"
+    custody_parent.mkdir(parents=True, exist_ok=True)
+    destination = custody_parent / f"adopt-{tmp_path.name}"
+    directive = {
+        "schema_version": "cernora.reference.advance-directive/v1",
+        "action": "request-reveal",
+    }
+
+    try:
+        prepare(materialize_study_intent(study_intent_payload()), destination)
+        original_sync = controlled_study_module._sync_directory
+
+        def crash_after_link(path: Path) -> None:
+            if path == destination / "ledger":
+                raise OSError("synthetic post-link crash")
+            original_sync(path)
+
+        monkeypatch.setattr(controlled_study_module, "_sync_directory", crash_after_link)
+        with pytest.raises(OSError, match="post-link crash"):
+            advance(destination, directive)
+        monkeypatch.setattr(controlled_study_module, "_sync_directory", original_sync)
+
+        adopted = advance(destination, directive)
+        assert adopted.status == "awaiting-reveal"
+        assert len(tuple((destination / "ledger").glob("*.json"))) == 2
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)

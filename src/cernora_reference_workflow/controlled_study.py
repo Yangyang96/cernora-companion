@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import secrets
 import shutil
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
@@ -59,6 +62,8 @@ ControlledStudyErrorCode = Literal[
     "corrupt-ledger",
     "incomplete-pack",
     "destination-conflict",
+    "concurrent-writer",
+    "invalid-transition",
 ]
 ControlledStudyPhase = Literal["prepare", "advance", "rebuild"]
 
@@ -371,6 +376,111 @@ class PreparedLedgerEntry(StrictContract):
         return self
 
 
+class AwaitingRevealLedgerEntry(StrictContract):
+    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
+    entry_id: Digest
+    study_id: Digest
+    sequence: PositiveInt
+    previous_entry_sha256: Digest
+    operation_id: Digest
+    event: Literal["awaiting-reveal"]
+    protocol_id: Digest
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
+        )
+        if self.entry_id != expected:
+            raise ValueError("Study ledger entry identity does not match canonical content")
+        return self
+
+
+class AwaitingAcceptanceLedgerEntry(StrictContract):
+    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
+    entry_id: Digest
+    study_id: Digest
+    sequence: PositiveInt
+    previous_entry_sha256: Digest
+    operation_id: Digest
+    event: Literal["awaiting-acceptance"]
+    protocol_id: Digest
+    reveal_receipt_sha256: Digest
+    acceptance_id: Digest
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
+        )
+        if self.entry_id != expected:
+            raise ValueError("Study ledger entry identity does not match canonical content")
+        return self
+
+
+class RunningLedgerEntry(StrictContract):
+    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
+    entry_id: Digest
+    study_id: Digest
+    sequence: PositiveInt
+    previous_entry_sha256: Digest
+    operation_id: Digest
+    event: Literal["running"]
+    protocol_id: Digest
+    acceptance_id: Digest
+    execution_nonce: Digest
+    execution_id: Digest
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected_execution_id = canonical_content_id(
+            {"execution_nonce": self.execution_nonce, "study_id": self.study_id},
+            excluded=frozenset(),
+        )
+        if self.execution_id != expected_execution_id:
+            raise ValueError("Study Execution identity does not bind its internal nonce")
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
+        )
+        if self.entry_id != expected:
+            raise ValueError("Study ledger entry identity does not match canonical content")
+        return self
+
+
+StudyLedgerEntry = Annotated[
+    PreparedLedgerEntry
+    | AwaitingRevealLedgerEntry
+    | AwaitingAcceptanceLedgerEntry
+    | RunningLedgerEntry,
+    Field(discriminator="event"),
+]
+_STUDY_LEDGER_ENTRY_ADAPTER: TypeAdapter[StudyLedgerEntry] = TypeAdapter(StudyLedgerEntry)
+
+
+class RequestRevealDirective(StrictContract):
+    schema_version: Literal["cernora.reference.advance-directive/v1"]
+    action: Literal["request-reveal"]
+
+
+class BindRevealDirective(StrictContract):
+    schema_version: Literal["cernora.reference.advance-directive/v1"]
+    action: Literal["bind-reveal"]
+    reveal_receipt_sha256: Digest
+
+
+class AcceptStudyDirective(StrictContract):
+    schema_version: Literal["cernora.reference.advance-directive/v1"]
+    action: Literal["accept"]
+    acceptance_id: Digest
+
+
+AdvanceDirective = Annotated[
+    RequestRevealDirective | BindRevealDirective | AcceptStudyDirective,
+    Field(discriminator="action"),
+]
+_ADVANCE_DIRECTIVE_ADAPTER: TypeAdapter[AdvanceDirective] = TypeAdapter(AdvanceDirective)
+
+
 class StudyArtifactManifest(StrictContract):
     """Top-level closure binding one terminal state to its locally complete evidence."""
 
@@ -566,36 +676,81 @@ def _temporary_roots() -> tuple[Path, ...]:
     return tuple(dict.fromkeys(item.resolve() for item in candidates))
 
 
-def _require_durable_destination(destination: Path) -> Path:
+def _require_durable_destination(
+    destination: Path, *, phase: ControlledStudyPhase = "prepare"
+) -> Path:
     resolved = destination.resolve()
     if any(resolved == root or resolved.is_relative_to(root) for root in _temporary_roots()):
-        raise ControlledStudyError("invalid-intent", phase="prepare")
+        raise ControlledStudyError("invalid-intent", phase=phase)
     try:
         parent_metadata = resolved.parent.lstat()
     except OSError as exc:
-        raise ControlledStudyError("invalid-intent", phase="prepare") from exc
+        raise ControlledStudyError("invalid-intent", phase=phase) from exc
     if not stat.S_ISDIR(parent_metadata.st_mode) or resolved.parent.is_symlink():
-        raise ControlledStudyError("invalid-intent", phase="prepare")
+        raise ControlledStudyError("invalid-intent", phase=phase)
     return resolved
 
 
-def _load_prepared_study(root: Path) -> tuple[StudyIntent, PreparedOutcome]:
+def _load_canonical_ledger_entry(path: Path) -> StudyLedgerEntry:
+    payload = load_json_file(path)
+    entry = _STUDY_LEDGER_ENTRY_ADAPTER.validate_python(payload)
+    if read_regular_file_bytes(path) != _canonical_contract_bytes(entry):
+        raise ContractError(f"{path.name} is not canonical JSON")
+    return entry
+
+
+def _ledger_outcome(entry: StudyLedgerEntry, ledger_root_sha256: Digest) -> ExecutionOutcome:
+    payload: dict[str, object] = {
+        "schema_version": "cernora.reference.execution-outcome/v1",
+        "study_id": entry.study_id,
+        "protocol_id": entry.protocol_id,
+        "ledger_root_sha256": ledger_root_sha256,
+        "status": entry.event,
+    }
+    if isinstance(entry, AwaitingAcceptanceLedgerEntry):
+        payload["acceptance_id"] = entry.acceptance_id
+    elif isinstance(entry, RunningLedgerEntry):
+        payload["execution_id"] = entry.execution_id
+    return materialize_execution_outcome(payload)
+
+
+@dataclass(frozen=True)
+class _ReplayedStudy:
+    intent: StudyIntent
+    protocol: StudyProtocol
+    record: StudyRecord
+    entries: tuple[StudyLedgerEntry, ...]
+    outcomes: tuple[ExecutionOutcome, ...]
+
+
+def _load_study(root: Path) -> _ReplayedStudy:
+    files = closed_regular_tree(root)
+    ledger_paths = sorted(path for path in files if path.startswith("ledger/"))
+    expected_ledger_paths = [
+        f"ledger/{sequence:08d}.json" for sequence in range(1, len(ledger_paths) + 1)
+    ]
+    if not ledger_paths or ledger_paths != expected_ledger_paths:
+        raise ContractError("Controlled Study ledger paths are not contiguous")
     expected_files = {
         ".writer.lock",
         "intent.json",
-        "ledger/00000001.json",
         "protocol.json",
         "study.json",
+        *ledger_paths,
     }
-    files = closed_regular_tree(root)
     if set(files) != expected_files:
-        raise ContractError("Controlled Study root is not a closed prepared tree")
+        raise ContractError("Controlled Study root contains unknown files")
+    directories = {
+        Path(directory).relative_to(root).as_posix()
+        for directory, _, _ in os.walk(root, topdown=True, followlinks=False)
+    }
+    if directories != {".", "ledger"}:
+        raise ContractError("Controlled Study root contains unknown directories")
     if read_regular_file_bytes(root / ".writer.lock", maximum=0) != b"":
         raise ContractError("Controlled Study writer lock is malformed")
     intent = _load_canonical_contract(root / "intent.json", StudyIntent)
     protocol = _load_canonical_contract(root / "protocol.json", StudyProtocol)
     record = _load_canonical_contract(root / "study.json", StudyRecord)
-    entry = _load_canonical_contract(root / "ledger" / "00000001.json", PreparedLedgerEntry)
     if protocol != compile_study_protocol(intent):
         raise ContractError("stored Study Protocol is not derived from its Intent")
     if (
@@ -604,23 +759,109 @@ def _load_prepared_study(root: Path) -> tuple[StudyIntent, PreparedOutcome]:
         or record.implementation_lock_id != protocol.implementation_lock_id
         or record.intent_sha256 != sha256_file(root / "intent.json")
         or record.protocol_sha256 != sha256_file(root / "protocol.json")
-        or entry.study_id != record.study_id
-        or entry.protocol_id != protocol.protocol_id
-        or entry.operation_id != record.study_id
     ):
         raise ContractError("prepared Controlled Study authority mismatch")
-    outcome = materialize_execution_outcome(
-        {
-            "schema_version": "cernora.reference.execution-outcome/v1",
-            "study_id": record.study_id,
-            "protocol_id": protocol.protocol_id,
-            "ledger_root_sha256": sha256_file(root / "ledger" / "00000001.json"),
-            "status": "prepared",
-        }
+
+    entries: list[StudyLedgerEntry] = []
+    outcomes: list[ExecutionOutcome] = []
+    previous_sha256: Digest | None = None
+    for sequence, relative in enumerate(ledger_paths, start=1):
+        path = root / relative
+        entry = _load_canonical_ledger_entry(path)
+        if (
+            entry.sequence != sequence
+            or entry.study_id != record.study_id
+            or entry.protocol_id != protocol.protocol_id
+            or entry.previous_entry_sha256 != previous_sha256
+        ):
+            raise ContractError("Controlled Study ledger chain is inconsistent")
+        if sequence == 1:
+            if not isinstance(entry, PreparedLedgerEntry) or entry.operation_id != record.study_id:
+                raise ContractError("Controlled Study ledger must begin with its prepared fact")
+        else:
+            prior = entries[-1]
+            valid_transition = (
+                (
+                    isinstance(prior, PreparedLedgerEntry)
+                    and isinstance(entry, AwaitingRevealLedgerEntry)
+                )
+                or (
+                    isinstance(prior, AwaitingRevealLedgerEntry)
+                    and isinstance(entry, AwaitingAcceptanceLedgerEntry)
+                )
+                or (
+                    isinstance(prior, AwaitingAcceptanceLedgerEntry)
+                    and isinstance(entry, RunningLedgerEntry)
+                )
+            )
+            if not valid_transition:
+                raise ContractError("Controlled Study ledger contains an invalid transition")
+        if any(item.operation_id == entry.operation_id for item in entries):
+            raise ContractError("Controlled Study ledger repeats an operation identity")
+        current_sha256 = sha256_file(path)
+        entries.append(entry)
+        outcomes.append(_ledger_outcome(entry, current_sha256))
+        previous_sha256 = current_sha256
+    return _ReplayedStudy(
+        intent=intent,
+        protocol=protocol,
+        record=record,
+        entries=tuple(entries),
+        outcomes=tuple(outcomes),
     )
-    if not isinstance(outcome, PreparedOutcome):
-        raise ContractError("prepared ledger did not materialize a Prepared outcome")
-    return intent, outcome
+
+
+@contextmanager
+def _study_writer(root: Path) -> Iterator[None]:
+    path = root / ".writer.lock"
+    try:
+        before = path.lstat()
+        descriptor = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+        opened = os.fstat(descriptor)
+    except OSError as exc:
+        raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or opened.st_nlink != 1
+        or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+    ):
+        os.close(descriptor)
+        raise ControlledStudyError("corrupt-ledger", phase="advance")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        os.close(descriptor)
+        raise ControlledStudyError("concurrent-writer", phase="advance") from exc
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _publish_durable_file(path: Path, payload: bytes) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parents[1].parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        offset = 0
+        while offset < len(payload):
+            offset += os.write(descriptor, payload[offset:])
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        try:
+            os.link(temporary, path)
+        except FileExistsError as exc:
+            raise ControlledStudyError("concurrent-writer", phase="advance") from exc
+        _sync_directory(path.parent)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def prepare(intent: StudyIntent, destination: Path) -> PreparedOutcome:
@@ -629,14 +870,20 @@ def prepare(intent: StudyIntent, destination: Path) -> PreparedOutcome:
     root = _require_durable_destination(destination)
     if root.exists() or root.is_symlink():
         try:
-            stored_intent, outcome = _load_prepared_study(root)
+            with _study_writer(root):
+                replayed = _load_study(root)
         except (ContractError, OSError, ValueError) as exc:
             raise ControlledStudyError("corrupt-ledger", phase="prepare") from exc
-        if stored_intent.intent_id != intent.intent_id:
+        if replayed.intent.intent_id != intent.intent_id:
             raise ControlledStudyError(
-                "destination-conflict", phase="prepare", artifact_id=outcome.study_id
+                "destination-conflict",
+                phase="prepare",
+                artifact_id=replayed.record.study_id,
             )
-        return outcome
+        prepared = replayed.outcomes[0]
+        if not isinstance(prepared, PreparedOutcome):
+            raise ControlledStudyError("corrupt-ledger", phase="prepare")
+        return prepared
 
     protocol = compile_study_protocol(intent)
     intent_bytes = _canonical_contract_bytes(intent)
@@ -685,13 +932,113 @@ def prepare(intent: StudyIntent, destination: Path) -> PreparedOutcome:
         raise
 
     try:
-        _, outcome = _load_prepared_study(root)
+        replayed = _load_study(root)
     except (ContractError, OSError, ValueError) as exc:
         raise ControlledStudyError("corrupt-ledger", phase="prepare") from exc
-    return outcome
+    prepared = replayed.outcomes[0]
+    if not isinstance(prepared, PreparedOutcome):
+        raise ControlledStudyError("corrupt-ledger", phase="prepare")
+    return prepared
+
+
+def _directive_operation_id(study_id: Digest, directive: AdvanceDirective) -> Digest:
+    return canonical_content_id(
+        {"directive": directive.model_dump(mode="json"), "study_id": study_id},
+        excluded=frozenset(),
+    )
+
+
+def advance(root: Path, directive: AdvanceDirective | Mapping[str, object]) -> ExecutionOutcome:
+    """Idempotently append one non-Runtime Controlled Study transition."""
+
+    destination = _require_durable_destination(root, phase="advance")
+    try:
+        parsed = _ADVANCE_DIRECTIVE_ADAPTER.validate_python(directive)
+    except ValueError as exc:
+        raise ControlledStudyError("invalid-intent", phase="advance") from exc
+
+    with _study_writer(destination):
+        try:
+            replayed = _load_study(destination)
+        except (ContractError, OSError, ValueError) as exc:
+            raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
+        operation_id = _directive_operation_id(replayed.record.study_id, parsed)
+        for index, entry in enumerate(replayed.entries):
+            if entry.operation_id == operation_id:
+                return replayed.outcomes[index]
+
+        current = replayed.entries[-1]
+        previous_sha256 = replayed.outcomes[-1].ledger_root_sha256
+        common: dict[str, object] = {
+            "schema_version": "cernora.reference.study-ledger-entry/v1",
+            "study_id": replayed.record.study_id,
+            "sequence": len(replayed.entries) + 1,
+            "previous_entry_sha256": previous_sha256,
+            "operation_id": operation_id,
+            "protocol_id": replayed.protocol.protocol_id,
+        }
+        if isinstance(parsed, RequestRevealDirective):
+            if not isinstance(current, PreparedLedgerEntry):
+                raise ControlledStudyError("invalid-transition", phase="advance")
+            payload = {**common, "event": "awaiting-reveal"}
+        elif isinstance(parsed, BindRevealDirective):
+            if not isinstance(current, AwaitingRevealLedgerEntry):
+                raise ControlledStudyError("invalid-transition", phase="advance")
+            acceptance_id = canonical_content_id(
+                {
+                    "implementation_lock_id": replayed.protocol.implementation_lock_id,
+                    "ledger_root_sha256": previous_sha256,
+                    "protocol_id": replayed.protocol.protocol_id,
+                    "reveal_receipt_sha256": parsed.reveal_receipt_sha256,
+                    "study_id": replayed.record.study_id,
+                },
+                excluded=frozenset(),
+            )
+            payload = {
+                **common,
+                "event": "awaiting-acceptance",
+                "reveal_receipt_sha256": parsed.reveal_receipt_sha256,
+                "acceptance_id": acceptance_id,
+            }
+        else:
+            if not isinstance(current, AwaitingAcceptanceLedgerEntry):
+                raise ControlledStudyError("invalid-transition", phase="advance")
+            if parsed.acceptance_id != current.acceptance_id:
+                raise ControlledStudyError(
+                    "stale-acceptance",
+                    phase="advance",
+                    artifact_id=current.acceptance_id,
+                )
+            execution_nonce = secrets.token_hex(32)
+            execution_id = canonical_content_id(
+                {
+                    "execution_nonce": execution_nonce,
+                    "study_id": replayed.record.study_id,
+                },
+                excluded=frozenset(),
+            )
+            payload = {
+                **common,
+                "event": "running",
+                "acceptance_id": parsed.acceptance_id,
+                "execution_nonce": execution_nonce,
+                "execution_id": execution_id,
+            }
+        payload["entry_id"] = canonical_content_id(payload, excluded=frozenset())
+        entry = _STUDY_LEDGER_ENTRY_ADAPTER.validate_python(payload)
+        path = destination / "ledger" / f"{entry.sequence:08d}.json"
+        _publish_durable_file(path, _canonical_contract_bytes(entry))
+        try:
+            advanced = _load_study(destination)
+        except (ContractError, OSError, ValueError) as exc:
+            raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
+        if advanced.entries[-1].operation_id != operation_id:
+            raise ControlledStudyError("corrupt-ledger", phase="advance")
+        return advanced.outcomes[-1]
 
 
 __all__ = [
+    "AdvanceDirective",
     "AwaitingAcceptanceOutcome",
     "AwaitingRevealOutcome",
     "BaselineAuthority",
@@ -716,6 +1063,7 @@ __all__ = [
     "StudyProtocol",
     "StudyRecord",
     "TerminatedOutcome",
+    "advance",
     "compile_study_protocol",
     "materialize_execution_outcome",
     "materialize_implementation_lock",
