@@ -531,7 +531,8 @@ def build_m4_final_plans(
             ),
             "primary_outcome": {
                 "metric": "reliable_success_rate",
-                "scope": "all",
+                "scope": "split",
+                "split_id": "held-out",
                 "direction": "higher_is_better",
                 "practical_threshold_basis_points": 1000,
             },

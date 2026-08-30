@@ -4,8 +4,18 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from cernora import BatchAttemptResources
+from cernora import (
+    BatchAttemptResources,
+    reload_batch_summary_package,
+    reload_comparison_package,
+)
 
+from cernora_reference_workflow.batch_summary import (
+    normalize_execution_pack,
+    summarize_execution_pack,
+)
+from cernora_reference_workflow.common import ContractError
+from cernora_reference_workflow.comparison_input import compare_batch_summary
 from cernora_reference_workflow.controlled_evaluation import materialize_repair_result
 from cernora_reference_workflow.controlled_execution import (
     ControlledAttempt,
@@ -33,7 +43,12 @@ from cernora_reference_workflow.runner import _AttemptRequest, advance_repeat
 from tests.unit.test_controlled_execution import lifecycle_attempt
 from tests.unit.test_controlled_live_attempt import _spec
 from tests.unit.test_controlled_run_plan import valid_payload as valid_run_plan_payload
-from tests.unit.test_improvement_loop import _all_task_authorities, _final_plan, _manifest
+from tests.unit.test_improvement_loop import (
+    _all_task_authorities,
+    _comparison,
+    _final_plan,
+    _manifest,
+)
 from tests.unit.test_study_projection import study_payload_for_m4
 
 
@@ -492,6 +507,36 @@ def test_public_advance_closes_the_full_offline_m4_matrix_and_byte_stable_pack(
     assert {item.result_status for item in outcome.state.diagnostic.trials} == {"evaluated"}
     assert verify_execution_pack(first_pack).execution_id == outcome.state.record.execution_id
 
+    batch_root = tmp_path / "batch-summary"
+    batch_summary = summarize_execution_pack(first_pack, batch_root)
+    batch_package = reload_batch_summary_package(batch_root)
+    assert batch_package.summary == batch_summary
+    assert batch_package.batch_input.planned_trial_count == 54
+    assert batch_package.batch_input.attempt_count == 54
+    assert all(
+        trial.attempts[-1].evaluation is not None for trial in batch_package.batch_input.trials
+    )
+
+    comparison_plan = _comparison(run_plan, manifest)
+    assert comparison_plan.primary_outcome.scope == "split"
+    assert comparison_plan.primary_outcome.split_id == "held-out"
+    run_plan_path = tmp_path / "run-plan.json"
+    comparison_plan_path = tmp_path / "comparison-plan.json"
+    comparison_root = tmp_path / "comparison"
+    run_plan_path.write_bytes(run_plan.canonical_bytes())
+    comparison_plan_path.write_bytes(comparison_plan.canonical_bytes())
+    comparison_summary = compare_batch_summary(
+        batch_root,
+        run_plan_path,
+        comparison_plan_path,
+        comparison_root,
+    )
+    comparison_package = reload_comparison_package(comparison_root)
+    assert comparison_package.summary == comparison_summary
+    assert comparison_summary.primary is not None
+    assert comparison_summary.primary.baseline.denominator == 9
+    assert comparison_summary.primary.candidate.denominator == 9
+
     def must_not_execute(request: _AttemptRequest) -> None:
         raise AssertionError(f"completed matrix attempted new work: {request.destination}")
 
@@ -500,3 +545,55 @@ def test_public_advance_closes_the_full_offline_m4_matrix_and_byte_stable_pack(
     assert rebuilt.status == "completed"
     assert verify_execution_pack(second_pack).pack_id == verify_execution_pack(first_pack).pack_id
     assert _tree_bytes(second_pack) == _tree_bytes(first_pack)
+
+
+def test_complete_evaluated_v2_pack_normalizes_to_strict_core_batch(
+    tmp_path: Path,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    run_plan = _evaluated_plan(task)
+    root = tmp_path / "execution"
+    pack = tmp_path / "execution-pack"
+    summary_root = tmp_path / "batch-summary"
+    initialize_execution(root, run_plan, nonce="a" * 64)
+    adapter = FakeEvaluatedStudyAttemptAdapter(task, tmp_path / "evaluations", passed=True)
+
+    outcome = None
+    for _ in range(7):
+        outcome = advance_repeat(root, adapter, pack_root=pack)
+        if outcome.status == "completed":
+            break
+    assert outcome is not None and outcome.status == "completed"
+
+    batch = normalize_execution_pack(pack)
+    summary = summarize_execution_pack(pack, summary_root)
+    reloaded = reload_batch_summary_package(summary_root)
+
+    assert batch.planned_trial_count == 6
+    assert batch.attempt_count == 6
+    assert all(trial.attempts[-1].evaluation is not None for trial in batch.trials)
+    assert reloaded.batch_input == batch
+    assert reloaded.summary == summary
+
+
+def test_complete_lifecycle_only_v2_pack_remains_diagnostic_only(
+    tmp_path: Path,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    run_plan = _evaluated_plan(task)
+    root = tmp_path / "execution"
+    pack = tmp_path / "execution-pack"
+    initialize_execution(root, run_plan, nonce="0" * 64)
+    adapter = FakeStudyAttemptAdapter()
+
+    outcome = None
+    for _ in range(7):
+        outcome = advance_repeat(root, adapter, pack_root=pack)
+        if outcome.status == "completed":
+            break
+    assert outcome is not None and outcome.status == "completed"
+    assert outcome.state.diagnostic is not None
+    assert {item.result_status for item in outcome.state.diagnostic.trials} == {"unavailable"}
+
+    with pytest.raises(ContractError, match="requires evaluated Trial evidence"):
+        normalize_execution_pack(pack)

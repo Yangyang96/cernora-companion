@@ -127,6 +127,21 @@ def test_comparison_plan_identity_is_deterministic_and_source_bound() -> None:
         first.validate_run_plan(other)
 
 
+def test_comparison_plan_rejects_primary_scope_outside_frozen_case_splits() -> None:
+    run_plan = materialize_controlled_run_plan(valid_run_plan_payload())
+    payload = valid_payload(run_plan)
+    payload["primary_outcome"] = {
+        "metric": "reliable_success_rate",
+        "scope": "split",
+        "split_id": "held-out",
+        "direction": "higher_is_better",
+        "practical_threshold_basis_points": 1000,
+    }
+
+    with pytest.raises(ValueError, match="Primary Outcome references an unknown split"):
+        materialize_comparison_plan(payload)
+
+
 def _run_plan_with_global_candidate_timeout_change() -> ControlledRunPlanV2:
     payload = valid_run_plan_payload()
     specifications = payload["experiment_specs"]

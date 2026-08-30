@@ -1,4 +1,4 @@
-"""Normalize one closed M1 Execution Pack into a Core 0.1.3 BatchInput."""
+"""Normalize one closed Repeat Runner Execution Pack into a Core BatchInput."""
 
 from __future__ import annotations
 
@@ -27,8 +27,13 @@ from cernora_reference_workflow.common import (
     canonical_json_bytes,
     sha256_bytes,
 )
+from cernora_reference_workflow.controlled_execution import (
+    verify_controlled_attempt_artifact,
+)
+from cernora_reference_workflow.controlled_run_plan import ControlledRunPlanV2
 from cernora_reference_workflow.execution import (
     ClosedFile,
+    ControlledTrialResultManifest,
     ExecutionPackManifest,
     TrialEvaluationAvailable,
     TrialResultManifest,
@@ -186,11 +191,6 @@ def _normalize_snapshot(pack_root: Path) -> BatchInput:
         slot = execution_slot.slot
         trial_manifest = manifests[execution_slot.trial_id]
         result = results[execution_slot.trial_id]
-        if not isinstance(result, TrialResultManifest):
-            raise ContractError("M1 normalizer does not accept a controlled V2 Trial result")
-        report = RunReport.from_file(
-            execution_root / "results" / execution_slot.trial_id / "run-report.json"
-        )
         planned_trials.append(
             BatchPlannedTrial(
                 slot_index=slot.slot_index,
@@ -200,6 +200,65 @@ def _normalize_snapshot(pack_root: Path) -> BatchInput:
                 experiment_id=slot.experiment_id,
                 repetition=slot.repetition,
             )
+        )
+
+        if isinstance(result, ControlledTrialResultManifest):
+            if not isinstance(state.run_plan, ControlledRunPlanV2):
+                raise ContractError("controlled Trial result requires a controlled V2 RunPlan")
+            controlled_attempts: list[BatchAttempt] = []
+            for binding in trial_manifest.attempts:
+                if binding.artifact_kind != "controlled-attempt":
+                    raise ContractError("controlled Trial contains a non-controlled artifact")
+                artifact = verify_controlled_attempt_artifact(
+                    execution_root / "attempts" / execution_slot.trial_id / f"{binding.ordinal:04d}"
+                )
+                attempt = artifact.attempt
+                if (
+                    binding.attempt_id != attempt.attempt_id
+                    or binding.predecessor_attempt_id != attempt.predecessor_attempt_id
+                    or binding.source_trial_id != attempt.trial_id
+                    or binding.ordinal != attempt.ordinal
+                ):
+                    raise ContractError(
+                        "controlled Attempt contradicts its immutable Trial binding"
+                    )
+                controlled_attempts.append(
+                    BatchAttempt(
+                        schema_version="agent.evaluator.batch-attempt/v1",
+                        attempt_id=attempt.attempt_id,
+                        source_attempt_id=attempt.source_attempt_id,
+                        trial_id=attempt.trial_id,
+                        ordinal=attempt.ordinal,
+                        predecessor_attempt_id=attempt.predecessor_attempt_id,
+                        source_manifest_sha256=attempt.source_manifest_sha256,
+                        retry_eligible=attempt.retry_eligible,
+                        resources=attempt.resources,
+                        evaluation=attempt.evaluation,
+                        lifecycle=attempt.lifecycle,
+                    )
+                )
+            trials.append(
+                BatchTrial(
+                    schema_version="agent.evaluator.batch-trial/v1",
+                    run_plan_id=state.run_plan.run_plan_id,
+                    execution_id=state.record.execution_id,
+                    trial_id=execution_slot.trial_id,
+                    slot_index=slot.slot_index,
+                    trial_slot_id=slot.trial_slot_id,
+                    case_id=slot.case_id,
+                    configuration_id=slot.configuration_id,
+                    experiment_id=slot.experiment_id,
+                    repetition=slot.repetition,
+                    selected_attempt_id=result.selected_attempt_id,
+                    attempts=tuple(controlled_attempts),
+                )
+            )
+            continue
+
+        if not isinstance(result, TrialResultManifest):
+            raise ContractError("Execution contains an unknown Trial result contract")
+        report = RunReport.from_file(
+            execution_root / "results" / execution_slot.trial_id / "run-report.json"
         )
 
         evaluation = None
@@ -293,13 +352,22 @@ def _normalize_snapshot(pack_root: Path) -> BatchInput:
             )
         )
 
+    if isinstance(state.run_plan, ControlledRunPlanV2) and not any(
+        attempt.evaluation is not None for trial in trials for attempt in trial.attempts
+    ):
+        raise ContractError("controlled Batch publication requires evaluated Trial evidence")
+
     payload = {
         "schema_version": "agent.evaluator.batch-input/v1",
         "run_plan_id": state.run_plan.run_plan_id,
         "execution_id": state.record.execution_id,
         "execution_status": "completed",
         "budget_status": "within_budget",
-        "companion_version": NORMALIZER_VERSION,
+        "companion_version": (
+            state.run_plan.companion_version
+            if isinstance(state.run_plan, ControlledRunPlanV2)
+            else NORMALIZER_VERSION
+        ),
         "planned_trial_count": len(planned_trials),
         "attempt_count": sum(len(item.attempts) for item in trials),
         "planned_trials": [item.model_dump(mode="json") for item in planned_trials],

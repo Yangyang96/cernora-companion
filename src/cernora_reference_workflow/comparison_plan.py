@@ -126,6 +126,8 @@ class ComparisonPlanV1(StrictV2Contract):
         ):
             raise ValueError("ComparisonPlan Guardrails must be sorted and unique")
         split_ids = {item.split_id for item in self.case_splits}
+        if self.primary_outcome.scope == "split" and self.primary_outcome.split_id not in split_ids:
+            raise ValueError("ComparisonPlan Primary Outcome references an unknown split")
         if any(
             item.scope == "split" and item.split_id not in split_ids for item in self.guardrails
         ):

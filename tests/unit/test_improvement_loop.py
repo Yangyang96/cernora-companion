@@ -346,7 +346,8 @@ def _comparison(plan: ControlledRunPlanV2, manifest: HeldoutManifest) -> Compari
             ),
             "primary_outcome": {
                 "metric": "reliable_success_rate",
-                "scope": "all",
+                "scope": "split",
+                "split_id": "held-out",
                 "direction": "higher_is_better",
                 "practical_threshold_basis_points": 1000,
             },

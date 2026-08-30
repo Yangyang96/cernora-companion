@@ -70,6 +70,8 @@ def test_final_builder_freezes_exact_nine_case_authorities(tmp_path: Path) -> No
     assert first_comparison.materialize_core_treatment(first_plan).changes[0].kind == (
         "prompt_instruction"
     )
+    assert first_comparison.primary_outcome.scope == "split"
+    assert first_comparison.primary_outcome.split_id == "held-out"
     receipt = verify_candidate_freeze(
         freeze,
         pilot_package=pilot,
