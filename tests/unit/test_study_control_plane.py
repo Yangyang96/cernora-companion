@@ -23,6 +23,8 @@ from cernora_reference_workflow.controlled_study import (
     prepare,
 )
 from cernora_reference_workflow.execution import reload_execution
+from cernora_reference_workflow.runner import _AttemptRequest
+from tests.unit.test_study_execution import FakeStudyAttemptAdapter
 from tests.unit.test_study_projection import study_payload_for_m4
 
 
@@ -117,6 +119,22 @@ def _prepare_awaiting_acceptance(
     )
     assert isinstance(awaiting, AwaitingAcceptanceOutcome)
     return run_plan, awaiting, comparison_plan
+
+
+def _start_execution(destination: Path) -> tuple[ControlledRunPlanV2, RunningOutcome]:
+    run_plan, awaiting, comparison_plan = _prepare_awaiting_acceptance(destination)
+    outcome = advance(
+        destination,
+        {
+            "schema_version": "cernora.reference.advance-directive/v1",
+            "action": "start-execution",
+            "acceptance_id": awaiting.acceptance_id,
+            "run_plan": run_plan.model_dump(mode="json"),
+            "comparison_plan": comparison_plan.model_dump(mode="json"),
+        },
+    )
+    assert isinstance(outcome, RunningOutcome)
+    return run_plan, outcome
 
 
 def test_start_execution_advance_binds_and_idempotently_initializes_repeat_runner(
@@ -216,5 +234,75 @@ def test_start_execution_rejects_non_heldout_primary_authority(tmp_path: Path) -
 
         assert len(tuple((destination / "ledger").glob("*.json"))) == 3
         assert not (destination / "execution").exists()
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)
+
+
+def test_step_execution_is_idempotent_and_claims_only_one_external_attempt(
+    tmp_path: Path,
+) -> None:
+    destination = _custody_destination(tmp_path, "step")
+
+    try:
+        _, running = _start_execution(destination)
+        directive = {
+            "schema_version": "cernora.reference.advance-directive/v1",
+            "action": "step-execution",
+            "expected_state_id": running.state_id,
+        }
+        adapter = FakeStudyAttemptAdapter()
+
+        first = advance(destination, directive, executor=adapter)
+
+        def must_not_execute(request: _AttemptRequest) -> None:
+            raise AssertionError(f"idempotent Study step reran: {request.destination}")
+
+        repeated = advance(destination, directive, executor=must_not_execute)
+        execution = reload_execution(destination / "execution")
+
+        assert isinstance(first, RunningOutcome)
+        assert repeated == first
+        assert len(adapter.requests) == 1
+        assert len(execution.active_attempts) == 1
+        assert len(tuple((destination / "ledger").glob("*.json"))) == 6
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)
+
+
+def test_step_execution_recovers_published_attempt_without_claiming_the_next(
+    tmp_path: Path,
+) -> None:
+    destination = _custody_destination(tmp_path, "step-crash")
+
+    try:
+        _, running = _start_execution(destination)
+        directive = {
+            "schema_version": "cernora.reference.advance-directive/v1",
+            "action": "step-execution",
+            "expected_state_id": running.state_id,
+        }
+        publisher = FakeStudyAttemptAdapter()
+
+        def publish_then_crash(request: _AttemptRequest) -> None:
+            publisher(request)
+            raise RuntimeError("simulated crash after Attempt publication")
+
+        with pytest.raises(RuntimeError, match="after Attempt publication"):
+            advance(destination, directive, executor=publish_then_crash)
+
+        assert len(tuple((destination / "ledger").glob("*.json"))) == 5
+        assert len(reload_execution(destination / "execution").active_attempts) == 1
+
+        def must_not_execute(request: _AttemptRequest) -> None:
+            raise AssertionError(f"recovery claimed another Attempt: {request.destination}")
+
+        recovered = advance(destination, directive, executor=must_not_execute)
+        execution = reload_execution(destination / "execution")
+
+        assert isinstance(recovered, RunningOutcome)
+        assert len(publisher.requests) == 1
+        assert len(execution.active_attempts) == 1
+        assert len(execution.trial_manifests) == 1
+        assert len(tuple((destination / "ledger").glob("*.json"))) == 6
     finally:
         shutil.rmtree(destination, ignore_errors=True)

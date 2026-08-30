@@ -329,6 +329,7 @@ def _drive(
     sleeper: Sleeper,
     reject_terminal_budget: bool,
     return_after_attempt: bool = False,
+    allow_new_attempt: bool = True,
 ) -> RunnerOutcome:
     _reconcile_interrupted(root, executor)
     state = reload_execution(root)
@@ -430,6 +431,9 @@ def _drive(
                 status="budget-exhausted", state=reload_execution(root), pack_root=None
             )
 
+        if not allow_new_attempt:
+            return RunnerOutcome(status="running", state=reload_execution(root), pack_root=None)
+
         if facts:
             retry_delay = _specification(state, next_trial).retry.delay_seconds
             sleeper(retry_delay)
@@ -507,6 +511,7 @@ def advance_repeat(
     clock: Clock = time.monotonic,
     wall_clock: WallClock = time.time,
     sleeper: Sleeper = time.sleep,
+    allow_new_attempt: bool = True,
 ) -> RunnerOutcome:
     """Advance one existing Repeat Execution by at most one external Attempt."""
 
@@ -520,6 +525,7 @@ def advance_repeat(
         sleeper=sleeper,
         reject_terminal_budget=False,
         return_after_attempt=True,
+        allow_new_attempt=allow_new_attempt,
     )
 
 
