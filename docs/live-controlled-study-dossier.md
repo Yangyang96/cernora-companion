@@ -148,6 +148,10 @@ commitment; locks the remaining Runtime, Harness, image, platform, and configura
 names the owner, custody location, live window, and authorization scope. Once those inputs exist,
 replace the preparation rather than filling canonical contracts with placeholders.
 
+The evidence gap and the recommended next bounded development-only work package are recorded in
+[`next-priority4-study-decision.md`](next-priority4-study-decision.md). That proposal is also
+non-authoritative and stops before any Agent pilot or held-out action.
+
 ## 6. Offline freeze sequence
 
 This sequence performs no live Attempt:
