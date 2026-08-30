@@ -39,7 +39,7 @@ from cernora_reference_workflow.common import (
 )
 
 ACCEPTED_CORE_0_1_4_WHEEL_SHA256 = (
-    "5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c"
+    "4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d"
 )
 Digest = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
 Identifier = Annotated[StrictStr, Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")]
@@ -269,7 +269,7 @@ class ControlledWorkflowVersions(StrictV2Contract):
 
 class ControlledCernoraRelease(StrictV2Contract):
     package_version: Literal["0.1.4"]
-    wheel_sha256: Literal["5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c"]
+    wheel_sha256: Literal["4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d"]
 
 
 class EvaluationProfileIdentitySource(StrictV2Contract):

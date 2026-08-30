@@ -142,7 +142,7 @@ Run from a clean independent checkout:
 
 ```sh
 # First place the accepted Core 0.1.4 wheel in ../cernora/dist; its SHA-256 must be
-# 5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c.
+# 4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d.
 uv sync --frozen --all-groups --offline
 uv run pytest -q
 uv run ruff check .

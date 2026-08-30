@@ -138,7 +138,7 @@ contract and status-code boundary.
 The M3 lock resolves Core from the stable sibling wheelhouse
 `../cernora/dist/cernora-0.1.4-py3-none-any.whl`. Build the accepted Core `0.1.4` candidate into
 that ignored directory first and verify its SHA-256 is
-`5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c`. The wheel is a local
+`4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d`. The wheel is a local
 release artifact; do not commit or upload it.
 
 ```sh

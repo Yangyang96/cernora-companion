@@ -106,7 +106,7 @@ def _load_seal_script() -> tuple[_SealScript, ModuleType]:
     return cast(_SealScript, module), module
 
 
-def _representative_worktrees() -> tuple[Path, Path, Path]:
+def _representative_worktrees() -> tuple[Path, ...]:
     current = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         ["git", "worktree", "list", "--porcelain"],
@@ -120,10 +120,12 @@ def _representative_worktrees() -> tuple[Path, Path, Path]:
         for line in result.stdout.splitlines()
         if line.startswith("worktree ")
     )
-    main = next(path for path in worktrees if (path / ".git").is_dir())
-    linked = next(path for path in worktrees if path not in {current, main})
-    assert len({current, main, linked}) == 3
-    return current, main, linked
+    existing = tuple(path for path in worktrees if path.is_dir())
+    main = next(path for path in existing if (path / ".git").is_dir())
+    linked = tuple(path for path in existing if path != main)
+    assert current in linked
+    assert len({main, *linked}) >= 2
+    return (main, *linked)
 
 
 def test_seal_and_reveal_are_canonical_and_deterministic() -> None:

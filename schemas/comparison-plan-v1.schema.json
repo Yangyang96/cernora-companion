@@ -208,9 +208,25 @@
           "type": "integer"
         },
         "scope": {
-          "const": "all",
+          "enum": [
+            "all",
+            "split"
+          ],
           "title": "Scope",
           "type": "string"
+        },
+        "split_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Split Id"
         }
       },
       "required": [

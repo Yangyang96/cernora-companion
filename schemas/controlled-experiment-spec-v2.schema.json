@@ -116,7 +116,7 @@
           "type": "string"
         },
         "wheel_sha256": {
-          "const": "5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c",
+          "const": "4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d",
           "title": "Wheel Sha256",
           "type": "string"
         }
@@ -362,6 +362,19 @@
           "title": "Allowed Paths",
           "type": "array"
         },
+        "authority_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Id",
+          "type": "string"
+        },
+        "authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Authority Sha256",
+          "type": "string"
+        },
+        "authority_source": {
+          "$ref": "#/$defs/CanonicalAuthoritySource"
+        },
         "case_set": {
           "minLength": 1,
           "title": "Case Set",
@@ -416,6 +429,9 @@
         "case_set",
         "content_sha256",
         "task_source",
+        "authority_id",
+        "authority_sha256",
+        "authority_source",
         "prompt_sha256",
         "prompt_source",
         "instruction_sha256",
@@ -591,6 +607,16 @@
           "title": "Protected Paths",
           "type": "array"
         },
+        "task_authority_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Authority Id",
+          "type": "string"
+        },
+        "task_authority_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Task Authority Sha256",
+          "type": "string"
+        },
         "task_image": {
           "minLength": 1,
           "title": "Task Image",
@@ -653,6 +679,8 @@
       "required": [
         "case",
         "task_source_sha256",
+        "task_authority_id",
+        "task_authority_sha256",
         "task_prompt_sha256",
         "task_instruction_sha256",
         "allowed_paths",

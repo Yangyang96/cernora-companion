@@ -38,8 +38,25 @@ from cernora_reference_workflow.spec_builder import (
     build_tiny_calculator_v2_spec,
 )
 
-EXPECTED_CORE_M3_WHEEL_SHA256 = "5b847837b7182b3ece8054eb5187fde4f835582787b406ea4a7f2f8bd2987a4c"
+EXPECTED_CORE_M3_WHEEL_SHA256 = "4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d"
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _main_checkout_root() -> Path:
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    common = Path(result.stdout.strip())
+    if not common.is_absolute():
+        common = ROOT / common
+    common = common.resolve()
+    if common.name != ".git" or not common.is_dir():
+        raise RuntimeError("cannot resolve the Companion main checkout from Git common-dir")
+    return common.parent
 
 
 def _verify_m4_release_surface() -> None:
@@ -68,7 +85,7 @@ def _verify_m4_release_surface() -> None:
     wheels = core[0].get("wheels")
     if wheels != [{"path": "cernora-0.1.4-py3-none-any.whl"}]:
         raise RuntimeError("uv.lock does not bind the Core 0.1.4 wheel filename")
-    core_wheel = ROOT.parent / "cernora/dist/cernora-0.1.4-py3-none-any.whl"
+    core_wheel = _main_checkout_root().parent / "cernora/dist/cernora-0.1.4-py3-none-any.whl"
     digest = hashlib.sha256(read_regular_file_bytes(core_wheel, maximum=None)).hexdigest()
     if digest != EXPECTED_CORE_M3_WHEEL_SHA256:
         raise RuntimeError("the sibling Core 0.1.4 wheel digest is not accepted")
