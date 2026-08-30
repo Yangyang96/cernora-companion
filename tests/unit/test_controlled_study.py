@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +14,7 @@ from cernora_reference_workflow.controlled_study import (
     materialize_implementation_lock,
     materialize_study_artifact_manifest,
     materialize_study_intent,
+    prepare,
 )
 
 
@@ -171,6 +174,7 @@ def test_terminal_outcomes_require_the_correct_closed_artifact() -> None:
     paused = materialize_execution_outcome(
         {
             "schema_version": "cernora.reference.execution-outcome/v1",
+            "study_id": "8" * 64,
             "protocol_id": protocol.protocol_id,
             "ledger_root_sha256": diagnostic.ledger_root_sha256,
             "status": "paused",
@@ -201,6 +205,7 @@ def test_terminal_outcomes_require_the_correct_closed_artifact() -> None:
     completed = materialize_execution_outcome(
         {
             "schema_version": "cernora.reference.execution-outcome/v1",
+            "study_id": "8" * 64,
             "protocol_id": protocol.protocol_id,
             "ledger_root_sha256": evidence.ledger_root_sha256,
             "status": "completed",
@@ -230,3 +235,43 @@ def test_structural_error_exposes_stable_code_and_phase() -> None:
     assert error.phase == "prepare"
     assert error.artifact_id == "f" * 64
     assert str(error) == "prepare:authority-mismatch"
+
+
+def test_prepare_publishes_one_strict_durable_ledger(tmp_path: Path) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    custody_parent = repository / ".agent" / "test-controlled-study"
+    custody_parent.mkdir(parents=True, exist_ok=True)
+    destination = custody_parent / tmp_path.name
+    intent = materialize_study_intent(study_intent_payload())
+
+    try:
+        first = prepare(intent, destination)
+        repeated = prepare(intent, destination)
+
+        assert repeated == first
+        assert first.status == "prepared"
+        assert first.study_id != first.protocol_id
+        assert {path.relative_to(destination).as_posix() for path in destination.rglob("*")} == {
+            ".writer.lock",
+            "intent.json",
+            "ledger",
+            "ledger/00000001.json",
+            "protocol.json",
+            "study.json",
+        }
+
+        ledger = destination / "ledger" / "00000001.json"
+        original = ledger.read_bytes()
+        ledger.write_bytes(original.replace(b'"prepared"', b'"runningz"'))
+        with pytest.raises(ControlledStudyError) as raised:
+            prepare(intent, destination)
+        assert raised.value.code == "corrupt-ledger"
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)
+
+
+def test_prepare_rejects_temporary_custody(tmp_path: Path) -> None:
+    with pytest.raises(ControlledStudyError) as raised:
+        prepare(materialize_study_intent(study_intent_payload()), tmp_path / "study")
+
+    assert raised.value.code == "invalid-intent"

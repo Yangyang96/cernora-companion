@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import os
+import secrets
+import shutil
+import stat
+import tempfile
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Annotated, Literal, Self
 
 from pydantic import Field, StrictInt, StrictStr, TypeAdapter, field_validator, model_validator
 
-from cernora_reference_workflow.common import ContractError, canonical_content_id
+from cernora_reference_workflow.common import (
+    ContractError,
+    canonical_content_id,
+    canonical_json_bytes,
+    closed_regular_tree,
+    load_json_file,
+    read_regular_file_bytes,
+    sha256_bytes,
+    sha256_file,
+)
 from cernora_reference_workflow.experiment_spec import Digest, StrictContract
+from cernora_reference_workflow.publication import atomic_publish_directory
 
 ImplementationKind = Literal["wheel", "source-tree", "container-image", "policy-bundle"]
 ImplementationName = Annotated[StrictStr, Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")]
@@ -310,6 +326,51 @@ def compile_study_protocol(intent: StudyIntent) -> StudyProtocol:
     return StudyProtocol.model_validate(payload)
 
 
+class StudyRecord(StrictContract):
+    """Root authority for one durably prepared Controlled Study."""
+
+    schema_version: Literal["cernora.reference.controlled-study/v1"]
+    study_id: Digest
+    nonce: Digest
+    intent_id: Digest
+    protocol_id: Digest
+    implementation_lock_id: Digest
+    intent_sha256: Digest
+    protocol_sha256: Digest
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            {"nonce": self.nonce, "protocol_id": self.protocol_id},
+            excluded=frozenset(),
+        )
+        if self.study_id != expected:
+            raise ValueError("Controlled Study identity does not bind nonce and Protocol")
+        return self
+
+
+class PreparedLedgerEntry(StrictContract):
+    """First hash-chained fact in every Controlled Study ledger."""
+
+    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
+    entry_id: Digest
+    study_id: Digest
+    sequence: Literal[1]
+    previous_entry_sha256: None
+    operation_id: Digest
+    event: Literal["prepared"]
+    protocol_id: Digest
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
+        )
+        if self.entry_id != expected:
+            raise ValueError("Study ledger entry identity does not match canonical content")
+        return self
+
+
 class StudyArtifactManifest(StrictContract):
     """Top-level closure binding one terminal state to its locally complete evidence."""
 
@@ -367,6 +428,7 @@ class StudyArtifactReference(StrictContract):
 class ExecutionOutcomeBase(StrictContract):
     schema_version: Literal["cernora.reference.execution-outcome/v1"]
     state_id: Digest
+    study_id: Digest
     protocol_id: Digest
     ledger_root_sha256: Digest
 
@@ -462,6 +524,173 @@ def materialize_execution_outcome(
     return _EXECUTION_OUTCOME_ADAPTER.validate_python(payload)
 
 
+def _canonical_contract_bytes(value: StrictContract) -> bytes:
+    return canonical_json_bytes(value.model_dump(mode="json"))
+
+
+def _load_canonical_contract[ModelT: StrictContract](path: Path, model: type[ModelT]) -> ModelT:
+    payload = load_json_file(path)
+    if not isinstance(payload, dict):
+        raise ContractError(f"{path.name} must contain a JSON object")
+    parsed = model.model_validate(payload)
+    if read_regular_file_bytes(path) != _canonical_contract_bytes(parsed):
+        raise ContractError(f"{path.name} is not canonical JSON")
+    return parsed
+
+
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_durable_file(path: Path, payload: bytes) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        offset = 0
+        while offset < len(payload):
+            offset += os.write(descriptor, payload[offset:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _temporary_roots() -> tuple[Path, ...]:
+    candidates = (Path(tempfile.gettempdir()), Path("/tmp"), Path("/private/tmp"))
+    return tuple(dict.fromkeys(item.resolve() for item in candidates))
+
+
+def _require_durable_destination(destination: Path) -> Path:
+    resolved = destination.resolve()
+    if any(resolved == root or resolved.is_relative_to(root) for root in _temporary_roots()):
+        raise ControlledStudyError("invalid-intent", phase="prepare")
+    try:
+        parent_metadata = resolved.parent.lstat()
+    except OSError as exc:
+        raise ControlledStudyError("invalid-intent", phase="prepare") from exc
+    if not stat.S_ISDIR(parent_metadata.st_mode) or resolved.parent.is_symlink():
+        raise ControlledStudyError("invalid-intent", phase="prepare")
+    return resolved
+
+
+def _load_prepared_study(root: Path) -> tuple[StudyIntent, PreparedOutcome]:
+    expected_files = {
+        ".writer.lock",
+        "intent.json",
+        "ledger/00000001.json",
+        "protocol.json",
+        "study.json",
+    }
+    files = closed_regular_tree(root)
+    if set(files) != expected_files:
+        raise ContractError("Controlled Study root is not a closed prepared tree")
+    if read_regular_file_bytes(root / ".writer.lock", maximum=0) != b"":
+        raise ContractError("Controlled Study writer lock is malformed")
+    intent = _load_canonical_contract(root / "intent.json", StudyIntent)
+    protocol = _load_canonical_contract(root / "protocol.json", StudyProtocol)
+    record = _load_canonical_contract(root / "study.json", StudyRecord)
+    entry = _load_canonical_contract(root / "ledger" / "00000001.json", PreparedLedgerEntry)
+    if protocol != compile_study_protocol(intent):
+        raise ContractError("stored Study Protocol is not derived from its Intent")
+    if (
+        record.intent_id != intent.intent_id
+        or record.protocol_id != protocol.protocol_id
+        or record.implementation_lock_id != protocol.implementation_lock_id
+        or record.intent_sha256 != sha256_file(root / "intent.json")
+        or record.protocol_sha256 != sha256_file(root / "protocol.json")
+        or entry.study_id != record.study_id
+        or entry.protocol_id != protocol.protocol_id
+        or entry.operation_id != record.study_id
+    ):
+        raise ContractError("prepared Controlled Study authority mismatch")
+    outcome = materialize_execution_outcome(
+        {
+            "schema_version": "cernora.reference.execution-outcome/v1",
+            "study_id": record.study_id,
+            "protocol_id": protocol.protocol_id,
+            "ledger_root_sha256": sha256_file(root / "ledger" / "00000001.json"),
+            "status": "prepared",
+        }
+    )
+    if not isinstance(outcome, PreparedOutcome):
+        raise ContractError("prepared ledger did not materialize a Prepared outcome")
+    return intent, outcome
+
+
+def prepare(intent: StudyIntent, destination: Path) -> PreparedOutcome:
+    """Freeze and durably publish one Controlled Study without external work."""
+
+    root = _require_durable_destination(destination)
+    if root.exists() or root.is_symlink():
+        try:
+            stored_intent, outcome = _load_prepared_study(root)
+        except (ContractError, OSError, ValueError) as exc:
+            raise ControlledStudyError("corrupt-ledger", phase="prepare") from exc
+        if stored_intent.intent_id != intent.intent_id:
+            raise ControlledStudyError(
+                "destination-conflict", phase="prepare", artifact_id=outcome.study_id
+            )
+        return outcome
+
+    protocol = compile_study_protocol(intent)
+    intent_bytes = _canonical_contract_bytes(intent)
+    protocol_bytes = _canonical_contract_bytes(protocol)
+    nonce = secrets.token_hex(32)
+    study_id = canonical_content_id(
+        {"nonce": nonce, "protocol_id": protocol.protocol_id}, excluded=frozenset()
+    )
+    record = StudyRecord(
+        schema_version="cernora.reference.controlled-study/v1",
+        study_id=study_id,
+        nonce=nonce,
+        intent_id=intent.intent_id,
+        protocol_id=protocol.protocol_id,
+        implementation_lock_id=protocol.implementation_lock_id,
+        intent_sha256=sha256_bytes(intent_bytes),
+        protocol_sha256=sha256_bytes(protocol_bytes),
+    )
+    entry_payload: dict[str, object] = {
+        "schema_version": "cernora.reference.study-ledger-entry/v1",
+        "study_id": study_id,
+        "sequence": 1,
+        "previous_entry_sha256": None,
+        "operation_id": study_id,
+        "event": "prepared",
+        "protocol_id": protocol.protocol_id,
+    }
+    entry_payload["entry_id"] = canonical_content_id(entry_payload, excluded=frozenset())
+    entry = PreparedLedgerEntry.model_validate(entry_payload)
+
+    staging = Path(tempfile.mkdtemp(prefix=f".{root.name}.staging-", dir=root.parent))
+    try:
+        (staging / "ledger").mkdir()
+        _write_durable_file(staging / ".writer.lock", b"")
+        _write_durable_file(staging / "intent.json", intent_bytes)
+        _write_durable_file(staging / "protocol.json", protocol_bytes)
+        _write_durable_file(staging / "study.json", _canonical_contract_bytes(record))
+        _write_durable_file(staging / "ledger" / "00000001.json", _canonical_contract_bytes(entry))
+        _sync_directory(staging / "ledger")
+        _sync_directory(staging)
+        atomic_publish_directory(staging, root)
+        _sync_directory(root.parent)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+
+    try:
+        _, outcome = _load_prepared_study(root)
+    except (ContractError, OSError, ValueError) as exc:
+        raise ControlledStudyError("corrupt-ledger", phase="prepare") from exc
+    return outcome
+
+
 __all__ = [
     "AwaitingAcceptanceOutcome",
     "AwaitingRevealOutcome",
@@ -485,10 +714,12 @@ __all__ = [
     "StudyIntent",
     "StudyPairBlock",
     "StudyProtocol",
+    "StudyRecord",
     "TerminatedOutcome",
     "compile_study_protocol",
     "materialize_execution_outcome",
     "materialize_implementation_lock",
     "materialize_study_artifact_manifest",
     "materialize_study_intent",
+    "prepare",
 ]
