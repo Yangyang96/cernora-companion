@@ -32,6 +32,9 @@ from cernora_reference_workflow.common import (
     sha256_bytes,
     sha256_file,
 )
+from cernora_reference_workflow.comparison_plan import ComparisonPlanV1
+from cernora_reference_workflow.controlled_run_plan import ControlledRunPlanV2
+from cernora_reference_workflow.execution import initialize_execution, reload_execution
 from cernora_reference_workflow.experiment_spec import Digest, StrictContract
 from cernora_reference_workflow.publication import atomic_publish_directory
 
@@ -554,11 +557,52 @@ class RunningLedgerEntry(StrictContract):
         return self
 
 
+class BoundRunningLedgerEntry(StrictContract):
+    """Frozen Study authority for the shared Repeat Runner execution plane."""
+
+    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
+    entry_id: Digest
+    study_id: Digest
+    sequence: PositiveInt
+    previous_entry_sha256: Digest
+    operation_id: Digest
+    event: Literal["execution-started"]
+    protocol_id: Digest
+    acceptance_id: Digest
+    execution_nonce: Digest
+    execution_id: Digest
+    binding_id: Digest
+    ordered_trial_slot_ids: tuple[Digest, ...] = Field(min_length=1)
+    run_plan: ControlledRunPlanV2
+    comparison_plan: ComparisonPlanV1
+
+    @field_validator("ordered_trial_slot_ids", mode="before")
+    @classmethod
+    def tuple_trial_slot_ids(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected_execution_id = canonical_content_id(
+            {"nonce": self.execution_nonce, "run_plan_id": self.run_plan.run_plan_id},
+            excluded=frozenset(),
+        )
+        if self.execution_id != expected_execution_id:
+            raise ValueError("Study Execution identity does not bind the RunPlan and nonce")
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
+        )
+        if self.entry_id != expected:
+            raise ValueError("Study ledger entry identity does not match canonical content")
+        return self
+
+
 StudyLedgerEntry = Annotated[
     PreparedLedgerEntry
     | AwaitingRevealLedgerEntry
     | AwaitingAcceptanceLedgerEntry
-    | RunningLedgerEntry,
+    | RunningLedgerEntry
+    | BoundRunningLedgerEntry,
     Field(discriminator="event"),
 ]
 _STUDY_LEDGER_ENTRY_ADAPTER: TypeAdapter[StudyLedgerEntry] = TypeAdapter(StudyLedgerEntry)
@@ -581,8 +625,16 @@ class AcceptStudyDirective(StrictContract):
     acceptance_id: Digest
 
 
+class StartExecutionDirective(StrictContract):
+    schema_version: Literal["cernora.reference.advance-directive/v1"]
+    action: Literal["start-execution"]
+    acceptance_id: Digest
+    run_plan: ControlledRunPlanV2
+    comparison_plan: ComparisonPlanV1
+
+
 AdvanceDirective = Annotated[
-    RequestRevealDirective | BindRevealDirective | AcceptStudyDirective,
+    RequestRevealDirective | BindRevealDirective | AcceptStudyDirective | StartExecutionDirective,
     Field(discriminator="action"),
 ]
 _ADVANCE_DIRECTIVE_ADAPTER: TypeAdapter[AdvanceDirective] = TypeAdapter(AdvanceDirective)
@@ -816,7 +868,8 @@ def _ledger_outcome(entry: StudyLedgerEntry, ledger_root_sha256: Digest) -> Exec
     }
     if isinstance(entry, AwaitingAcceptanceLedgerEntry):
         payload["acceptance_id"] = entry.acceptance_id
-    elif isinstance(entry, RunningLedgerEntry):
+    elif isinstance(entry, RunningLedgerEntry | BoundRunningLedgerEntry):
+        payload["status"] = "running"
         payload["execution_id"] = entry.execution_id
     return materialize_execution_outcome(payload)
 
@@ -832,7 +885,9 @@ class _ReplayedStudy:
 
 def _load_study(root: Path) -> _ReplayedStudy:
     files = closed_regular_tree(root)
-    ledger_paths = sorted(path for path in files if path.startswith("ledger/"))
+    base_files = {path: file for path, file in files.items() if not path.startswith("execution/")}
+    execution_files = {path: file for path, file in files.items() if path.startswith("execution/")}
+    ledger_paths = sorted(path for path in base_files if path.startswith("ledger/"))
     expected_ledger_paths = [
         f"ledger/{sequence:08d}.json" for sequence in range(1, len(ledger_paths) + 1)
     ]
@@ -845,13 +900,16 @@ def _load_study(root: Path) -> _ReplayedStudy:
         "study.json",
         *ledger_paths,
     }
-    if set(files) != expected_files:
+    if set(base_files) != expected_files:
         raise ContractError("Controlled Study root contains unknown files")
     directories = {
         Path(directory).relative_to(root).as_posix()
         for directory, _, _ in os.walk(root, topdown=True, followlinks=False)
     }
-    if directories != {".", "ledger"}:
+    if not {".", "ledger"}.issubset(directories) or any(
+        item not in {".", "ledger"} and item != "execution" and not item.startswith("execution/")
+        for item in directories
+    ):
         raise ContractError("Controlled Study root contains unknown directories")
     if read_regular_file_bytes(root / ".writer.lock", maximum=0) != b"":
         raise ContractError("Controlled Study writer lock is malformed")
@@ -898,7 +956,7 @@ def _load_study(root: Path) -> _ReplayedStudy:
                 )
                 or (
                     isinstance(prior, AwaitingAcceptanceLedgerEntry)
-                    and isinstance(entry, RunningLedgerEntry)
+                    and isinstance(entry, RunningLedgerEntry | BoundRunningLedgerEntry)
                 )
             )
             if not valid_transition:
@@ -930,16 +988,50 @@ def _load_study(root: Path) -> _ReplayedStudy:
                     raise ContractError("held-out reveal does not match frozen authority")
             if (
                 isinstance(prior, AwaitingAcceptanceLedgerEntry)
-                and isinstance(entry, RunningLedgerEntry)
+                and isinstance(entry, RunningLedgerEntry | BoundRunningLedgerEntry)
                 and entry.acceptance_id != prior.acceptance_id
             ):
                 raise ContractError("running Study does not bind the fresh acceptance")
+            if isinstance(entry, BoundRunningLedgerEntry):
+                from cernora_reference_workflow.study_projection import bind_study_run_plan
+
+                binding = bind_study_run_plan(intent, protocol, entry.run_plan)
+                entry.comparison_plan.validate_run_plan(entry.run_plan)
+                expected_splits = tuple((item.case_id, item.split) for item in intent.cases)
+                actual_splits = tuple(
+                    (item.case_id, item.split_id) for item in entry.comparison_plan.case_splits
+                )
+                if (
+                    entry.binding_id != binding.binding_id
+                    or entry.ordered_trial_slot_ids != binding.ordered_trial_slot_ids
+                    or actual_splits != expected_splits
+                    or entry.comparison_plan.primary_outcome.scope != "split"
+                    or entry.comparison_plan.primary_outcome.split_id != "held-out"
+                ):
+                    raise ContractError(
+                        "running Study authority does not match the frozen Protocol"
+                    )
         if any(item.operation_id == entry.operation_id for item in entries):
             raise ContractError("Controlled Study ledger repeats an operation identity")
         current_sha256 = sha256_file(path)
         entries.append(entry)
         outcomes.append(_ledger_outcome(entry, current_sha256))
         previous_sha256 = current_sha256
+    bound_entries = tuple(item for item in entries if isinstance(item, BoundRunningLedgerEntry))
+    if execution_files or "execution" in directories:
+        if len(bound_entries) != 1:
+            raise ContractError("Repeat Runner Execution has no unique Study authority")
+        bound = bound_entries[0]
+        execution = reload_execution(root / "execution")
+        if (
+            execution.record.execution_id != bound.execution_id
+            or execution.record.nonce != bound.execution_nonce
+            or execution.run_plan != bound.run_plan
+        ):
+            raise ContractError("Repeat Runner Execution does not match the Study ledger")
+    elif bound_entries and not isinstance(entries[-1], BoundRunningLedgerEntry):
+        raise ContractError("Repeat Runner Execution is missing from an advanced Study")
+
     return _ReplayedStudy(
         intent=intent,
         protocol=protocol,
@@ -1086,6 +1178,19 @@ def _directive_operation_id(study_id: Digest, directive: AdvanceDirective) -> Di
     )
 
 
+def _ensure_bound_execution(root: Path, entry: BoundRunningLedgerEntry) -> None:
+    execution_root = root / "execution"
+    if not execution_root.exists() and not execution_root.is_symlink():
+        initialize_execution(execution_root, entry.run_plan, nonce=entry.execution_nonce)
+    execution = reload_execution(execution_root)
+    if (
+        execution.record.execution_id != entry.execution_id
+        or execution.record.nonce != entry.execution_nonce
+        or execution.run_plan != entry.run_plan
+    ):
+        raise ContractError("Repeat Runner Execution does not match the Study ledger")
+
+
 def advance(root: Path, directive: AdvanceDirective | Mapping[str, object]) -> ExecutionOutcome:
     """Idempotently append one non-Runtime Controlled Study transition."""
 
@@ -1103,6 +1208,11 @@ def advance(root: Path, directive: AdvanceDirective | Mapping[str, object]) -> E
         operation_id = _directive_operation_id(replayed.record.study_id, parsed)
         for index, entry in enumerate(replayed.entries):
             if entry.operation_id == operation_id:
+                if isinstance(entry, BoundRunningLedgerEntry):
+                    try:
+                        _ensure_bound_execution(destination, entry)
+                    except (ContractError, OSError, ValueError) as exc:
+                        raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
                 return replayed.outcomes[index]
 
         current = replayed.entries[-1]
@@ -1157,7 +1267,7 @@ def advance(root: Path, directive: AdvanceDirective | Mapping[str, object]) -> E
                 "reveal": parsed.reveal.model_dump(mode="json"),
                 "acceptance_id": acceptance_id,
             }
-        else:
+        elif isinstance(parsed, AcceptStudyDirective):
             if not isinstance(current, AwaitingAcceptanceLedgerEntry):
                 raise ControlledStudyError("invalid-transition", phase="advance")
             if parsed.acceptance_id != current.acceptance_id:
@@ -1181,6 +1291,58 @@ def advance(root: Path, directive: AdvanceDirective | Mapping[str, object]) -> E
                 "execution_nonce": execution_nonce,
                 "execution_id": execution_id,
             }
+        else:
+            if not isinstance(current, AwaitingAcceptanceLedgerEntry):
+                raise ControlledStudyError("invalid-transition", phase="advance")
+            if parsed.acceptance_id != current.acceptance_id:
+                raise ControlledStudyError(
+                    "stale-acceptance",
+                    phase="advance",
+                    artifact_id=current.acceptance_id,
+                )
+            try:
+                from cernora_reference_workflow.study_projection import bind_study_run_plan
+
+                binding = bind_study_run_plan(
+                    replayed.intent,
+                    replayed.protocol,
+                    parsed.run_plan,
+                )
+                parsed.comparison_plan.validate_run_plan(parsed.run_plan)
+                expected_splits = tuple(
+                    (item.case_id, item.split) for item in replayed.intent.cases
+                )
+                actual_splits = tuple(
+                    (item.case_id, item.split_id) for item in parsed.comparison_plan.case_splits
+                )
+                if (
+                    actual_splits != expected_splits
+                    or parsed.comparison_plan.primary_outcome.scope != "split"
+                    or parsed.comparison_plan.primary_outcome.split_id != "held-out"
+                ):
+                    raise ContractError("ComparisonPlan does not preserve Study claim scopes")
+            except (ContractError, ValueError) as exc:
+                raise ControlledStudyError(
+                    "authority-mismatch",
+                    phase="advance",
+                    artifact_id=parsed.run_plan.run_plan_id,
+                ) from exc
+            execution_nonce = secrets.token_hex(32)
+            execution_id = canonical_content_id(
+                {"nonce": execution_nonce, "run_plan_id": parsed.run_plan.run_plan_id},
+                excluded=frozenset(),
+            )
+            payload = {
+                **common,
+                "event": "execution-started",
+                "acceptance_id": parsed.acceptance_id,
+                "execution_nonce": execution_nonce,
+                "execution_id": execution_id,
+                "binding_id": binding.binding_id,
+                "ordered_trial_slot_ids": binding.ordered_trial_slot_ids,
+                "run_plan": parsed.run_plan.model_dump(mode="json"),
+                "comparison_plan": parsed.comparison_plan.model_dump(mode="json"),
+            }
         payload["entry_id"] = canonical_content_id(payload, excluded=frozenset())
         entry = _STUDY_LEDGER_ENTRY_ADAPTER.validate_python(payload)
         path = destination / "ledger" / f"{entry.sequence:08d}.json"
@@ -1191,6 +1353,12 @@ def advance(root: Path, directive: AdvanceDirective | Mapping[str, object]) -> E
             raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
         if advanced.entries[-1].operation_id != operation_id:
             raise ControlledStudyError("corrupt-ledger", phase="advance")
+        if isinstance(advanced.entries[-1], BoundRunningLedgerEntry):
+            try:
+                _ensure_bound_execution(destination, advanced.entries[-1])
+                advanced = _load_study(destination)
+            except (ContractError, OSError, ValueError) as exc:
+                raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
         return advanced.outcomes[-1]
 
 
@@ -1214,6 +1382,7 @@ __all__ = [
     "PausedOutcome",
     "PreparedOutcome",
     "RunningOutcome",
+    "StartExecutionDirective",
     "StudyAnalysisPolicy",
     "StudyArtifactManifest",
     "StudyArtifactReference",
