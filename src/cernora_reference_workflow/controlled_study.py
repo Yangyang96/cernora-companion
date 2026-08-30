@@ -16,6 +16,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, StrictInt, StrictStr, TypeAdapter, field_validator, model_validator
 
+from cernora_reference_workflow.batch_summary import summarize_execution_pack
 from cernora_reference_workflow.candidate_development import (
     BaselineAuthority,
     CandidateDevelopmentRecord,
@@ -31,22 +32,32 @@ from cernora_reference_workflow.common import (
     read_regular_file_bytes,
     sha256_bytes,
     sha256_file,
+    validate_relative_path,
 )
+from cernora_reference_workflow.comparison_input import compare_batch_summary
 from cernora_reference_workflow.comparison_plan import ComparisonPlanV1
 from cernora_reference_workflow.controlled_run_plan import ControlledRunPlanV2
 from cernora_reference_workflow.execution import (
     initialize_execution,
+    rebuild_execution_pack,
     reload_execution,
     reload_execution_for_reconciliation,
+    verify_execution_pack,
 )
 from cernora_reference_workflow.experiment_spec import Digest, StrictContract
 from cernora_reference_workflow.publication import atomic_publish_directory
-from cernora_reference_workflow.runner import AttemptExecutor, advance_repeat
+from cernora_reference_workflow.runner import (
+    AmbiguousActiveAttempt,
+    AttemptExecutor,
+    StopPredicate,
+    advance_repeat,
+)
 
 ImplementationKind = Literal["wheel", "source-tree", "container-image", "policy-bundle"]
 ImplementationName = Annotated[StrictStr, Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")]
 Identifier = Annotated[StrictStr, Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")]
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
+NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
 StudyKind = Literal["contract-proof", "confirmatory-effect"]
 StudySplit = Literal["development", "regression", "held-out"]
 ConfigurationRole = Literal["baseline", "candidate"]
@@ -469,6 +480,11 @@ class StudyRecord(StrictContract):
         return self
 
 
+class StudyArtifactReference(StrictContract):
+    kind: ArtifactKind
+    artifact_id: Digest
+
+
 class PreparedLedgerEntry(StrictContract):
     """First hash-chained fact in every Controlled Study ledger."""
 
@@ -653,6 +669,84 @@ class ExecutionStepAdvancedLedgerEntry(StrictContract):
         return self
 
 
+class PausedLedgerEntry(StrictContract):
+    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
+    entry_id: Digest
+    study_id: Digest
+    sequence: PositiveInt
+    previous_entry_sha256: Digest
+    operation_id: Digest
+    event: Literal["paused"]
+    protocol_id: Digest
+    execution_id: Digest
+    claim_entry_id: Digest
+    reason: Literal["operator-request", "safety-limit", "ambiguous-active-attempt"]
+    artifact: StudyArtifactReference
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        if self.artifact.kind != "diagnostic-pack":
+            raise ValueError("paused Study requires a diagnostic artifact")
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
+        )
+        if self.entry_id != expected:
+            raise ValueError("Study ledger entry identity does not match canonical content")
+        return self
+
+
+class TerminatedLedgerEntry(StrictContract):
+    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
+    entry_id: Digest
+    study_id: Digest
+    sequence: PositiveInt
+    previous_entry_sha256: Digest
+    operation_id: Digest
+    event: Literal["terminated"]
+    protocol_id: Digest
+    execution_id: Digest
+    claim_entry_id: Digest
+    reason: Literal["budget-exhausted", "integrity-failure"]
+    artifact: StudyArtifactReference
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        if self.artifact.kind != "diagnostic-pack":
+            raise ValueError("terminated Study requires a diagnostic artifact")
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
+        )
+        if self.entry_id != expected:
+            raise ValueError("Study ledger entry identity does not match canonical content")
+        return self
+
+
+class CompletedLedgerEntry(StrictContract):
+    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
+    entry_id: Digest
+    study_id: Digest
+    sequence: PositiveInt
+    previous_entry_sha256: Digest
+    operation_id: Digest
+    event: Literal["completed"]
+    protocol_id: Digest
+    execution_id: Digest
+    claim_entry_id: Digest
+    artifact: StudyArtifactReference
+    claim_authority: Literal["descriptive-only", "confirmatory"]
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        if self.artifact.kind != "evidence-pack":
+            raise ValueError("completed Study requires an evidence artifact")
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
+        )
+        if self.entry_id != expected:
+            raise ValueError("Study ledger entry identity does not match canonical content")
+        return self
+
+
 StudyLedgerEntry = Annotated[
     PreparedLedgerEntry
     | AwaitingRevealLedgerEntry
@@ -660,7 +754,10 @@ StudyLedgerEntry = Annotated[
     | RunningLedgerEntry
     | BoundRunningLedgerEntry
     | ExecutionStepClaimedLedgerEntry
-    | ExecutionStepAdvancedLedgerEntry,
+    | ExecutionStepAdvancedLedgerEntry
+    | PausedLedgerEntry
+    | TerminatedLedgerEntry
+    | CompletedLedgerEntry,
     Field(discriminator="event"),
 ]
 _STUDY_LEDGER_ENTRY_ADAPTER: TypeAdapter[StudyLedgerEntry] = TypeAdapter(StudyLedgerEntry)
@@ -708,6 +805,45 @@ AdvanceDirective = Annotated[
 _ADVANCE_DIRECTIVE_ADAPTER: TypeAdapter[AdvanceDirective] = TypeAdapter(AdvanceDirective)
 
 
+class StudyArtifactFile(StrictContract):
+    path: Annotated[StrictStr, Field(min_length=1)]
+    byte_length: NonNegativeInt
+    sha256: Digest
+
+    @model_validator(mode="after")
+    def closed_relative_path(self) -> Self:
+        validate_relative_path(self.path)
+        if self.path == "manifest.json":
+            raise ValueError("Study artifact manifest cannot index itself")
+        return self
+
+
+class StudyArtifactReport(StrictContract):
+    schema_version: Literal["cernora.reference.study-artifact-report/v1"]
+    report_id: Digest
+    study_id: Digest
+    protocol_id: Digest
+    execution_id: Digest
+    terminal_status: Literal["paused", "completed", "terminated"]
+    reason: ConfirmatoryStopReason | None
+    planned_trial_count: PositiveInt
+    completed_trial_count: NonNegativeInt
+    attempt_count: NonNegativeInt
+
+    @model_validator(mode="after")
+    def canonical_identity_and_status(self) -> Self:
+        if (self.terminal_status == "completed") != (self.reason is None):
+            raise ValueError("only a completed Study omits its terminal reason")
+        if self.completed_trial_count > self.planned_trial_count:
+            raise ValueError("Study artifact completed Trial count exceeds its Protocol")
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"report_id"})
+        )
+        if self.report_id != expected:
+            raise ValueError("Study artifact report identity does not match canonical content")
+        return self
+
+
 class StudyArtifactManifest(StrictContract):
     """Top-level closure binding one terminal state to its locally complete evidence."""
 
@@ -722,9 +858,18 @@ class StudyArtifactManifest(StrictContract):
     batch_package_sha256: Digest | None
     comparison_package_sha256: Digest | None
     report_sha256: Digest
+    files: tuple[StudyArtifactFile, ...] = Field(min_length=1)
+
+    @field_validator("files", mode="before")
+    @classmethod
+    def tuple_files(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
     def coherent_authority_and_identity(self) -> Self:
+        paths = tuple(item.path for item in self.files)
+        if paths != tuple(sorted(paths)) or len(paths) != len(set(paths)):
+            raise ValueError("Study artifact file index must be sorted and unique")
         core_packages = (self.batch_package_sha256, self.comparison_package_sha256)
         if self.terminal_status == "completed":
             if (
@@ -757,9 +902,51 @@ def materialize_study_artifact_manifest(
     return StudyArtifactManifest.model_validate(payload)
 
 
-class StudyArtifactReference(StrictContract):
-    kind: ArtifactKind
-    artifact_id: Digest
+def _materialize_study_artifact_report(
+    payload_without_identity: Mapping[str, object],
+) -> StudyArtifactReport:
+    payload = dict(payload_without_identity)
+    payload["report_id"] = canonical_content_id(payload, excluded=frozenset())
+    return StudyArtifactReport.model_validate(payload)
+
+
+def _verify_study_artifact(
+    root: Path,
+    *,
+    require_identity_name: bool = True,
+) -> StudyArtifactManifest:
+    files = closed_regular_tree(root)
+    manifest = _load_canonical_contract(root / "manifest.json", StudyArtifactManifest)
+    expected = {"manifest.json", *(item.path for item in manifest.files)}
+    if set(files) != expected or (require_identity_name and root.name != manifest.artifact_id):
+        raise ContractError("Study artifact file closure does not match its manifest")
+    for item in manifest.files:
+        path = root / item.path
+        if path.stat().st_size != item.byte_length or sha256_file(path) != item.sha256:
+            raise ContractError("Study artifact indexed file does not match its digest")
+    report = _load_canonical_contract(root / "report.json", StudyArtifactReport)
+    if (
+        sha256_file(root / "report.json") != manifest.report_sha256
+        or report.protocol_id != manifest.protocol_id
+        or report.terminal_status != manifest.terminal_status
+    ):
+        raise ContractError("Study artifact report does not match its manifest")
+    ledger_paths = sorted(item.path for item in manifest.files if item.path.startswith("ledger/"))
+    if not ledger_paths or sha256_file(root / ledger_paths[-1]) != manifest.ledger_root_sha256:
+        raise ContractError("Study artifact does not close its ledger prefix")
+    if manifest.terminal_status == "completed":
+        verify_execution_pack(root / "execution-pack")
+        if (
+            _execution_snapshot_id(root / "batch-summary") != manifest.batch_package_sha256
+            or _execution_snapshot_id(root / "comparison") != manifest.comparison_package_sha256
+        ):
+            raise ContractError("Study Evidence Pack Core packages do not match its manifest")
+    elif any(
+        item.path.startswith("batch-summary/") or item.path.startswith("comparison/")
+        for item in manifest.files
+    ):
+        raise ContractError("Study diagnostic artifact carries authoritative Core packages")
+    return manifest
 
 
 class ExecutionOutcomeBase(StrictContract):
@@ -957,6 +1144,32 @@ def _ledger_outcome(entry: StudyLedgerEntry, ledger_root_sha256: Digest) -> Exec
     ):
         payload["status"] = "running"
         payload["execution_id"] = entry.execution_id
+    elif isinstance(entry, PausedLedgerEntry):
+        payload.update(
+            {
+                "execution_id": entry.execution_id,
+                "reason": entry.reason,
+                "artifact": entry.artifact.model_dump(mode="json"),
+                "resumable": True,
+            }
+        )
+    elif isinstance(entry, TerminatedLedgerEntry):
+        payload.update(
+            {
+                "execution_id": entry.execution_id,
+                "reason": entry.reason,
+                "artifact": entry.artifact.model_dump(mode="json"),
+                "resumable": False,
+            }
+        )
+    elif isinstance(entry, CompletedLedgerEntry):
+        payload.update(
+            {
+                "execution_id": entry.execution_id,
+                "artifact": entry.artifact.model_dump(mode="json"),
+                "claim_authority": entry.claim_authority,
+            }
+        )
     return materialize_execution_outcome(payload)
 
 
@@ -971,8 +1184,17 @@ class _ReplayedStudy:
 
 def _load_study(root: Path) -> _ReplayedStudy:
     files = closed_regular_tree(root)
-    base_files = {path: file for path, file in files.items() if not path.startswith("execution/")}
+    base_files = {
+        path: file
+        for path, file in files.items()
+        if not path.startswith("execution/")
+        and not path.startswith("execution-pack/")
+        and not path.startswith("artifacts/")
+    }
     execution_files = {path: file for path, file in files.items() if path.startswith("execution/")}
+    execution_pack_files = {
+        path: file for path, file in files.items() if path.startswith("execution-pack/")
+    }
     ledger_paths = sorted(path for path in base_files if path.startswith("ledger/"))
     expected_ledger_paths = [
         f"ledger/{sequence:08d}.json" for sequence in range(1, len(ledger_paths) + 1)
@@ -993,7 +1215,12 @@ def _load_study(root: Path) -> _ReplayedStudy:
         for directory, _, _ in os.walk(root, topdown=True, followlinks=False)
     }
     if not {".", "ledger"}.issubset(directories) or any(
-        item not in {".", "ledger"} and item != "execution" and not item.startswith("execution/")
+        item not in {".", "ledger", "artifacts"}
+        and item != "execution"
+        and item != "execution-pack"
+        and not item.startswith("execution/")
+        and not item.startswith("execution-pack/")
+        and not item.startswith("artifacts/")
         for item in directories
     ):
         raise ContractError("Controlled Study root contains unknown directories")
@@ -1045,12 +1272,23 @@ def _load_study(root: Path) -> _ReplayedStudy:
                     and isinstance(entry, RunningLedgerEntry | BoundRunningLedgerEntry)
                 )
                 or (
-                    isinstance(prior, BoundRunningLedgerEntry | ExecutionStepAdvancedLedgerEntry)
+                    isinstance(
+                        prior,
+                        BoundRunningLedgerEntry
+                        | ExecutionStepAdvancedLedgerEntry
+                        | PausedLedgerEntry,
+                    )
                     and isinstance(entry, ExecutionStepClaimedLedgerEntry)
                 )
                 or (
                     isinstance(prior, ExecutionStepClaimedLedgerEntry)
-                    and isinstance(entry, ExecutionStepAdvancedLedgerEntry)
+                    and isinstance(
+                        entry,
+                        ExecutionStepAdvancedLedgerEntry
+                        | PausedLedgerEntry
+                        | TerminatedLedgerEntry
+                        | CompletedLedgerEntry,
+                    )
                 )
             )
             if not valid_transition:
@@ -1106,7 +1344,10 @@ def _load_study(root: Path) -> _ReplayedStudy:
                         "running Study authority does not match the frozen Protocol"
                     )
             if isinstance(entry, ExecutionStepClaimedLedgerEntry) and (
-                not isinstance(prior, BoundRunningLedgerEntry | ExecutionStepAdvancedLedgerEntry)
+                not isinstance(
+                    prior,
+                    BoundRunningLedgerEntry | ExecutionStepAdvancedLedgerEntry | PausedLedgerEntry,
+                )
                 or entry.execution_id != prior.execution_id
                 or entry.expected_state_id != outcomes[-1].state_id
             ):
@@ -1117,6 +1358,15 @@ def _load_study(root: Path) -> _ReplayedStudy:
                 or entry.claim_entry_id != prior.entry_id
             ):
                 raise ContractError("Study execution step result does not bind its claim")
+            if isinstance(
+                entry,
+                PausedLedgerEntry | TerminatedLedgerEntry | CompletedLedgerEntry,
+            ) and (
+                not isinstance(prior, ExecutionStepClaimedLedgerEntry)
+                or entry.execution_id != prior.execution_id
+                or entry.claim_entry_id != prior.entry_id
+            ):
+                raise ContractError("Study terminal result does not bind its execution claim")
         if any(item.operation_id == entry.operation_id for item in entries):
             raise ContractError("Controlled Study ledger repeats an operation identity")
         current_sha256 = sha256_file(path)
@@ -1124,6 +1374,78 @@ def _load_study(root: Path) -> _ReplayedStudy:
         outcomes.append(_ledger_outcome(entry, current_sha256))
         previous_sha256 = current_sha256
     bound_entries = tuple(item for item in entries if isinstance(item, BoundRunningLedgerEntry))
+    terminal_entries = tuple(
+        item
+        for item in entries
+        if isinstance(item, PausedLedgerEntry | TerminatedLedgerEntry | CompletedLedgerEntry)
+    )
+    artifact_roots = tuple(
+        sorted(
+            (
+                child
+                for child in (root / "artifacts").iterdir()
+                if child.is_dir() and not child.is_symlink()
+            ),
+            key=lambda item: item.name,
+        )
+        if (root / "artifacts").is_dir() and not (root / "artifacts").is_symlink()
+        else ()
+    )
+    artifact_file_roots = {
+        Path(relative).parts[1] for relative in files if relative.startswith("artifacts/")
+    }
+    if artifact_file_roots != {item.name for item in artifact_roots}:
+        raise ContractError("Controlled Study artifact custody contains unknown files")
+    artifacts = {item.artifact_id: item for item in map(_verify_study_artifact, artifact_roots)}
+    referenced_artifact_ids = {item.artifact.artifact_id for item in terminal_entries}
+    unreferenced = set(artifacts) - referenced_artifact_ids
+    latest_entry = entries[-1]
+    if unreferenced and (
+        not isinstance(latest_entry, ExecutionStepClaimedLedgerEntry)
+        or len(unreferenced) != 1
+        or artifacts[next(iter(unreferenced))].ledger_root_sha256 != previous_sha256
+    ):
+        raise ContractError("Controlled Study contains an unclaimed terminal artifact")
+    for terminal in terminal_entries:
+        manifest = artifacts.get(terminal.artifact.artifact_id)
+        artifact_root = root / "artifacts" / terminal.artifact.artifact_id
+        report = _load_canonical_contract(
+            artifact_root / "report.json",
+            StudyArtifactReport,
+        )
+        if (
+            manifest is None
+            or manifest.kind != terminal.artifact.kind
+            or manifest.ledger_root_sha256 != terminal.previous_entry_sha256
+            or manifest.terminal_status != terminal.event
+            or report.study_id != record.study_id
+            or report.execution_id != terminal.execution_id
+            or report.reason
+            != (None if isinstance(terminal, CompletedLedgerEntry) else terminal.reason)
+        ):
+            raise ContractError("Study terminal ledger entry does not match its artifact")
+        if isinstance(terminal, CompletedLedgerEntry) and (
+            manifest.claim_authority != terminal.claim_authority
+        ):
+            raise ContractError("completed Study claim authority differs from its Evidence Pack")
+        for name in ("intent.json", "protocol.json", "study.json"):
+            if read_regular_file_bytes(
+                artifact_root / "authority" / name,
+                maximum=None,
+            ) != read_regular_file_bytes(root / name, maximum=None):
+                raise ContractError("Study artifact authority differs from its durable Study")
+        artifact_ledger = sorted(
+            path for path in closed_regular_tree(artifact_root) if path.startswith("ledger/")
+        )
+        expected_artifact_ledger = [
+            f"ledger/{sequence:08d}.json" for sequence in range(1, terminal.sequence)
+        ]
+        if artifact_ledger != expected_artifact_ledger or any(
+            read_regular_file_bytes(artifact_root / relative, maximum=None)
+            != read_regular_file_bytes(root / relative, maximum=None)
+            for relative in artifact_ledger
+        ):
+            raise ContractError("Study artifact ledger differs from its durable prefix")
     if execution_files or "execution" in directories:
         if len(bound_entries) != 1:
             raise ContractError("Repeat Runner Execution has no unique Study authority")
@@ -1132,6 +1454,10 @@ def _load_study(root: Path) -> _ReplayedStudy:
         execution = (
             reload_execution_for_reconciliation(root / "execution")
             if isinstance(latest, ExecutionStepClaimedLedgerEntry)
+            or (
+                isinstance(latest, PausedLedgerEntry)
+                and latest.reason == "ambiguous-active-attempt"
+            )
             else reload_execution(root / "execution")
         )
         if (
@@ -1146,6 +1472,15 @@ def _load_study(root: Path) -> _ReplayedStudy:
             raise ContractError("Repeat Runner Execution changed after its Study step result")
     elif bound_entries and not isinstance(entries[-1], BoundRunningLedgerEntry):
         raise ContractError("Repeat Runner Execution is missing from an advanced Study")
+    if execution_pack_files or "execution-pack" in directories:
+        if len(bound_entries) != 1:
+            raise ContractError("Execution Pack has no unique Study authority")
+        pack = verify_execution_pack(root / "execution-pack")
+        if (
+            pack.execution_id != bound_entries[0].execution_id
+            or pack.run_plan_id != bound_entries[0].run_plan.run_plan_id
+        ):
+            raise ContractError("Execution Pack does not match the Controlled Study")
 
     return _ReplayedStudy(
         intent=intent,
@@ -1209,6 +1544,288 @@ def _publish_durable_file(path: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _discard_artifact_staging(root: Path) -> None:
+    artifacts = root / "artifacts"
+    if not artifacts.exists():
+        return
+    if not artifacts.is_dir() or artifacts.is_symlink():
+        raise ContractError("Controlled Study artifact custody is unsafe")
+    for child in artifacts.iterdir():
+        if child.name.startswith(".staging-"):
+            if not child.is_dir() or child.is_symlink():
+                raise ContractError("Controlled Study artifact staging is unsafe")
+            shutil.rmtree(child)
+    _sync_directory(artifacts)
+
+
+def _copy_closed_tree(source: Path, destination: Path, *, prefix: str) -> None:
+    for relative, path in closed_regular_tree(source).items():
+        target = destination / prefix / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_durable_file(target, read_regular_file_bytes(path, maximum=None))
+
+
+def _publish_diagnostic_artifact(
+    root: Path,
+    replayed: _ReplayedStudy,
+    *,
+    terminal_status: Literal["paused", "terminated"],
+    reason: ConfirmatoryStopReason,
+) -> StudyArtifactManifest:
+    execution_root = root / "execution"
+    execution = reload_execution_for_reconciliation(execution_root)
+    before = _execution_snapshot_id(execution_root)
+    report = _materialize_study_artifact_report(
+        {
+            "schema_version": "cernora.reference.study-artifact-report/v1",
+            "study_id": replayed.record.study_id,
+            "protocol_id": replayed.protocol.protocol_id,
+            "execution_id": execution.record.execution_id,
+            "terminal_status": terminal_status,
+            "reason": reason,
+            "planned_trial_count": execution.record.planned_trial_count,
+            "completed_trial_count": len(execution.trial_manifests),
+            "attempt_count": len(execution.active_attempts),
+        }
+    )
+    artifacts = root / "artifacts"
+    if not artifacts.exists():
+        artifacts.mkdir(mode=0o700)
+        _sync_directory(root)
+    staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=artifacts))
+    try:
+        authority = staging / "authority"
+        authority.mkdir()
+        for name in ("intent.json", "protocol.json", "study.json"):
+            _write_durable_file(
+                authority / name,
+                read_regular_file_bytes(root / name, maximum=None),
+            )
+        ledger = staging / "ledger"
+        ledger.mkdir()
+        for entry in replayed.entries:
+            name = f"{entry.sequence:08d}.json"
+            _write_durable_file(
+                ledger / name,
+                read_regular_file_bytes(root / "ledger" / name, maximum=None),
+            )
+        _copy_closed_tree(execution_root, staging, prefix="execution")
+        _write_durable_file(staging / "report.json", _canonical_contract_bytes(report))
+        if _execution_snapshot_id(execution_root) != before:
+            raise ContractError("Execution changed while publishing its diagnostic artifact")
+        indexed = tuple(
+            StudyArtifactFile(
+                path=relative,
+                byte_length=path.stat().st_size,
+                sha256=sha256_file(path),
+            )
+            for relative, path in closed_regular_tree(staging).items()
+        )
+        manifest = materialize_study_artifact_manifest(
+            {
+                "schema_version": "cernora.reference.study-artifact-manifest/v1",
+                "kind": "diagnostic-pack",
+                "protocol_id": replayed.protocol.protocol_id,
+                "implementation_lock_id": replayed.protocol.implementation_lock_id,
+                "ledger_root_sha256": replayed.outcomes[-1].ledger_root_sha256,
+                "terminal_status": terminal_status,
+                "claim_authority": "diagnostic-only",
+                "batch_package_sha256": None,
+                "comparison_package_sha256": None,
+                "report_sha256": sha256_file(staging / "report.json"),
+                "files": [item.model_dump(mode="json") for item in indexed],
+            }
+        )
+        _write_durable_file(staging / "manifest.json", _canonical_contract_bytes(manifest))
+        destination = artifacts / manifest.artifact_id
+        if destination.exists():
+            if _verify_study_artifact(destination) != manifest:
+                raise ContractError("preexisting Study artifact does not match terminal state")
+            shutil.rmtree(staging)
+        else:
+            atomic_publish_directory(staging, destination)
+        _sync_directory(artifacts)
+        return _verify_study_artifact(destination)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+
+
+def _publish_evidence_artifact(
+    root: Path,
+    replayed: _ReplayedStudy,
+) -> StudyArtifactManifest:
+    bound = next(item for item in replayed.entries if isinstance(item, BoundRunningLedgerEntry))
+    execution_root = root / "execution"
+    pack_root = root / "execution-pack"
+    execution = reload_execution(execution_root)
+    pack = verify_execution_pack(pack_root)
+    if execution.manifest is None or pack.execution_id != execution.record.execution_id:
+        raise ContractError("completed Study lacks its closed Execution and Pack")
+    before = _execution_snapshot_id(pack_root)
+    report = _materialize_study_artifact_report(
+        {
+            "schema_version": "cernora.reference.study-artifact-report/v1",
+            "study_id": replayed.record.study_id,
+            "protocol_id": replayed.protocol.protocol_id,
+            "execution_id": execution.record.execution_id,
+            "terminal_status": "completed",
+            "reason": None,
+            "planned_trial_count": execution.record.planned_trial_count,
+            "completed_trial_count": len(execution.trial_manifests),
+            "attempt_count": len(execution.active_attempts),
+        }
+    )
+    artifacts = root / "artifacts"
+    if not artifacts.exists():
+        artifacts.mkdir(mode=0o700)
+        _sync_directory(root)
+    staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=artifacts))
+    try:
+        authority = staging / "authority"
+        authority.mkdir()
+        for name in ("intent.json", "protocol.json", "study.json"):
+            _write_durable_file(
+                authority / name,
+                read_regular_file_bytes(root / name, maximum=None),
+            )
+        _write_durable_file(authority / "run-plan.json", bound.run_plan.canonical_bytes())
+        _write_durable_file(
+            authority / "comparison-plan.json",
+            bound.comparison_plan.canonical_bytes(),
+        )
+        ledger = staging / "ledger"
+        ledger.mkdir()
+        for entry in replayed.entries:
+            name = f"{entry.sequence:08d}.json"
+            _write_durable_file(
+                ledger / name,
+                read_regular_file_bytes(root / "ledger" / name, maximum=None),
+            )
+        _copy_closed_tree(pack_root, staging, prefix="execution-pack")
+        batch_root = staging / "batch-summary"
+        summarize_execution_pack(staging / "execution-pack", batch_root)
+        comparison_root = staging / "comparison"
+        compare_batch_summary(
+            batch_root,
+            authority / "run-plan.json",
+            authority / "comparison-plan.json",
+            comparison_root,
+        )
+        _write_durable_file(staging / "report.json", _canonical_contract_bytes(report))
+        if _execution_snapshot_id(pack_root) != before:
+            raise ContractError("Execution Pack changed while publishing Study evidence")
+        batch_sha256 = _execution_snapshot_id(batch_root)
+        comparison_sha256 = _execution_snapshot_id(comparison_root)
+        indexed = tuple(
+            StudyArtifactFile(
+                path=relative,
+                byte_length=path.stat().st_size,
+                sha256=sha256_file(path),
+            )
+            for relative, path in closed_regular_tree(staging).items()
+        )
+        manifest = materialize_study_artifact_manifest(
+            {
+                "schema_version": "cernora.reference.study-artifact-manifest/v1",
+                "kind": "evidence-pack",
+                "protocol_id": replayed.protocol.protocol_id,
+                "implementation_lock_id": replayed.protocol.implementation_lock_id,
+                "ledger_root_sha256": replayed.outcomes[-1].ledger_root_sha256,
+                "terminal_status": "completed",
+                "claim_authority": replayed.protocol.claims.effect_conclusion,
+                "batch_package_sha256": batch_sha256,
+                "comparison_package_sha256": comparison_sha256,
+                "report_sha256": sha256_file(staging / "report.json"),
+                "files": [item.model_dump(mode="json") for item in indexed],
+            }
+        )
+        _write_durable_file(staging / "manifest.json", _canonical_contract_bytes(manifest))
+        destination = artifacts / manifest.artifact_id
+        if destination.exists():
+            if _verify_study_artifact(destination) != manifest:
+                raise ContractError("preexisting Study Evidence Pack does not match completion")
+            shutil.rmtree(staging)
+        else:
+            atomic_publish_directory(staging, destination)
+        _sync_directory(artifacts)
+        return _verify_study_artifact(destination)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+
+
+def rebuild(artifact_root: Path, destination: Path) -> StudyArtifactManifest:
+    """Offline-verify one terminal artifact and reproduce its exact closed bytes."""
+
+    try:
+        artifact = _verify_study_artifact(artifact_root)
+    except (ContractError, OSError, ValueError) as exc:
+        raise ControlledStudyError("incomplete-pack", phase="rebuild") from exc
+    if not destination.parent.is_dir() or destination.exists() or destination.is_symlink():
+        raise ControlledStudyError(
+            "destination-conflict",
+            phase="rebuild",
+            artifact_id=artifact.artifact_id,
+        )
+    try:
+        if artifact.kind == "evidence-pack":
+            with tempfile.TemporaryDirectory(
+                prefix="cernora-study-rebuild-",
+                dir=destination.parent,
+            ) as temporary:
+                validation = Path(temporary)
+                rebuild_execution_pack(
+                    artifact_root / "execution-pack",
+                    validation / "execution",
+                )
+                summarize_execution_pack(
+                    artifact_root / "execution-pack",
+                    validation / "batch-summary",
+                )
+                compare_batch_summary(
+                    validation / "batch-summary",
+                    artifact_root / "authority" / "run-plan.json",
+                    artifact_root / "authority" / "comparison-plan.json",
+                    validation / "comparison",
+                )
+                if (
+                    _execution_snapshot_id(validation / "batch-summary")
+                    != artifact.batch_package_sha256
+                    or _execution_snapshot_id(validation / "comparison")
+                    != artifact.comparison_package_sha256
+                ):
+                    raise ContractError(
+                        "offline-rebuilt Core packages differ from the Study Evidence Pack"
+                    )
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent)
+        )
+        try:
+            _copy_closed_tree(artifact_root, staging, prefix="")
+            atomic_publish_directory(staging, destination)
+        except Exception:
+            if staging.exists():
+                shutil.rmtree(staging)
+            raise
+        rebuilt = _verify_study_artifact(destination, require_identity_name=False)
+        if rebuilt != artifact or _execution_snapshot_id(destination) != _execution_snapshot_id(
+            artifact_root
+        ):
+            raise ContractError("offline-rebuilt Study artifact differs from its source")
+        return rebuilt
+    except ControlledStudyError:
+        raise
+    except (ContractError, OSError, ValueError) as exc:
+        raise ControlledStudyError(
+            "incomplete-pack",
+            phase="rebuild",
+            artifact_id=artifact.artifact_id,
+        ) from exc
+
+
 def prepare(intent: StudyIntent, destination: Path) -> PreparedOutcome:
     """Freeze and durably publish one Controlled Study without external work."""
 
@@ -1216,6 +1833,7 @@ def prepare(intent: StudyIntent, destination: Path) -> PreparedOutcome:
     if root.exists() or root.is_symlink():
         try:
             with _study_writer(root):
+                _discard_artifact_staging(root)
                 replayed = _load_study(root)
         except (ContractError, OSError, ValueError) as exc:
             raise ControlledStudyError("corrupt-ledger", phase="prepare") from exc
@@ -1311,17 +1929,55 @@ def _advance_claimed_step(
     replayed: _ReplayedStudy,
     claim: ExecutionStepClaimedLedgerEntry,
     executor: AttemptExecutor | None,
+    should_stop: StopPredicate | None,
 ) -> ExecutionOutcome:
     if executor is None:
         raise ControlledStudyError("invalid-intent", phase="advance")
     execution_root = root / "execution"
     before = _execution_snapshot_id(execution_root)
-    outcome = advance_repeat(
-        execution_root,
-        executor,
-        pack_root=root / "execution-pack",
-        allow_new_attempt=before == claim.prior_execution_snapshot_id,
-    )
+    try:
+        outcome = advance_repeat(
+            execution_root,
+            executor,
+            pack_root=root / "execution-pack",
+            should_stop=should_stop,
+            allow_new_attempt=before == claim.prior_execution_snapshot_id,
+        )
+    except AmbiguousActiveAttempt:
+        return _close_diagnostic_terminal(
+            root,
+            replayed,
+            claim,
+            event="paused",
+            reason="ambiguous-active-attempt",
+        )
+    if outcome.status == "stopped":
+        return _close_diagnostic_terminal(
+            root,
+            replayed,
+            claim,
+            event="paused",
+            reason="operator-request",
+        )
+    if outcome.status == "budget-exhausted":
+        return _close_diagnostic_terminal(
+            root,
+            replayed,
+            claim,
+            event="terminated",
+            reason="budget-exhausted",
+        )
+    if outcome.status == "completed":
+        try:
+            return _close_completed_terminal(root, replayed, claim)
+        except (ContractError, OSError, ValueError):
+            return _close_diagnostic_terminal(
+                root,
+                replayed,
+                claim,
+                event="terminated",
+                reason="integrity-failure",
+            )
     if outcome.status != "running":
         raise ControlledStudyError("incomplete-pack", phase="advance")
     snapshot_id = _execution_snapshot_id(execution_root)
@@ -1355,13 +2011,98 @@ def _advance_claimed_step(
     return advanced.outcomes[-1]
 
 
+def _close_diagnostic_terminal(
+    root: Path,
+    replayed: _ReplayedStudy,
+    claim: ExecutionStepClaimedLedgerEntry,
+    *,
+    event: Literal["paused", "terminated"],
+    reason: ConfirmatoryStopReason,
+) -> ExecutionOutcome:
+    artifact = _publish_diagnostic_artifact(
+        root,
+        replayed,
+        terminal_status=event,
+        reason=reason,
+    )
+    operation_id = canonical_content_id(
+        {"artifact_id": artifact.artifact_id, "claim_entry_id": claim.entry_id, "event": event},
+        excluded=frozenset(),
+    )
+    payload: dict[str, object] = {
+        "schema_version": "cernora.reference.study-ledger-entry/v1",
+        "study_id": replayed.record.study_id,
+        "sequence": len(replayed.entries) + 1,
+        "previous_entry_sha256": replayed.outcomes[-1].ledger_root_sha256,
+        "operation_id": operation_id,
+        "event": event,
+        "protocol_id": replayed.protocol.protocol_id,
+        "execution_id": claim.execution_id,
+        "claim_entry_id": claim.entry_id,
+        "reason": reason,
+        "artifact": {"kind": artifact.kind, "artifact_id": artifact.artifact_id},
+    }
+    payload["entry_id"] = canonical_content_id(payload, excluded=frozenset())
+    entry = _STUDY_LEDGER_ENTRY_ADAPTER.validate_python(payload)
+    _publish_durable_file(
+        root / "ledger" / f"{entry.sequence:08d}.json",
+        _canonical_contract_bytes(entry),
+    )
+    try:
+        closed = _load_study(root)
+    except (ContractError, OSError, ValueError) as exc:
+        raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
+    return closed.outcomes[-1]
+
+
+def _close_completed_terminal(
+    root: Path,
+    replayed: _ReplayedStudy,
+    claim: ExecutionStepClaimedLedgerEntry,
+) -> ExecutionOutcome:
+    artifact = _publish_evidence_artifact(root, replayed)
+    operation_id = canonical_content_id(
+        {
+            "artifact_id": artifact.artifact_id,
+            "claim_entry_id": claim.entry_id,
+            "event": "completed",
+        },
+        excluded=frozenset(),
+    )
+    payload: dict[str, object] = {
+        "schema_version": "cernora.reference.study-ledger-entry/v1",
+        "study_id": replayed.record.study_id,
+        "sequence": len(replayed.entries) + 1,
+        "previous_entry_sha256": replayed.outcomes[-1].ledger_root_sha256,
+        "operation_id": operation_id,
+        "event": "completed",
+        "protocol_id": replayed.protocol.protocol_id,
+        "execution_id": claim.execution_id,
+        "claim_entry_id": claim.entry_id,
+        "artifact": {"kind": artifact.kind, "artifact_id": artifact.artifact_id},
+        "claim_authority": artifact.claim_authority,
+    }
+    payload["entry_id"] = canonical_content_id(payload, excluded=frozenset())
+    entry = _STUDY_LEDGER_ENTRY_ADAPTER.validate_python(payload)
+    _publish_durable_file(
+        root / "ledger" / f"{entry.sequence:08d}.json",
+        _canonical_contract_bytes(entry),
+    )
+    try:
+        closed = _load_study(root)
+    except (ContractError, OSError, ValueError) as exc:
+        raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
+    return closed.outcomes[-1]
+
+
 def advance(
     root: Path,
     directive: AdvanceDirective | Mapping[str, object],
     *,
     executor: AttemptExecutor | None = None,
+    should_stop: StopPredicate | None = None,
 ) -> ExecutionOutcome:
-    """Idempotently append one non-Runtime Controlled Study transition."""
+    """Idempotently advance one durable Study by at most one external Attempt."""
 
     destination = _require_durable_destination(root, phase="advance")
     try:
@@ -1371,6 +2112,7 @@ def advance(
 
     with _study_writer(destination):
         try:
+            _discard_artifact_staging(destination)
             replayed = _load_study(destination)
         except (ContractError, OSError, ValueError) as exc:
             raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
@@ -1385,12 +2127,22 @@ def advance(
                 if isinstance(entry, ExecutionStepClaimedLedgerEntry):
                     if index + 1 < len(replayed.entries):
                         result = replayed.entries[index + 1]
-                        if not isinstance(result, ExecutionStepAdvancedLedgerEntry) or (
-                            result.claim_entry_id != entry.entry_id
-                        ):
+                        if not isinstance(
+                            result,
+                            ExecutionStepAdvancedLedgerEntry
+                            | PausedLedgerEntry
+                            | TerminatedLedgerEntry
+                            | CompletedLedgerEntry,
+                        ) or (result.claim_entry_id != entry.entry_id):
                             raise ControlledStudyError("corrupt-ledger", phase="advance")
                         return replayed.outcomes[index + 1]
-                    return _advance_claimed_step(destination, replayed, entry, executor)
+                    return _advance_claimed_step(
+                        destination,
+                        replayed,
+                        entry,
+                        executor,
+                        should_stop,
+                    )
                 return replayed.outcomes[index]
 
         current = replayed.entries[-1]
@@ -1524,7 +2276,10 @@ def advance(
         else:
             if executor is None:
                 raise ControlledStudyError("invalid-intent", phase="advance")
-            if not isinstance(current, BoundRunningLedgerEntry | ExecutionStepAdvancedLedgerEntry):
+            if not isinstance(
+                current,
+                BoundRunningLedgerEntry | ExecutionStepAdvancedLedgerEntry | PausedLedgerEntry,
+            ):
                 raise ControlledStudyError("invalid-transition", phase="advance")
             if parsed.expected_state_id != replayed.outcomes[-1].state_id:
                 raise ControlledStudyError(
@@ -1557,7 +2312,13 @@ def advance(
             except (ContractError, OSError, ValueError) as exc:
                 raise ControlledStudyError("corrupt-ledger", phase="advance") from exc
         elif isinstance(latest, ExecutionStepClaimedLedgerEntry):
-            return _advance_claimed_step(destination, advanced, latest, executor)
+            return _advance_claimed_step(
+                destination,
+                advanced,
+                latest,
+                executor,
+                should_stop,
+            )
         return advanced.outcomes[-1]
 
 
@@ -1603,4 +2364,5 @@ __all__ = [
     "materialize_study_artifact_manifest",
     "materialize_study_intent",
     "prepare",
+    "rebuild",
 ]

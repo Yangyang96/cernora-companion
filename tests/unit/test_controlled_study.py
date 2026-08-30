@@ -179,6 +179,13 @@ def test_terminal_outcomes_require_the_correct_closed_artifact() -> None:
         "implementation_lock_id": protocol.implementation_lock_id,
         "ledger_root_sha256": "9" * 64,
         "report_sha256": "0" * 64,
+        "files": [
+            {
+                "path": "report.json",
+                "byte_length": 1,
+                "sha256": "0" * 64,
+            }
+        ],
     }
     diagnostic = materialize_study_artifact_manifest(
         {
