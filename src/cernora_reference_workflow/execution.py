@@ -203,6 +203,32 @@ class TrialResultManifest(StrictContract):
         return self
 
 
+class ControlledTrialResultManifest(StrictContract):
+    """Immutable V2 Trial result without a legacy task-specific RunReport."""
+
+    schema_version: Literal["cernora.reference.controlled-trial-result/v1"]
+    result_id: Digest
+    execution_id: Digest
+    run_plan_id: Digest
+    trial_id: Digest
+    experiment_id: Digest
+    selected_attempt_id: Digest
+    selected_attempt_artifact_id: Digest
+    selected_attempt_sha256: Digest
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> ControlledTrialResultManifest:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"result_id"})
+        )
+        if self.result_id != expected:
+            raise ValueError("controlled Trial result identity mismatch")
+        return self
+
+
+TrialResultAuthority = TrialResultManifest | ControlledTrialResultManifest
+
+
 class TrialManifest(StrictContract):
     schema_version: Literal["cernora.reference.trial-manifest/v1"]
     trial_manifest_id: Digest
@@ -393,7 +419,7 @@ class ExecutionState:
     record: ExecutionRecord
     trial_slots: ExecutionTrialSlots
     active_attempts: tuple[ActiveAttemptRecord, ...]
-    trial_results: tuple[TrialResultManifest, ...]
+    trial_results: tuple[TrialResultAuthority, ...]
     trial_manifests: tuple[TrialManifest, ...]
     checkpoints: tuple[ExecutionCheckpoint, ...]
     adopted_trial_ids: tuple[str, ...]
@@ -572,7 +598,7 @@ def _result_path(root: Path, trial_id: str) -> Path:
     return root / "results" / trial_id
 
 
-def _verify_trial_result(
+def _verify_legacy_trial_result(
     path: Path,
     *,
     record: ExecutionRecord,
@@ -690,14 +716,94 @@ def _verify_trial_result(
     return result
 
 
+def _verify_controlled_trial_result(
+    path: Path,
+    *,
+    record: ExecutionRecord,
+    run_plan: ExecutionRunPlan,
+    slot: ExecutionTrialSlot,
+    active_records: list[ActiveAttemptRecord],
+    artifacts: dict[tuple[str, int], _AttemptArtifact],
+) -> ControlledTrialResultManifest:
+    files = closed_regular_tree(path)
+    if set(files) != {"manifest.json"}:
+        raise ContractError("controlled Trial result has an invalid closed file set")
+    result = _load_canonical(files["manifest.json"], ControlledTrialResultManifest)
+    attempt_artifacts = tuple(
+        artifacts.get((slot.trial_id, active.ordinal)) for active in active_records
+    )
+    if not attempt_artifacts or any(item is None for item in attempt_artifacts):
+        raise ContractError("controlled Trial result requires a complete Attempt chain")
+    verified_artifacts = tuple(item for item in attempt_artifacts if item is not None)
+    if any(item.controlled_attempt is None for item in verified_artifacts):
+        raise ContractError("controlled Trial result requires only V2 ControlledAttempts")
+    selected = verified_artifacts[-1]
+    controlled = verify_controlled_attempt_artifact(
+        _attempt_path(path.parents[1], slot.trial_id, len(verified_artifacts))
+    )
+    if (
+        result.execution_id != record.execution_id
+        or result.run_plan_id != run_plan.run_plan_id
+        or result.trial_id != slot.trial_id
+        or result.experiment_id != slot.slot.experiment_id
+        or result.selected_attempt_id != selected.terminal.attempt_id
+        or result.selected_attempt_artifact_id != controlled.manifest.artifact_id
+        or result.selected_attempt_sha256
+        != sha256_file(
+            _attempt_path(path.parents[1], slot.trial_id, len(verified_artifacts)) / "attempt.json"
+        )
+    ):
+        raise ContractError("controlled Trial result does not bind its frozen Attempt")
+    return result
+
+
+def _verify_trial_result(
+    path: Path,
+    *,
+    record: ExecutionRecord,
+    run_plan: ExecutionRunPlan,
+    slot: ExecutionTrialSlot,
+    active_records: list[ActiveAttemptRecord],
+    artifacts: dict[tuple[str, int], _AttemptArtifact],
+) -> TrialResultAuthority:
+    payload = load_json_file(path / "manifest.json")
+    if not isinstance(payload, dict):
+        raise ContractError("Trial result manifest must contain one JSON object")
+    if payload.get("schema_version") == "cernora.reference.controlled-trial-result/v1":
+        return _verify_controlled_trial_result(
+            path,
+            record=record,
+            run_plan=run_plan,
+            slot=slot,
+            active_records=active_records,
+            artifacts=artifacts,
+        )
+    return _verify_legacy_trial_result(
+        path,
+        record=record,
+        run_plan=run_plan,
+        slot=slot,
+        active_records=active_records,
+        artifacts=artifacts,
+    )
+
+
 def _build_diagnostic(
     record: ExecutionRecord,
     run_plan: ExecutionRunPlan,
     slots: ExecutionTrialSlots,
     trials: tuple[TrialManifest, ...],
-    results: dict[str, TrialResultManifest],
+    results: dict[str, TrialResultAuthority],
 ) -> ExecutionDiagnostic:
     trials_by_id = {item.trial_id: item for item in trials}
+
+    def result_status(result: TrialResultAuthority) -> Literal["evaluated", "unavailable"]:
+        if isinstance(result, TrialResultManifest) and isinstance(
+            result.evaluation, TrialEvaluationAvailable
+        ):
+            return "evaluated"
+        return "unavailable"
+
     diagnostic_trials = tuple(
         DiagnosticTrial(
             slot_index=slot.slot.slot_index,
@@ -705,11 +811,7 @@ def _build_diagnostic(
             trial_slot_id=slot.slot.trial_slot_id,
             lifecycle_state=trials_by_id[slot.trial_id].terminal_state,
             attempt_count=len(trials_by_id[slot.trial_id].attempts),
-            result_status=(
-                "evaluated"
-                if isinstance(results[slot.trial_id].evaluation, TrialEvaluationAvailable)
-                else "unavailable"
-            ),
+            result_status=result_status(results[slot.trial_id]),
         )
         for slot in slots.slots
     )
@@ -874,8 +976,8 @@ def _load_state(root: Path, *, allow_ambiguous: bool) -> ExecutionState:
         if (trial_id, ordinal) not in artifacts:
             raise ContractError("Attempt artifact has no immutable active record")
 
-    trial_results: list[TrialResultManifest] = []
-    result_by_trial: dict[str, TrialResultManifest] = {}
+    trial_results: list[TrialResultAuthority] = []
+    result_by_trial: dict[str, TrialResultAuthority] = {}
     for item in slot_set.slots:
         result_root = _result_path(root, item.trial_id)
         if not result_root.exists():
@@ -1283,6 +1385,74 @@ def publish_trial_result(
         raise
 
 
+def publish_controlled_trial_result(
+    root: Path,
+    trial_id: str,
+) -> ControlledTrialResultManifest:
+    """Atomically close one V2 Trial from its adopted ControlledAttempt chain."""
+
+    state = reload_execution(root)
+    if state.manifest is not None:
+        raise ContractError("completed Execution cannot append a controlled Trial result")
+    slot = next((item for item in state.trial_slots.slots if item.trial_id == trial_id), None)
+    if slot is None:
+        raise ContractError("cannot publish a controlled result for an unknown Trial")
+    if _result_path(root, trial_id).exists():
+        raise ContractError("controlled Trial result destination must not already exist")
+    records = [item for item in state.active_attempts if item.trial_id == trial_id]
+    if not records:
+        raise ContractError("controlled Trial result requires at least one terminal Attempt")
+    artifacts = {
+        (trial_id, item.ordinal): _verify_attempt(_attempt_path(root, trial_id, item.ordinal))
+        for item in records
+    }
+    chain = tuple(artifacts[(trial_id, item.ordinal)] for item in records)
+    if any(item.controlled_attempt is None for item in chain):
+        raise ContractError("controlled Trial result requires only V2 ControlledAttempts")
+    specification = next(
+        item
+        for item in state.run_plan.experiment_specs
+        if item.experiment_id == slot.slot.experiment_id
+    )
+    if not isinstance(specification, ControlledExperimentSpecV2):
+        raise ContractError("controlled Trial result requires a controlled V2 plan")
+    if chain[-1].terminal.retry_eligible and len(records) <= specification.retry.max_retries:
+        raise ContractError("retry-eligible Trial cannot close before its frozen retry")
+    selected_root = _attempt_path(root, trial_id, records[-1].ordinal)
+    selected = verify_controlled_attempt_artifact(selected_root)
+    staging = Path(tempfile.mkdtemp(prefix=f".{trial_id}.staging-", dir=root / "results"))
+    try:
+        payload: dict[str, object] = {
+            "schema_version": "cernora.reference.controlled-trial-result/v1",
+            "execution_id": state.record.execution_id,
+            "run_plan_id": state.run_plan.run_plan_id,
+            "trial_id": trial_id,
+            "experiment_id": slot.slot.experiment_id,
+            "selected_attempt_id": selected.attempt.attempt_id,
+            "selected_attempt_artifact_id": selected.manifest.artifact_id,
+            "selected_attempt_sha256": sha256_file(selected_root / "attempt.json"),
+        }
+        payload["result_id"] = canonical_content_id(payload, excluded=frozenset())
+        result = ControlledTrialResultManifest.model_validate(payload)
+        (staging / "manifest.json").write_bytes(
+            canonical_json_bytes(result.model_dump(mode="json"))
+        )
+        _verify_controlled_trial_result(
+            staging,
+            record=state.record,
+            run_plan=state.run_plan,
+            slot=slot,
+            active_records=records,
+            artifacts=artifacts,
+        )
+        atomic_publish_directory(staging, _result_path(root, trial_id))
+        return result
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+
+
 def publish_trial_manifest(root: Path, trial_id: str) -> TrialManifest:
     state = reload_execution(root)
     if state.manifest is not None:
@@ -1571,6 +1741,7 @@ def rebuild_execution_pack(pack_root: Path, destination: Path) -> ExecutionManif
 __all__ = [
     "ActiveAttemptRecord",
     "AttemptBinding",
+    "ControlledTrialResultManifest",
     "ExecutionCheckpoint",
     "ExecutionManifest",
     "ExecutionPackManifest",
@@ -1582,6 +1753,7 @@ __all__ = [
     "TrialResultManifest",
     "initialize_execution",
     "publish_checkpoint",
+    "publish_controlled_trial_result",
     "publish_execution_manifest",
     "publish_execution_pack",
     "publish_trial_manifest",

@@ -31,6 +31,7 @@ from cernora_reference_workflow.execution import (
     ClosedFile,
     ExecutionPackManifest,
     TrialEvaluationAvailable,
+    TrialResultManifest,
     reload_execution,
     verify_execution_pack,
 )
@@ -185,6 +186,8 @@ def _normalize_snapshot(pack_root: Path) -> BatchInput:
         slot = execution_slot.slot
         trial_manifest = manifests[execution_slot.trial_id]
         result = results[execution_slot.trial_id]
+        if not isinstance(result, TrialResultManifest):
+            raise ContractError("M1 normalizer does not accept a controlled V2 Trial result")
         report = RunReport.from_file(
             execution_root / "results" / execution_slot.trial_id / "run-report.json"
         )

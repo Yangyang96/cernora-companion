@@ -56,3 +56,22 @@ def test_repeat_runner_adopts_one_v2_attempt_without_the_legacy_m4_store(
     artifact = verify_controlled_attempt_artifact(adapter.requests[0].destination)
     assert artifact.attempt.trial_id == outcome.state.active_attempts[0].trial_id
     assert artifact.manifest.experiment_id == adapter.requests[0].specification.experiment_id
+
+
+def test_repeat_runner_finalizes_a_v2_lifecycle_trial_before_stopping(
+    tmp_path: Path,
+) -> None:
+    _, run_plan = study_payload_for_m4()
+    root = tmp_path / "execution"
+    initialize_execution(root, run_plan, nonce="c" * 64)
+    adapter = FakeStudyAttemptAdapter()
+
+    advance_repeat(root, adapter)
+    stopped = advance_repeat(root, adapter, should_stop=lambda: True)
+
+    assert stopped.status == "stopped"
+    assert len(adapter.requests) == 1
+    assert len(stopped.state.trial_results) == 1
+    assert len(stopped.state.trial_manifests) == 1
+    assert stopped.state.trial_manifests[0].attempts[0].artifact_kind == "controlled-attempt"
+    assert stopped.state.checkpoints[-1].status == "stopped"

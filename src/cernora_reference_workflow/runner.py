@@ -24,6 +24,7 @@ from cernora_reference_workflow.execution import (
     ExecutionTrialSlot,
     initialize_execution,
     publish_checkpoint,
+    publish_controlled_trial_result,
     publish_execution_manifest,
     publish_execution_pack,
     publish_trial_manifest,
@@ -245,14 +246,18 @@ def _finalize_trial(root: Path, trial: ExecutionTrialSlot) -> None:
         return
 
     spec = _specification(state, trial)
-    if not isinstance(spec, ExperimentSpec):
-        raise ContractError("controlled V2 Attempt finalization is not yet implemented")
     attempts = _trial_attempts(root, state, trial.trial_id)
     if not attempts:
         raise ContractError("Trial cannot be finalized without a terminal Attempt")
     selected = attempts[-1]
     if selected.terminal.retry_eligible and len(attempts) <= spec.retry.max_retries:
         raise ContractError("retry-eligible Trial still requires its frozen retry")
+    if isinstance(spec, ControlledExperimentSpecV2):
+        if any(item.kind != "controlled-attempt" for item in attempts):
+            raise ContractError("controlled V2 Trial contains a non-controlled Attempt")
+        publish_controlled_trial_result(root, trial.trial_id)
+        publish_trial_manifest(root, trial.trial_id)
+        return
     report_attempts = tuple(
         (item.terminal, item.source_trial_id, item.manifest_sha256) for item in attempts
     )

@@ -17,6 +17,7 @@ from cernora_reference_workflow.common import (
 from cernora_reference_workflow.execution import (
     ExecutionCheckpoint,
     ExecutionTrialSlot,
+    TrialResultManifest,
     initialize_execution,
     publish_execution_manifest,
     reload_execution,
@@ -243,7 +244,9 @@ def test_runner_evaluates_completed_export_and_publishes_available_result(
     )
 
     assert outcome.status == "completed"
-    assert outcome.state.trial_results[0].evaluation.status == "available"
+    result = outcome.state.trial_results[0]
+    assert isinstance(result, TrialResultManifest)
+    assert result.evaluation.status == "available"
     assert outcome.state.diagnostic is not None
     assert outcome.state.diagnostic.trials[0].result_status == "evaluated"
 

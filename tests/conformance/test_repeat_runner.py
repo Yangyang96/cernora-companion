@@ -21,7 +21,7 @@ from cernora_reference_workflow.common import (
     closed_regular_tree,
     load_json_file,
 )
-from cernora_reference_workflow.execution import verify_execution_pack
+from cernora_reference_workflow.execution import TrialResultManifest, verify_execution_pack
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
 from cernora_reference_workflow.freeze import AttemptCapture, freeze_attempt
 from cernora_reference_workflow.lifecycle import materialize_preterminal_record
@@ -278,12 +278,20 @@ def test_public_repeat_runner_closes_ordered_lifecycle_matrix_and_pack(
         "timed-out",
         "runtime-pre-terminal-failure",
     ] * 3
-    assert [item.evaluation.status for item in outcome.state.trial_results] == [
-        "available",
-        "available",
-        "available",
-        "unavailable",
-    ] * 3
+    evaluation_statuses: list[str] = []
+    for item in outcome.state.trial_results:
+        assert isinstance(item, TrialResultManifest)
+        evaluation_statuses.append(item.evaluation.status)
+    assert (
+        evaluation_statuses
+        == [
+            "available",
+            "available",
+            "available",
+            "unavailable",
+        ]
+        * 3
+    )
     assert outcome.pack_root is not None
     verify_execution_pack(outcome.pack_root)
 
