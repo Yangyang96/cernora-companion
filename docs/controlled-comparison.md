@@ -1,5 +1,9 @@
 # Controlled Comparison (Priority 4 Milestone 3)
 
+> Historical leaf surface: new Priority 4 studies publish this Core Comparison through the
+> Controlled Study Evidence Pack. The standalone command remains a verifier for frozen M3 inputs,
+> not a second orchestration path.
+
 Companion `0.3.0` and Cernora Core `0.1.4` are matching local release candidates. Neither has
 been publicly released. The companion assembles strict Core comparison input; Core alone derives
 statistics, conclusions, authoritative JSON, deterministic Markdown, and the closed output

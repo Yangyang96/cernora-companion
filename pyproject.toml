@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cernora-reference-workflow"
-version = "0.3.0"
+version = "0.4.0"
 description = "Pinned local reference workflow for Cernora coding-agent evidence"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

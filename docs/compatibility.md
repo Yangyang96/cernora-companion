@@ -33,6 +33,7 @@ the meaning or identity of existing artifacts.
 | M1 Repeat Runner | `0.2.0` | public wheel `0.1.2` | Frozen historical execution, Pack, and rebuild contract |
 | M2 Batch Summary | local candidate `0.2.1` | local candidate `0.1.3` | Additive strict Pack consumer; not publicly released |
 | M3 Controlled Comparison | local candidate `0.3.0` | local candidate `0.1.4` | Additive authority-bound comparison assembly; not publicly released |
+| M4 Controlled Study | local candidate `0.4.0` | local candidate `0.1.4` | Replacement orchestration; reuses M1 Execution Pack and M3 Core publication contracts |
 
 The M2 normalizer accepts one completed M1 Execution Pack, preserves its frozen RunPlan,
 Execution, Trial, Attempt, Evaluation, and lifecycle identities as source authority, and creates a
@@ -57,6 +58,11 @@ valid for their original readers, but cannot be used as M3 controlled-comparison
 is an additive boundary, not a migration. Core `0.1.4` owns pairing, fixed bootstrap statistics,
 Guardrails, failure migration, and the conclusion; Companion publishes no winner, ranking, or
 promotion decision.
+
+M4 keeps those readers but retires their standalone commands as a composition surface for new
+studies. One Companion ledger now owns preparation, reveal/acceptance, Repeat Runner advancement,
+pause/termination, completed Core publication, and offline rebuild. This changes orchestration,
+not the canonical bytes or meaning of historical M1–M3 artifacts.
 
 ## Report evolution
 

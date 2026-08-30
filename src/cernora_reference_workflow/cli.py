@@ -1,4 +1,4 @@
-"""Command-line surface for the Priority 4 Repeat Runner and batch normalizer."""
+"""Controlled Study CLI plus read-only historical Priority 4 migration commands."""
 
 from __future__ import annotations
 
@@ -11,10 +11,28 @@ from pathlib import Path
 from typing import Any
 
 from cernora_reference_workflow.batch_summary import summarize_execution_pack
-from cernora_reference_workflow.common import ContractError, canonical_json_bytes
+from cernora_reference_workflow.common import (
+    ContractError,
+    canonical_json_bytes,
+    load_json_file,
+    read_regular_file_bytes,
+)
 from cernora_reference_workflow.comparison_input import (
     ComparisonConfigurationError,
     compare_batch_summary,
+)
+from cernora_reference_workflow.controlled_study import (
+    ExecutionOutcome,
+    StudyIntent,
+)
+from cernora_reference_workflow.controlled_study import (
+    advance as advance_study,
+)
+from cernora_reference_workflow.controlled_study import (
+    prepare as prepare_study,
+)
+from cernora_reference_workflow.controlled_study import (
+    rebuild as rebuild_study,
 )
 from cernora_reference_workflow.execution import rebuild_execution_pack
 from cernora_reference_workflow.live_attempt import execute_qualified_live_attempt
@@ -29,6 +47,23 @@ class _UsageError(Exception):
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="experiment")
     commands = parser.add_subparsers(dest="command", required=True)
+    study = commands.add_parser("study", help="durable Controlled Study interface")
+    study_commands = study.add_subparsers(dest="study_command", required=True)
+    study_prepare = study_commands.add_parser("prepare", help="freeze one Study without execution")
+    study_prepare.add_argument("intent", type=Path)
+    study_prepare.add_argument("--output", type=Path, required=True)
+    study_advance = study_commands.add_parser(
+        "advance",
+        help="idempotently advance one Study by at most one external Attempt",
+    )
+    study_advance.add_argument("study_dir", type=Path)
+    study_advance.add_argument("--directive", type=Path, required=True)
+    study_rebuild = study_commands.add_parser(
+        "rebuild",
+        help="offline-verify and reproduce one terminal Study artifact",
+    )
+    study_rebuild.add_argument("artifact", type=Path)
+    study_rebuild.add_argument("--output", type=Path, required=True)
     verify = commands.add_parser("verify", help="strictly verify and print a RunPlan preflight")
     verify.add_argument("plan", type=Path)
 
@@ -87,6 +122,23 @@ def _preflight(plan: RunPlan) -> dict[str, Any]:
     }
 
 
+def _load_study_intent(path: Path) -> StudyIntent:
+    payload = load_json_file(path)
+    if not isinstance(payload, dict):
+        raise ContractError("Study Intent must contain a JSON object")
+    intent = StudyIntent.model_validate(payload)
+    if read_regular_file_bytes(path) != canonical_json_bytes(intent.model_dump(mode="json")):
+        raise ContractError("Study Intent must use canonical JSON")
+    return intent
+
+
+def _load_study_directive(path: Path) -> dict[str, object]:
+    payload = load_json_file(path)
+    if not isinstance(payload, dict):
+        raise ContractError("Study advance directive must contain a JSON object")
+    return payload
+
+
 @contextmanager
 def _graceful_stop() -> Iterator[Callable[[], bool]]:
     """Convert SIGINT into a stop request consumed only at a Trial boundary."""
@@ -106,6 +158,41 @@ def _graceful_stop() -> Iterator[Callable[[], bool]]:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "study":
+        study_outcome: ExecutionOutcome
+        if args.study_command == "prepare":
+            _require_new_directory(args.output)
+            study_outcome = prepare_study(_load_study_intent(args.intent), args.output)
+        elif args.study_command == "advance":
+            with _graceful_stop() as should_stop:
+                study_outcome = advance_study(
+                    args.study_dir,
+                    _load_study_directive(args.directive),
+                    executor=execute_qualified_live_attempt,
+                    should_stop=should_stop,
+                )
+        elif args.study_command == "rebuild":
+            _require_new_directory(args.output)
+            artifact = rebuild_study(args.artifact, args.output)
+            _emit(
+                {
+                    "artifact_id": artifact.artifact_id,
+                    "command": "study.rebuild",
+                    "kind": artifact.kind,
+                    "output": str(args.output),
+                    "status": artifact.terminal_status,
+                }
+            )
+            return 0
+        else:
+            raise AssertionError("argparse accepted an unknown Study command")
+        _emit(
+            {
+                "command": f"study.{args.study_command}",
+                **study_outcome.model_dump(mode="json"),
+            }
+        )
+        return 3 if study_outcome.status in {"paused", "terminated"} else 0
     if args.command == "verify":
         _emit(_preflight(RunPlan.from_file(args.plan)))
         return 0

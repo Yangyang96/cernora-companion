@@ -3,6 +3,18 @@
 Keep this repository and all generated artifacts private until every item below has observed,
 reviewable evidence. Running a subset is not publication approval.
 
+## Controlled Study 0.4.0 replacement gate
+
+- [ ] The only supported new-study CLI group exposes `prepare`, idempotent `advance`, and offline
+  `rebuild`; standalone M1–M3 commands are documented as historical readers.
+- [ ] One complete 9 × 2 × 3 offline fake-adapter Study uses the shared Repeat Runner, publishes
+  exactly 54 evaluated Attempts, and produces strict held-out-primary Batch/Comparison evidence.
+- [ ] Operator and ambiguous pauses publish diagnostic-only packs; incomplete evidence cannot
+  publish Batch or Comparison authority.
+- [ ] Two independent offline rebuilds rederive Core packages and reproduce exact artifact bytes.
+- [ ] Tests, Ruff, format, strict mypy, offline builds, and independent review pass without a live
+  Runtime invocation.
+
 ## Source and dependency boundary
 
 - [x] The exact `cernora==0.1.2` public wheel installs in a clean CPython 3.12 and 3.13 project

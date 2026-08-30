@@ -26,6 +26,17 @@ are migration sources. Their verified receipt handling and failure classifiers m
 but their parallel state model is not a second supported foundation and must not acquire new
 public behavior.
 
+The CLI mirrors that boundary under one command group:
+
+```sh
+experiment study prepare STUDY_INTENT.json --output NEW_STUDY
+experiment study advance STUDY --directive ADVANCE_DIRECTIVE.json
+experiment study rebuild TERMINAL_ARTIFACT --output NEW_REBUILD
+```
+
+Historical top-level Repeat Runner, Batch, and Comparison commands remain parsers for their frozen
+M1–M3 artifacts. New controlled work must not compose those commands into a parallel workflow.
+
 ## Frozen authority before execution
 
 `prepare` separates caller choices from derived protocol data:
@@ -88,6 +99,12 @@ state. `advance` first reloads and verifies the ledger, then either returns the 
 outcome or claims the next transition. Repeating the same call must not create a second Trial or
 Attempt. An active Attempt without one verifiable terminal artifact becomes
 `ambiguous-active-attempt`; it is never guessed or silently retried.
+
+Execution stepping uses a two-entry handshake. `execution-step-claimed` binds the caller's prior
+state and exact Execution snapshot before the Repeat Runner may claim work;
+`execution-step-advanced` closes that claim after at most one external Attempt. If a process exits
+between them, recovery may reconcile, adopt, and finalize progress under the existing claim, but
+it is forbidden to start the next Attempt until that Study boundary is closed.
 
 The durable study directory is authoritative custody. Scratch directories and Runtime workspaces
 are replaceable staging areas and cannot be the sole home of a receipt, Attempt record, terminal

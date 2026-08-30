@@ -11,8 +11,11 @@ import pytest
 from cernora_reference_workflow import cli
 from cernora_reference_workflow.common import canonical_json_bytes
 from cernora_reference_workflow.comparison_input import ComparisonConfigurationError
+from cernora_reference_workflow.controlled_study import materialize_study_intent
+from cernora_reference_workflow.live_attempt import execute_qualified_live_attempt
 from cernora_reference_workflow.run_plan import materialize_run_plan
 from tests.unit.test_run_plan import valid_payload
+from tests.unit.test_study_projection import study_payload_for_m4
 
 
 def _plan_file(tmp_path: Path) -> tuple[Path, str]:
@@ -83,6 +86,92 @@ def test_rebuild_routes_to_offline_pack_rebuilder(
     assert calls == [(pack, destination)]
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "completed"
+
+
+def test_study_cli_exposes_prepare_advance_and_offline_rebuild(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    intent_payload, _ = study_payload_for_m4()
+    intent = materialize_study_intent(intent_payload)
+    intent_path = tmp_path / "intent.json"
+    intent_path.write_bytes(canonical_json_bytes(intent.model_dump(mode="json")))
+    study_root = tmp_path / "study"
+    calls: list[tuple[str, Path]] = []
+
+    def fake_prepare(_intent: object, output: Path) -> object:
+        calls.append(("prepare", output))
+        return SimpleNamespace(
+            status="prepared",
+            model_dump=lambda **_kwargs: {"status": "prepared", "study_id": "a" * 64},
+        )
+
+    monkeypatch.setattr(cli, "prepare_study", fake_prepare)
+    assert cli.main(("study", "prepare", str(intent_path), "--output", str(study_root))) == 0
+    assert calls == [("prepare", study_root)]
+    assert json.loads(capsys.readouterr().out)["command"] == "study.prepare"
+
+    study_root.mkdir()
+    directive_path = tmp_path / "directive.json"
+    directive_path.write_bytes(
+        canonical_json_bytes(
+            {
+                "schema_version": "cernora.reference.advance-directive/v1",
+                "action": "request-reveal",
+            }
+        )
+    )
+
+    def fake_advance(
+        root: Path,
+        directive: object,
+        *,
+        executor: object,
+        should_stop: Callable[[], bool],
+    ) -> object:
+        calls.append(("advance", root))
+        assert not should_stop()
+        assert executor is execute_qualified_live_attempt
+        return SimpleNamespace(
+            status="awaiting-reveal",
+            model_dump=lambda **_kwargs: {
+                "status": "awaiting-reveal",
+                "study_id": "a" * 64,
+            },
+        )
+
+    monkeypatch.setattr(cli, "advance_study", fake_advance)
+    assert (
+        cli.main(
+            (
+                "study",
+                "advance",
+                str(study_root),
+                "--directive",
+                str(directive_path),
+            )
+        )
+        == 0
+    )
+    assert calls[-1] == ("advance", study_root)
+    assert json.loads(capsys.readouterr().out)["command"] == "study.advance"
+
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    rebuilt = tmp_path / "rebuilt-study"
+
+    def fake_study_rebuild(source: Path, output: Path) -> object:
+        assert (source, output) == (artifact, rebuilt)
+        return SimpleNamespace(
+            artifact_id="b" * 64,
+            kind="diagnostic-pack",
+            terminal_status="paused",
+        )
+
+    monkeypatch.setattr(cli, "rebuild_study", fake_study_rebuild)
+    assert cli.main(("study", "rebuild", str(artifact), "--output", str(rebuilt))) == 0
+    assert json.loads(capsys.readouterr().out)["command"] == "study.rebuild"
 
 
 def test_compare_routes_strict_inputs_and_reports_honest_conclusion(

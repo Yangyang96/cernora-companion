@@ -1,5 +1,9 @@
 # Companion Repeat Runner, Batch Summary, and Comparison (Priority 4 Milestones 1–3)
 
+> Historical compatibility surface: new Priority 4 work uses the Controlled Study
+> `prepare`/`advance`/`rebuild` seam. This document remains authoritative only for frozen M1–M3
+> inputs and leaf contracts.
+
 The Companion Repeat Runner is the frozen `cernora-reference-workflow==0.2.0` Milestone 1
 orchestration boundary. It is not Cernora Core, a generic Runtime connector, or a native batch
 service. Its only live adapter is the source-tree-only qualified Harbor `0.16.1` / Codex `0.148.0`

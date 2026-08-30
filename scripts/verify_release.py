@@ -42,23 +42,23 @@ EXPECTED_CORE_M3_WHEEL_SHA256 = "5b847837b7182b3ece8054eb5187fde4f835582787b406e
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _verify_m3_release_surface() -> None:
+def _verify_m4_release_surface() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    if project["project"]["version"] != "0.3.0":
-        raise RuntimeError("Priority 4 M3 requires companion version 0.3.0")
+    if project["project"]["version"] != "0.4.0":
+        raise RuntimeError("Priority 4 M4 requires companion version 0.4.0")
     if project["project"].get("scripts", {}).get("experiment") != (
         "cernora_reference_workflow.cli:main"
     ):
-        raise RuntimeError("Priority 4 M3 experiment CLI entry point is missing")
+        raise RuntimeError("Priority 4 M4 experiment CLI entry point is missing")
 
     dependencies = project["project"].get("dependencies", [])
     if "cernora==0.1.4" not in dependencies:
-        raise RuntimeError("Priority 4 M3 requires the exact Core 0.1.4 candidate")
+        raise RuntimeError("Priority 4 M4 requires the exact Core 0.1.4 candidate")
 
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     local = [item for item in lock["package"] if item["name"] == "cernora-reference-workflow"]
-    if len(local) != 1 or local[0]["version"] != "0.3.0":
-        raise RuntimeError("uv.lock does not bind companion version 0.3.0")
+    if len(local) != 1 or local[0]["version"] != "0.4.0":
+        raise RuntimeError("uv.lock does not bind companion version 0.4.0")
     core = [item for item in lock["package"] if item["name"] == "cernora"]
     if len(core) != 1 or core[0]["version"] != "0.1.4":
         raise RuntimeError("uv.lock does not bind Core version 0.1.4")
@@ -75,6 +75,7 @@ def _verify_m3_release_surface() -> None:
     required = (
         ROOT / "docs/batch-summary.md",
         ROOT / "docs/controlled-comparison.md",
+        ROOT / "docs/controlled-study.md",
         ROOT / "docs/repeat-runner.md",
         ROOT / "examples/m3-offline/batch-input.json",
         ROOT / "examples/m3-offline/comparison-plan.json",
@@ -98,7 +99,7 @@ def _verify_m3_release_surface() -> None:
         ROOT / "tests/unit/test_controlled_run_plan.py",
     )
     if any(not path.is_file() or path.is_symlink() or not path.read_bytes() for path in required):
-        raise RuntimeError("Priority 4 M3 release surface is incomplete")
+        raise RuntimeError("Priority 4 M4 release surface is incomplete")
 
 
 def _run(command: list[str]) -> None:
@@ -258,7 +259,7 @@ def main() -> int:
     files = _repository_files()
     _require_secret_free_files(files)
     _verify_no_cernora_internal_imports(files)
-    _verify_m3_release_surface()
+    _verify_m4_release_surface()
     _verify_generated_artifacts()
     _run([sys.executable, "-m", "pytest", "-q"])
     _run([sys.executable, "-m", "ruff", "check", "."])
