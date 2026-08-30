@@ -21,6 +21,7 @@ from cernora_reference_workflow.execution import (
     reload_execution,
     start_attempt,
 )
+from cernora_reference_workflow.experiment_spec import ExperimentSpec
 from cernora_reference_workflow.lifecycle import (
     TerminalRecord,
     materialize_preterminal_record,
@@ -82,6 +83,7 @@ def publish_unavailable_result(root: Path, trial_id: str) -> None:
         for item in state.run_plan.experiment_specs
         if item.experiment_id == slot.slot.experiment_id
     )
+    assert isinstance(spec, ExperimentSpec)
     attempts: list[tuple[TerminalRecord, str, str | None]] = []
     for active in (item for item in state.active_attempts if item.trial_id == trial_id):
         attempt_root = root / "attempts" / trial_id / f"{active.ordinal:04d}"

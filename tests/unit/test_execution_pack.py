@@ -18,6 +18,7 @@ from cernora_reference_workflow.execution import (
     start_attempt,
     verify_execution_pack,
 )
+from cernora_reference_workflow.experiment_spec import ExperimentSpec
 from cernora_reference_workflow.export import publish_completed_export
 from cernora_reference_workflow.offline import evaluate_frozen_export
 from cernora_reference_workflow.report_builder import build_run_report
@@ -53,6 +54,7 @@ def test_evaluated_trial_result_binds_report_evaluation_and_portable_spec(
     state = initialize_execution(root, small_plan(repetitions=1), nonce="4" * 64)
     slot = state.trial_slots.slots[0]
     spec = state.run_plan.experiment_specs[0]
+    assert isinstance(spec, ExperimentSpec)
     start_attempt(root, slot.trial_id)
     attempt = root / "attempts" / slot.trial_id / "0001"
     export_staging = attempt.parent / ".export-staging"

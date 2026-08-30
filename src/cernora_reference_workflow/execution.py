@@ -24,6 +24,10 @@ from cernora_reference_workflow.common import (
     sha256_file,
     validate_relative_path,
 )
+from cernora_reference_workflow.controlled_run_plan import (
+    ControlledRunPlanV2,
+    ControlledTrialSlotV2,
+)
 from cernora_reference_workflow.experiment_spec import Digest, NonEmpty, StrictContract
 from cernora_reference_workflow.export import verify_completed_export
 from cernora_reference_workflow.lifecycle import (
@@ -42,6 +46,11 @@ from cernora_reference_workflow.run_plan import ConnectorIdentity, RunPlan, Tria
 
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
+ExecutionRunPlan = RunPlan | ControlledRunPlanV2
+ExecutionSlotAuthority = Annotated[
+    TrialSlot | ControlledTrialSlotV2,
+    Field(discriminator="schema_version"),
+]
 
 
 class ExecutionRecord(StrictContract):
@@ -52,7 +61,7 @@ class ExecutionRecord(StrictContract):
     run_plan_sha256: Digest
     trial_slots_sha256: Digest
     planned_trial_count: PositiveInt
-    companion_version: Literal["0.2.0"]
+    companion_version: Literal["0.2.0", "0.3.0", "0.4.0"]
     connector: ConnectorIdentity
 
     @model_validator(mode="after")
@@ -69,7 +78,7 @@ class ExecutionTrialSlot(StrictContract):
     schema_version: Literal["cernora.reference.execution-trial-slot/v1"]
     execution_id: Digest
     trial_id: Digest
-    slot: TrialSlot
+    slot: ExecutionSlotAuthority
 
     @model_validator(mode="after")
     def validate_identity(self) -> ExecutionTrialSlot:
@@ -374,7 +383,7 @@ class _AttemptArtifact:
 
 @dataclass(frozen=True)
 class ExecutionState:
-    run_plan: RunPlan
+    run_plan: ExecutionRunPlan
     record: ExecutionRecord
     trial_slots: ExecutionTrialSlots
     active_attempts: tuple[ActiveAttemptRecord, ...]
@@ -414,7 +423,7 @@ def _publish_file(path: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _slot_set(plan: RunPlan, execution_id: str) -> ExecutionTrialSlots:
+def _slot_set(plan: ExecutionRunPlan, execution_id: str) -> ExecutionTrialSlots:
     slots = tuple(
         ExecutionTrialSlot(
             schema_version="cernora.reference.execution-trial-slot/v1",
@@ -436,7 +445,7 @@ def _slot_set(plan: RunPlan, execution_id: str) -> ExecutionTrialSlots:
 
 
 def initialize_execution(
-    destination: Path, run_plan: RunPlan, *, nonce: str | None = None
+    destination: Path, run_plan: ExecutionRunPlan, *, nonce: str | None = None
 ) -> ExecutionState:
     """Atomically freeze an Execution and its complete slot namespace."""
 
@@ -552,7 +561,7 @@ def _verify_trial_result(
     path: Path,
     *,
     record: ExecutionRecord,
-    run_plan: RunPlan,
+    run_plan: ExecutionRunPlan,
     slot: ExecutionTrialSlot,
     active_records: list[ActiveAttemptRecord],
     artifacts: dict[tuple[str, int], _AttemptArtifact],
@@ -668,7 +677,7 @@ def _verify_trial_result(
 
 def _build_diagnostic(
     record: ExecutionRecord,
-    run_plan: RunPlan,
+    run_plan: ExecutionRunPlan,
     slots: ExecutionTrialSlots,
     trials: tuple[TrialManifest, ...],
     results: dict[str, TrialResultManifest],
@@ -703,8 +712,17 @@ def _build_diagnostic(
     return ExecutionDiagnostic.model_validate(payload)
 
 
+def _load_run_plan(path: Path) -> ExecutionRunPlan:
+    payload = load_json_file(path)
+    if not isinstance(payload, dict):
+        raise ContractError("RunPlan must contain one JSON object")
+    if payload.get("schema_version") == "cernora.reference.controlled-run-plan/v2":
+        return ControlledRunPlanV2.from_file(path)
+    return RunPlan.from_file(path)
+
+
 def _load_state(root: Path, *, allow_ambiguous: bool) -> ExecutionState:
-    run_plan = RunPlan.from_file(root / "run-plan.json")
+    run_plan = _load_run_plan(root / "run-plan.json")
     record = _load_canonical(root / "execution.json", ExecutionRecord)
     slot_set = _load_canonical(root / "trial-slots.json", ExecutionTrialSlots)
     expected_slots = _slot_set(run_plan, record.execution_id)

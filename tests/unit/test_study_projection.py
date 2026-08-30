@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +18,7 @@ from cernora_reference_workflow.controlled_study import (
     materialize_study_analysis_policy,
     materialize_study_intent,
 )
+from cernora_reference_workflow.execution import initialize_execution, reload_execution
 from cernora_reference_workflow.study_projection import (
     bind_study_run_plan,
     case_authority_sha256,
@@ -130,6 +132,22 @@ def test_study_protocol_binds_the_existing_m4_run_plan_without_core_changes() ->
         item.trial_slot_id for item in run_plan.expand_trial_slots()
     )
     assert protocol.planned_trial_count == run_plan.planned_trial_count == 54
+
+
+def test_existing_execution_engine_freezes_the_bound_v2_study_plan(tmp_path: Path) -> None:
+    payload, run_plan = study_payload_for_m4()
+    intent = materialize_study_intent(payload)
+    protocol = compile_study_protocol(intent)
+    binding = bind_study_run_plan(intent, protocol, run_plan)
+
+    initialized = initialize_execution(tmp_path / "execution", run_plan, nonce="a" * 64)
+    reloaded = reload_execution(tmp_path / "execution")
+
+    assert initialized == reloaded
+    assert reloaded.run_plan == run_plan
+    assert tuple(item.slot.trial_slot_id for item in reloaded.trial_slots.slots) == (
+        binding.ordered_trial_slot_ids
+    )
 
 
 def test_study_run_plan_binding_rejects_case_authority_drift() -> None:

@@ -16,6 +16,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 from cernora_reference_workflow.attempt_record import verify_preterminal_attempt
 from cernora_reference_workflow.common import ContractError, load_json_file, sha256_file
+from cernora_reference_workflow.controlled_experiment_spec import ControlledExperimentSpecV2
 from cernora_reference_workflow.execution import (
     ActiveAttemptRecord,
     ExecutionState,
@@ -55,7 +56,7 @@ class _AttemptRequest:
     execution_root: Path
     destination: Path
     trial: ExecutionTrialSlot
-    specification: ExperimentSpec
+    specification: ExperimentSpec | ControlledExperimentSpecV2
     active_record: ActiveAttemptRecord
 
 
@@ -177,7 +178,9 @@ def _attempt_facts(path: Path) -> _AttemptFacts:
     )
 
 
-def _specification(state: ExecutionState, trial: ExecutionTrialSlot) -> ExperimentSpec:
+def _specification(
+    state: ExecutionState, trial: ExecutionTrialSlot
+) -> ExperimentSpec | ControlledExperimentSpecV2:
     return next(
         item
         for item in state.run_plan.experiment_specs
@@ -237,6 +240,8 @@ def _finalize_trial(root: Path, trial: ExecutionTrialSlot) -> None:
         return
 
     spec = _specification(state, trial)
+    if not isinstance(spec, ExperimentSpec):
+        raise ContractError("controlled V2 Attempt finalization is not yet implemented")
     attempts = _trial_attempts(root, state, trial.trial_id)
     if not attempts:
         raise ContractError("Trial cannot be finalized without a terminal Attempt")
