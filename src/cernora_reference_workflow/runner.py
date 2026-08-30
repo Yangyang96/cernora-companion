@@ -40,7 +40,7 @@ from cernora_reference_workflow.report_builder import (
 )
 from cernora_reference_workflow.run_plan import RunPlan
 
-RunnerStatus = Literal["stopped", "budget-exhausted", "completed"]
+RunnerStatus = Literal["running", "stopped", "budget-exhausted", "completed"]
 Clock = Callable[[], float]
 WallClock = Callable[[], float]
 Sleeper = Callable[[float], None]
@@ -243,6 +243,7 @@ def _drive(
     wall_clock: WallClock,
     sleeper: Sleeper,
     reject_terminal_budget: bool,
+    return_after_attempt: bool = False,
 ) -> RunnerOutcome:
     state = reload_execution(root)
     if state.manifest is not None:
@@ -373,7 +374,9 @@ def _drive(
         )
         # Strict reload proves that the executor atomically published the exact
         # artifact bound by the active record. An absent artifact stays ambiguous.
-        reload_execution(root)
+        reloaded = reload_execution(root)
+        if return_after_attempt:
+            return RunnerOutcome(status="running", state=reloaded, pack_root=None)
 
 
 def _publish_completed_pack(root: Path, pack_root: Path) -> RunnerOutcome:
@@ -408,6 +411,31 @@ def run_repeat(
     )
 
 
+def advance_repeat(
+    root: Path,
+    executor: _AttemptExecutor,
+    *,
+    pack_root: Path | None = None,
+    should_stop: StopPredicate | None = None,
+    clock: Clock = time.monotonic,
+    wall_clock: WallClock = time.time,
+    sleeper: Sleeper = time.sleep,
+) -> RunnerOutcome:
+    """Advance one existing Repeat Execution by at most one external Attempt."""
+
+    return _drive(
+        root,
+        executor,
+        pack_root=pack_root or root.with_name(f"{root.name}.pack"),
+        should_stop=should_stop,
+        clock=clock,
+        wall_clock=wall_clock,
+        sleeper=sleeper,
+        reject_terminal_budget=False,
+        return_after_attempt=True,
+    )
+
+
 def resume_repeat(
     root: Path,
     executor: _AttemptExecutor,
@@ -434,6 +462,7 @@ def resume_repeat(
 
 __all__ = [
     "RunnerOutcome",
+    "advance_repeat",
     "resume_repeat",
     "run_repeat",
 ]

@@ -17,6 +17,7 @@ from cernora_reference_workflow.common import (
 from cernora_reference_workflow.execution import (
     ExecutionCheckpoint,
     ExecutionTrialSlot,
+    initialize_execution,
     publish_execution_manifest,
     reload_execution,
 )
@@ -28,6 +29,7 @@ from cernora_reference_workflow.lifecycle import materialize_preterminal_record
 from cernora_reference_workflow.run_plan import RunPlan, materialize_run_plan
 from cernora_reference_workflow.runner import (
     _AttemptRequest,
+    advance_repeat,
     resume_repeat,
     run_repeat,
 )
@@ -150,6 +152,26 @@ def test_runner_completes_ordered_two_by_two_by_three_matrix(tmp_path: Path) -> 
         )
         * 4
     )
+
+
+def test_advance_repeat_claims_at_most_one_external_attempt(tmp_path: Path) -> None:
+    root = tmp_path / "execution"
+    plan = plan_with(repetitions=2)
+    initialize_execution(root, plan, nonce="a" * 64)
+    executor = PreterminalExecutor()
+
+    first = advance_repeat(root, executor)
+    assert first.status == "running"
+    assert len(executor.requests) == 1
+
+    second = advance_repeat(root, executor)
+    assert second.status == "running"
+    assert len(executor.requests) == 2
+
+    completed = advance_repeat(root, executor)
+    assert completed.status == "completed"
+    assert len(executor.requests) == 2
+    assert completed.pack_root is not None
 
 
 def test_runner_evaluates_completed_export_and_publishes_available_result(
