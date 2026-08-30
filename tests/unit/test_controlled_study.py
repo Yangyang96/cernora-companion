@@ -319,7 +319,7 @@ def test_study_intent_rejects_development_evidence_outside_its_split() -> None:
         materialize_study_intent(payload)
 
 
-def test_advance_is_idempotent_and_binds_fresh_acceptance(tmp_path: Path) -> None:
+def test_advance_is_idempotent_and_rejects_unbound_legacy_accept(tmp_path: Path) -> None:
     repository = Path(__file__).resolve().parents[2]
     custody_parent = repository / ".agent" / "test-controlled-study"
     custody_parent.mkdir(parents=True, exist_ok=True)
@@ -357,27 +357,18 @@ def test_advance_is_idempotent_and_binds_fresh_acceptance(tmp_path: Path) -> Non
         )
         assert awaiting_acceptance.status == "awaiting-acceptance"
 
-        with pytest.raises(ControlledStudyError) as stale:
+        with pytest.raises(ControlledStudyError) as rejected:
             advance(
                 destination,
                 {
                     "schema_version": "cernora.reference.advance-directive/v1",
                     "action": "accept",
-                    "acceptance_id": "0" * 64,
+                    "acceptance_id": awaiting_acceptance.acceptance_id,
                 },
             )
-        assert stale.value.code == "stale-acceptance"
-
-        accepted = {
-            "schema_version": "cernora.reference.advance-directive/v1",
-            "action": "accept",
-            "acceptance_id": awaiting_acceptance.acceptance_id,
-        }
-        running = advance(destination, accepted)
-        assert advance(destination, accepted) == running
-        assert running.status == "running"
-        assert running.study_id == prepared.study_id
-        assert len(tuple((destination / "ledger").glob("*.json"))) == 4
+        assert rejected.value.code == "invalid-intent"
+        assert prepared.study_id == awaiting_acceptance.study_id
+        assert len(tuple((destination / "ledger").glob("*.json"))) == 3
     finally:
         shutil.rmtree(destination, ignore_errors=True)
 

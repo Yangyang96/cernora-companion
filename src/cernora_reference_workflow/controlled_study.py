@@ -549,35 +549,6 @@ class AwaitingAcceptanceLedgerEntry(StrictContract):
         return self
 
 
-class RunningLedgerEntry(StrictContract):
-    schema_version: Literal["cernora.reference.study-ledger-entry/v1"]
-    entry_id: Digest
-    study_id: Digest
-    sequence: PositiveInt
-    previous_entry_sha256: Digest
-    operation_id: Digest
-    event: Literal["running"]
-    protocol_id: Digest
-    acceptance_id: Digest
-    execution_nonce: Digest
-    execution_id: Digest
-
-    @model_validator(mode="after")
-    def canonical_identity(self) -> Self:
-        expected_execution_id = canonical_content_id(
-            {"execution_nonce": self.execution_nonce, "study_id": self.study_id},
-            excluded=frozenset(),
-        )
-        if self.execution_id != expected_execution_id:
-            raise ValueError("Study Execution identity does not bind its internal nonce")
-        expected = canonical_content_id(
-            self.model_dump(mode="json"), excluded=frozenset({"entry_id"})
-        )
-        if self.entry_id != expected:
-            raise ValueError("Study ledger entry identity does not match canonical content")
-        return self
-
-
 class BoundRunningLedgerEntry(StrictContract):
     """Frozen Study authority for the shared Repeat Runner execution plane."""
 
@@ -751,7 +722,6 @@ StudyLedgerEntry = Annotated[
     PreparedLedgerEntry
     | AwaitingRevealLedgerEntry
     | AwaitingAcceptanceLedgerEntry
-    | RunningLedgerEntry
     | BoundRunningLedgerEntry
     | ExecutionStepClaimedLedgerEntry
     | ExecutionStepAdvancedLedgerEntry
@@ -774,12 +744,6 @@ class BindRevealDirective(StrictContract):
     reveal: HeldoutReveal
 
 
-class AcceptStudyDirective(StrictContract):
-    schema_version: Literal["cernora.reference.advance-directive/v1"]
-    action: Literal["accept"]
-    acceptance_id: Digest
-
-
 class StartExecutionDirective(StrictContract):
     schema_version: Literal["cernora.reference.advance-directive/v1"]
     action: Literal["start-execution"]
@@ -795,11 +759,7 @@ class StepExecutionDirective(StrictContract):
 
 
 AdvanceDirective = Annotated[
-    RequestRevealDirective
-    | BindRevealDirective
-    | AcceptStudyDirective
-    | StartExecutionDirective
-    | StepExecutionDirective,
+    RequestRevealDirective | BindRevealDirective | StartExecutionDirective | StepExecutionDirective,
     Field(discriminator="action"),
 ]
 _ADVANCE_DIRECTIVE_ADAPTER: TypeAdapter[AdvanceDirective] = TypeAdapter(AdvanceDirective)
@@ -1137,8 +1097,7 @@ def _ledger_outcome(entry: StudyLedgerEntry, ledger_root_sha256: Digest) -> Exec
         payload["acceptance_id"] = entry.acceptance_id
     elif isinstance(
         entry,
-        RunningLedgerEntry
-        | BoundRunningLedgerEntry
+        BoundRunningLedgerEntry
         | ExecutionStepClaimedLedgerEntry
         | ExecutionStepAdvancedLedgerEntry,
     ):
@@ -1269,7 +1228,7 @@ def _load_study(root: Path) -> _ReplayedStudy:
                 )
                 or (
                     isinstance(prior, AwaitingAcceptanceLedgerEntry)
-                    and isinstance(entry, RunningLedgerEntry | BoundRunningLedgerEntry)
+                    and isinstance(entry, BoundRunningLedgerEntry)
                 )
                 or (
                     isinstance(
@@ -1320,7 +1279,7 @@ def _load_study(root: Path) -> _ReplayedStudy:
                     raise ContractError("held-out reveal does not match frozen authority")
             if (
                 isinstance(prior, AwaitingAcceptanceLedgerEntry)
-                and isinstance(entry, RunningLedgerEntry | BoundRunningLedgerEntry)
+                and isinstance(entry, BoundRunningLedgerEntry)
                 and entry.acceptance_id != prior.acceptance_id
             ):
                 raise ContractError("running Study does not bind the fresh acceptance")
@@ -2196,30 +2155,6 @@ def advance(
                 "event": "awaiting-acceptance",
                 "reveal": parsed.reveal.model_dump(mode="json"),
                 "acceptance_id": acceptance_id,
-            }
-        elif isinstance(parsed, AcceptStudyDirective):
-            if not isinstance(current, AwaitingAcceptanceLedgerEntry):
-                raise ControlledStudyError("invalid-transition", phase="advance")
-            if parsed.acceptance_id != current.acceptance_id:
-                raise ControlledStudyError(
-                    "stale-acceptance",
-                    phase="advance",
-                    artifact_id=current.acceptance_id,
-                )
-            execution_nonce = secrets.token_hex(32)
-            execution_id = canonical_content_id(
-                {
-                    "execution_nonce": execution_nonce,
-                    "study_id": replayed.record.study_id,
-                },
-                excluded=frozenset(),
-            )
-            payload = {
-                **common,
-                "event": "running",
-                "acceptance_id": parsed.acceptance_id,
-                "execution_nonce": execution_nonce,
-                "execution_id": execution_id,
             }
         elif isinstance(parsed, StartExecutionDirective):
             if not isinstance(current, AwaitingAcceptanceLedgerEntry):
