@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+from copy import deepcopy
+
+import pytest
+from pydantic import ValidationError
+
+from cernora_reference_workflow.controlled_study import (
+    ControlledStudyError,
+    compile_study_protocol,
+    materialize_execution_outcome,
+    materialize_implementation_lock,
+    materialize_study_artifact_manifest,
+    materialize_study_intent,
+)
+
+
+def implementation_payload() -> dict[str, object]:
+    return {
+        "schema_version": "cernora.reference.implementation-lock/v1",
+        "companion": {
+            "name": "cernora-reference-workflow",
+            "version": "0.4.0",
+            "kind": "wheel",
+            "sha256": "1" * 64,
+        },
+        "cernora": {
+            "name": "cernora",
+            "version": "0.1.4",
+            "kind": "wheel",
+            "sha256": "2" * 64,
+        },
+        "runtime_adapter": {
+            "name": "harbor-codex-adapter",
+            "version": "1",
+            "kind": "source-tree",
+            "sha256": "3" * 64,
+        },
+        "harness": {
+            "name": "harbor",
+            "version": "0.16.1",
+            "kind": "wheel",
+            "sha256": "4" * 64,
+        },
+        "analysis_policy": {
+            "name": "controlled-study-policy",
+            "version": "1",
+            "kind": "policy-bundle",
+            "sha256": "5" * 64,
+        },
+    }
+
+
+def study_intent_payload() -> dict[str, object]:
+    return {
+        "schema_version": "cernora.reference.study-intent/v1",
+        "study_kind": "contract-proof",
+        "baseline": {
+            "configuration_id": "baseline",
+            "authority_sha256": "a" * 64,
+        },
+        "candidate": {
+            "configuration_id": "candidate",
+            "baseline_authority_sha256": "a" * 64,
+            "authority_sha256": "b" * 64,
+            "treatment_axis": "prompt-instruction",
+            "treatment_sha256": "c" * 64,
+        },
+        "hypothesis": {
+            "observed_failure_code": "interval-boundary-v1",
+            "mechanism": "The agent misses inclusive endpoint overlap.",
+            "intervention_scope": "Prompt guidance for interval repair reasoning.",
+            "expected_observation": "Fewer boundary failures on unseen interval tasks.",
+            "falsifier": "No held-out boundary improvement or a protected-path regression.",
+        },
+        "cases": [
+            {
+                "case_id": "dev-ledger",
+                "split": "development",
+                "authority_sha256": "d" * 64,
+            },
+            {
+                "case_id": "held-interval",
+                "split": "held-out",
+                "authority_sha256": "e" * 64,
+            },
+            {
+                "case_id": "reg-query",
+                "split": "regression",
+                "authority_sha256": "f" * 64,
+            },
+        ],
+        "repetitions": 2,
+        "max_attempt_count": 12,
+        "max_wall_seconds": 7200,
+        "heldout_manifest_sha256": "7" * 64,
+        "analysis_policy_sha256": "5" * 64,
+        "implementation_lock": materialize_implementation_lock(implementation_payload()).model_dump(
+            mode="json"
+        ),
+    }
+
+
+def test_implementation_lock_binds_exact_artifact_bytes() -> None:
+    first = materialize_implementation_lock(implementation_payload())
+    changed = deepcopy(implementation_payload())
+    assert isinstance(changed["runtime_adapter"], dict)
+    changed["runtime_adapter"]["sha256"] = "6" * 64
+    second = materialize_implementation_lock(changed)
+
+    assert first.lock_id != second.lock_id
+    assert first.companion.sha256 == "1" * 64
+    assert first.runtime_adapter.sha256 == "3" * 64
+
+
+def test_implementation_lock_rejects_version_without_digest() -> None:
+    payload = implementation_payload()
+    assert isinstance(payload["companion"], dict)
+    del payload["companion"]["sha256"]
+
+    with pytest.raises(ValidationError):
+        materialize_implementation_lock(payload)
+
+
+def test_protocol_separates_claim_scopes_and_counterbalances_pairs() -> None:
+    protocol = compile_study_protocol(materialize_study_intent(study_intent_payload()))
+
+    assert protocol.planned_trial_count == 12
+    assert tuple((item.case_id, item.repetition) for item in protocol.blocks) == (
+        ("dev-ledger", 1),
+        ("held-interval", 1),
+        ("reg-query", 1),
+        ("dev-ledger", 2),
+        ("held-interval", 2),
+        ("reg-query", 2),
+    )
+    assert tuple(item.configuration_order for item in protocol.blocks) == (
+        ("baseline", "candidate"),
+        ("candidate", "baseline"),
+        ("baseline", "candidate"),
+        ("candidate", "baseline"),
+        ("baseline", "candidate"),
+        ("candidate", "baseline"),
+    )
+    assert protocol.claims.development == "descriptive"
+    assert protocol.claims.regression == "guardrail"
+    assert protocol.claims.heldout == "confirmatory-primary"
+    assert protocol.claims.effect_conclusion == "descriptive-only"
+    assert protocol.confirmatory_quality_stop is False
+
+
+def test_terminal_outcomes_require_the_correct_closed_artifact() -> None:
+    protocol = compile_study_protocol(materialize_study_intent(study_intent_payload()))
+    common = {
+        "schema_version": "cernora.reference.study-artifact-manifest/v1",
+        "protocol_id": protocol.protocol_id,
+        "implementation_lock_id": protocol.implementation_lock_id,
+        "ledger_root_sha256": "9" * 64,
+        "report_sha256": "0" * 64,
+    }
+    diagnostic = materialize_study_artifact_manifest(
+        {
+            **common,
+            "kind": "diagnostic-pack",
+            "terminal_status": "paused",
+            "claim_authority": "diagnostic-only",
+            "batch_package_sha256": None,
+            "comparison_package_sha256": None,
+        }
+    )
+    paused = materialize_execution_outcome(
+        {
+            "schema_version": "cernora.reference.execution-outcome/v1",
+            "protocol_id": protocol.protocol_id,
+            "ledger_root_sha256": diagnostic.ledger_root_sha256,
+            "status": "paused",
+            "execution_id": "1" * 64,
+            "reason": "operator-request",
+            "artifact": {
+                "kind": diagnostic.kind,
+                "artifact_id": diagnostic.artifact_id,
+            },
+            "resumable": True,
+        }
+    )
+
+    assert paused.status == "paused"
+    assert paused.artifact.kind == "diagnostic-pack"
+
+    complete = deepcopy(common)
+    complete.update(
+        {
+            "kind": "evidence-pack",
+            "terminal_status": "completed",
+            "claim_authority": "descriptive-only",
+            "batch_package_sha256": "a" * 64,
+            "comparison_package_sha256": "b" * 64,
+        }
+    )
+    evidence = materialize_study_artifact_manifest(complete)
+    completed = materialize_execution_outcome(
+        {
+            "schema_version": "cernora.reference.execution-outcome/v1",
+            "protocol_id": protocol.protocol_id,
+            "ledger_root_sha256": evidence.ledger_root_sha256,
+            "status": "completed",
+            "execution_id": "2" * 64,
+            "artifact": {"kind": evidence.kind, "artifact_id": evidence.artifact_id},
+            "claim_authority": evidence.claim_authority,
+        }
+    )
+
+    assert completed.status == "completed"
+    assert completed.artifact.kind == "evidence-pack"
+
+    invalid = deepcopy(complete)
+    invalid["kind"] = "diagnostic-pack"
+    with pytest.raises(ValidationError):
+        materialize_study_artifact_manifest(invalid)
+
+
+def test_structural_error_exposes_stable_code_and_phase() -> None:
+    error = ControlledStudyError(
+        "authority-mismatch",
+        phase="prepare",
+        artifact_id="f" * 64,
+    )
+
+    assert error.code == "authority-mismatch"
+    assert error.phase == "prepare"
+    assert error.artifact_id == "f" * 64
+    assert str(error) == "prepare:authority-mismatch"

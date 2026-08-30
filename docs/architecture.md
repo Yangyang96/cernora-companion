@@ -5,6 +5,10 @@ historical M1 surface uses the released `cernora==0.1.2` wheel; local M2 and M3 
 accepted Core `0.1.3` and `0.1.4` wheels respectively. It does not extend Cernora Core with
 Runtime, Harness, credential, orchestration, or publication responsibilities.
 
+The Priority 4 replacement boundary is specified in
+[`controlled-study.md`](controlled-study.md). It consolidates execution and evidence custody
+behind one Companion module while keeping Core Runtime-neutral and historical artifacts readable.
+
 ## Ownership and data flow
 
 ```text
