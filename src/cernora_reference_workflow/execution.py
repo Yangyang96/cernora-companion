@@ -1051,6 +1051,12 @@ def reload_execution(root: Path) -> ExecutionState:
     return _load_state(root, allow_ambiguous=False)
 
 
+def reload_execution_for_reconciliation(root: Path) -> ExecutionState:
+    """Verify an Execution while retaining an unclosed active Attempt for reconciliation."""
+
+    return _load_state(root, allow_ambiguous=True)
+
+
 def start_attempt(
     root: Path,
     trial_id: str,
@@ -1540,6 +1546,7 @@ __all__ = [
     "publish_trial_result",
     "rebuild_execution_pack",
     "reload_execution",
+    "reload_execution_for_reconciliation",
     "start_attempt",
     "verify_execution_pack",
 ]

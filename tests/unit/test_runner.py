@@ -28,6 +28,7 @@ from cernora_reference_workflow.export import publish_completed_export
 from cernora_reference_workflow.lifecycle import materialize_preterminal_record
 from cernora_reference_workflow.run_plan import RunPlan, materialize_run_plan
 from cernora_reference_workflow.runner import (
+    AmbiguousActiveAttempt,
     _AttemptRequest,
     advance_repeat,
     resume_repeat,
@@ -172,6 +173,63 @@ def test_advance_repeat_claims_at_most_one_external_attempt(tmp_path: Path) -> N
     assert completed.status == "completed"
     assert len(executor.requests) == 2
     assert completed.pack_root is not None
+
+
+def test_advance_repeat_reconciles_an_interrupted_runtime_invocation(tmp_path: Path) -> None:
+    root = tmp_path / "execution"
+    plan = plan_with()
+    initialize_execution(root, plan, nonce="b" * 64)
+    publisher = PreterminalExecutor()
+
+    class ReconciledAdapter:
+        def __init__(self) -> None:
+            self.execute_count = 0
+            self.reconcile_count = 0
+
+        def execute(self, request: _AttemptRequest) -> None:
+            self.execute_count += 1
+            raise RuntimeError("synthetic interrupted invocation")
+
+        def reconcile(self, request: _AttemptRequest) -> Literal["published"]:
+            self.reconcile_count += 1
+            publisher(request)
+            return "published"
+
+    adapter = ReconciledAdapter()
+    with pytest.raises(RuntimeError, match="interrupted invocation"):
+        advance_repeat(root, adapter)
+
+    completed = advance_repeat(root, adapter)
+    assert completed.status == "completed"
+    assert adapter.execute_count == 1
+    assert adapter.reconcile_count == 1
+    assert len(completed.state.active_attempts) == 1
+
+
+def test_advance_repeat_reports_unresolved_active_attempt_without_retry(tmp_path: Path) -> None:
+    root = tmp_path / "execution"
+    plan = plan_with()
+    initialize_execution(root, plan, nonce="c" * 64)
+
+    class ActiveAdapter:
+        def __init__(self) -> None:
+            self.execute_count = 0
+
+        def execute(self, request: _AttemptRequest) -> None:
+            self.execute_count += 1
+            raise RuntimeError("synthetic active invocation")
+
+        def reconcile(self, request: _AttemptRequest) -> Literal["active"]:
+            return "active"
+
+    adapter = ActiveAdapter()
+    with pytest.raises(RuntimeError, match="active invocation"):
+        advance_repeat(root, adapter)
+    with pytest.raises(AmbiguousActiveAttempt) as unresolved:
+        advance_repeat(root, adapter)
+
+    assert unresolved.value.reconciliation == "active"
+    assert adapter.execute_count == 1
 
 
 def test_runner_evaluates_completed_export_and_publishes_available_result(

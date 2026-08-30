@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from cernora_reference_workflow.attempt_record import verify_preterminal_attempt
 from cernora_reference_workflow.common import ContractError, load_json_file, sha256_file
@@ -27,6 +27,7 @@ from cernora_reference_workflow.execution import (
     publish_trial_manifest,
     publish_trial_result,
     reload_execution,
+    reload_execution_for_reconciliation,
     start_attempt,
     verify_execution_pack,
 )
@@ -63,6 +64,36 @@ class _AttemptExecutor(Protocol):
         """Publish one completed-export or preterminal Attempt directory."""
 
 
+ReconciliationResult = Literal["published", "active", "absent"]
+
+
+@runtime_checkable
+class AttemptRuntimeAdapter(Protocol):
+    """Narrow true-external seam for invocation and interrupted-process reconciliation."""
+
+    def execute(self, request: _AttemptRequest) -> None:
+        """Publish one terminal Attempt artifact or raise without claiming a result."""
+
+    def reconcile(self, request: _AttemptRequest) -> ReconciliationResult:
+        """Publish recovered terminal evidence or report the invocation's observed status."""
+
+
+AttemptExecutor = _AttemptExecutor | AttemptRuntimeAdapter
+
+
+class AmbiguousActiveAttempt(ContractError):
+    """An active Attempt remains unsafe to repeat after Runtime reconciliation."""
+
+    def __init__(
+        self,
+        active_record: ActiveAttemptRecord,
+        reconciliation: Literal["active", "absent"],
+    ) -> None:
+        self.active_record = active_record
+        self.reconciliation = reconciliation
+        super().__init__(f"active Attempt remains {reconciliation} after reconciliation")
+
+
 @dataclass(frozen=True)
 class RunnerOutcome:
     status: RunnerStatus
@@ -80,6 +111,45 @@ class _AttemptFacts:
 
 def _attempt_path(root: Path, trial_id: str, ordinal: int) -> Path:
     return root / "attempts" / trial_id / f"{ordinal:04d}"
+
+
+def _attempt_request(
+    root: Path, state: ExecutionState, active: ActiveAttemptRecord
+) -> _AttemptRequest:
+    trial = next(item for item in state.trial_slots.slots if item.trial_id == active.trial_id)
+    return _AttemptRequest(
+        execution_root=root,
+        destination=_attempt_path(root, active.trial_id, active.ordinal),
+        trial=trial,
+        specification=_specification(state, trial),
+        active_record=active,
+    )
+
+
+def _execute_attempt(executor: AttemptExecutor, request: _AttemptRequest) -> None:
+    if isinstance(executor, AttemptRuntimeAdapter):
+        executor.execute(request)
+    else:
+        executor(request)
+
+
+def _reconcile_interrupted(root: Path, executor: AttemptExecutor) -> None:
+    if not isinstance(executor, AttemptRuntimeAdapter):
+        return
+    state = reload_execution_for_reconciliation(root)
+    ambiguous = tuple(
+        item
+        for item in state.active_attempts
+        if not _attempt_path(root, item.trial_id, item.ordinal).exists()
+    )
+    if not ambiguous:
+        return
+    if len(ambiguous) != 1:
+        raise ContractError("Execution contains multiple ambiguous active Attempts")
+    active = ambiguous[0]
+    reconciliation = executor.reconcile(_attempt_request(root, state, active))
+    if reconciliation != "published":
+        raise AmbiguousActiveAttempt(active, reconciliation)
 
 
 def _attempt_facts(path: Path) -> _AttemptFacts:
@@ -235,7 +305,7 @@ def _finish_completed(root: Path, pack_root: Path) -> RunnerOutcome:
 
 def _drive(
     root: Path,
-    executor: _AttemptExecutor,
+    executor: AttemptExecutor,
     *,
     pack_root: Path,
     should_stop: StopPredicate | None,
@@ -245,6 +315,7 @@ def _drive(
     reject_terminal_budget: bool,
     return_after_attempt: bool = False,
 ) -> RunnerOutcome:
+    _reconcile_interrupted(root, executor)
     state = reload_execution(root)
     if state.manifest is not None:
         return _publish_completed_pack(root, pack_root)
@@ -363,14 +434,15 @@ def _drive(
             elapsed_before_attempt_milliseconds=elapsed,
             started_unix_milliseconds=started_unix,
         )
-        executor(
+        _execute_attempt(
+            executor,
             _AttemptRequest(
                 execution_root=root,
                 destination=_attempt_path(root, next_trial.trial_id, active.ordinal),
                 trial=next_trial,
                 specification=_specification(state, next_trial),
                 active_record=active,
-            )
+            ),
         )
         # Strict reload proves that the executor atomically published the exact
         # artifact bound by the active record. An absent artifact stays ambiguous.
@@ -387,7 +459,7 @@ def _publish_completed_pack(root: Path, pack_root: Path) -> RunnerOutcome:
 def run_repeat(
     destination: Path,
     run_plan: RunPlan,
-    executor: _AttemptExecutor,
+    executor: AttemptExecutor,
     *,
     nonce: str | None = None,
     pack_root: Path | None = None,
@@ -413,7 +485,7 @@ def run_repeat(
 
 def advance_repeat(
     root: Path,
-    executor: _AttemptExecutor,
+    executor: AttemptExecutor,
     *,
     pack_root: Path | None = None,
     should_stop: StopPredicate | None = None,
@@ -438,7 +510,7 @@ def advance_repeat(
 
 def resume_repeat(
     root: Path,
-    executor: _AttemptExecutor,
+    executor: AttemptExecutor,
     *,
     pack_root: Path | None = None,
     should_stop: StopPredicate | None = None,
@@ -461,6 +533,8 @@ def resume_repeat(
 
 
 __all__ = [
+    "AmbiguousActiveAttempt",
+    "AttemptRuntimeAdapter",
     "RunnerOutcome",
     "advance_repeat",
     "resume_repeat",
