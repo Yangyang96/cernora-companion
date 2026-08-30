@@ -138,6 +138,47 @@ class StudyCaseAuthority(StrictContract):
     authority_sha256: Digest
 
 
+class HeldoutReveal(StrictContract):
+    """Revealed held-out authorities without task or evaluation content."""
+
+    schema_version: Literal["cernora.reference.heldout-reveal/v1"]
+    reveal_id: Digest
+    commitment_id: Digest
+    manifest_sha256: Digest
+    cases: tuple[StudyCaseAuthority, ...] = Field(min_length=1)
+
+    @field_validator("cases", mode="before")
+    @classmethod
+    def tuple_cases(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def closed_heldout_authority(self) -> Self:
+        case_ids = tuple(item.case_id for item in self.cases)
+        if (
+            case_ids != tuple(sorted(case_ids))
+            or len(case_ids) != len(set(case_ids))
+            or any(item.split != "held-out" for item in self.cases)
+        ):
+            raise ValueError("held-out reveal Cases must be sorted, unique, and held-out")
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"reveal_id"})
+        )
+        if self.reveal_id != expected:
+            raise ValueError("held-out reveal identity does not match canonical content")
+        return self
+
+
+def materialize_heldout_reveal(
+    payload_without_identity: Mapping[str, object],
+) -> HeldoutReveal:
+    if "reveal_id" in payload_without_identity:
+        raise ContractError("held-out reveal input must omit reveal_id")
+    payload = dict(payload_without_identity)
+    payload["reveal_id"] = canonical_content_id(payload, excluded=frozenset())
+    return HeldoutReveal.model_validate(payload)
+
+
 class HeldoutCommitment(StrictContract):
     """Opaque held-out suite authority frozen without task content."""
 
@@ -471,7 +512,7 @@ class AwaitingAcceptanceLedgerEntry(StrictContract):
     operation_id: Digest
     event: Literal["awaiting-acceptance"]
     protocol_id: Digest
-    reveal_receipt_sha256: Digest
+    reveal: HeldoutReveal
     acceptance_id: Digest
 
     @model_validator(mode="after")
@@ -531,7 +572,7 @@ class RequestRevealDirective(StrictContract):
 class BindRevealDirective(StrictContract):
     schema_version: Literal["cernora.reference.advance-directive/v1"]
     action: Literal["bind-reveal"]
-    reveal_receipt_sha256: Digest
+    reveal: HeldoutReveal
 
 
 class AcceptStudyDirective(StrictContract):
@@ -862,6 +903,37 @@ def _load_study(root: Path) -> _ReplayedStudy:
             )
             if not valid_transition:
                 raise ContractError("Controlled Study ledger contains an invalid transition")
+            if isinstance(entry, AwaitingAcceptanceLedgerEntry):
+                expected_cases = tuple(item for item in intent.cases if item.split == "held-out")
+                revealed_case_root = sha256_bytes(
+                    canonical_json_bytes(
+                        [item.model_dump(mode="json") for item in entry.reveal.cases]
+                    )
+                )
+                expected_acceptance_id = canonical_content_id(
+                    {
+                        "implementation_lock_id": protocol.implementation_lock_id,
+                        "ledger_root_sha256": previous_sha256,
+                        "protocol_id": protocol.protocol_id,
+                        "reveal_id": entry.reveal.reveal_id,
+                        "study_id": record.study_id,
+                    },
+                    excluded=frozenset(),
+                )
+                if (
+                    entry.reveal.commitment_id != intent.heldout_commitment.commitment_id
+                    or entry.reveal.manifest_sha256 != intent.heldout_commitment.manifest_sha256
+                    or entry.reveal.cases != expected_cases
+                    or revealed_case_root != intent.heldout_commitment.case_commitment_root_sha256
+                    or entry.acceptance_id != expected_acceptance_id
+                ):
+                    raise ContractError("held-out reveal does not match frozen authority")
+            if (
+                isinstance(prior, AwaitingAcceptanceLedgerEntry)
+                and isinstance(entry, RunningLedgerEntry)
+                and entry.acceptance_id != prior.acceptance_id
+            ):
+                raise ContractError("running Study does not bind the fresh acceptance")
         if any(item.operation_id == entry.operation_id for item in entries):
             raise ContractError("Controlled Study ledger repeats an operation identity")
         current_sha256 = sha256_file(path)
@@ -1050,12 +1122,31 @@ def advance(root: Path, directive: AdvanceDirective | Mapping[str, object]) -> E
         elif isinstance(parsed, BindRevealDirective):
             if not isinstance(current, AwaitingRevealLedgerEntry):
                 raise ControlledStudyError("invalid-transition", phase="advance")
+            expected_cases = tuple(
+                item for item in replayed.intent.cases if item.split == "held-out"
+            )
+            revealed_case_root = sha256_bytes(
+                canonical_json_bytes([item.model_dump(mode="json") for item in parsed.reveal.cases])
+            )
+            if (
+                parsed.reveal.commitment_id != replayed.intent.heldout_commitment.commitment_id
+                or parsed.reveal.manifest_sha256
+                != replayed.intent.heldout_commitment.manifest_sha256
+                or parsed.reveal.cases != expected_cases
+                or revealed_case_root
+                != replayed.intent.heldout_commitment.case_commitment_root_sha256
+            ):
+                raise ControlledStudyError(
+                    "authority-mismatch",
+                    phase="advance",
+                    artifact_id=parsed.reveal.reveal_id,
+                )
             acceptance_id = canonical_content_id(
                 {
                     "implementation_lock_id": replayed.protocol.implementation_lock_id,
                     "ledger_root_sha256": previous_sha256,
                     "protocol_id": replayed.protocol.protocol_id,
-                    "reveal_receipt_sha256": parsed.reveal_receipt_sha256,
+                    "reveal_id": parsed.reveal.reveal_id,
                     "study_id": replayed.record.study_id,
                 },
                 excluded=frozenset(),
@@ -1063,7 +1154,7 @@ def advance(root: Path, directive: AdvanceDirective | Mapping[str, object]) -> E
             payload = {
                 **common,
                 "event": "awaiting-acceptance",
-                "reveal_receipt_sha256": parsed.reveal_receipt_sha256,
+                "reveal": parsed.reveal.model_dump(mode="json"),
                 "acceptance_id": acceptance_id,
             }
         else:
@@ -1117,6 +1208,7 @@ __all__ = [
     "ControlledStudyPhase",
     "ExecutionOutcome",
     "HeldoutCommitment",
+    "HeldoutReveal",
     "ImplementationArtifact",
     "ImplementationLock",
     "PausedOutcome",
@@ -1136,6 +1228,7 @@ __all__ = [
     "compile_study_protocol",
     "materialize_execution_outcome",
     "materialize_heldout_commitment",
+    "materialize_heldout_reveal",
     "materialize_implementation_lock",
     "materialize_study_analysis_policy",
     "materialize_study_artifact_manifest",

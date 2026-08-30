@@ -18,6 +18,7 @@ from cernora_reference_workflow.controlled_study import (
     compile_study_protocol,
     materialize_execution_outcome,
     materialize_heldout_commitment,
+    materialize_heldout_reveal,
     materialize_implementation_lock,
     materialize_study_analysis_policy,
     materialize_study_artifact_manifest,
@@ -77,6 +78,12 @@ def study_intent_payload() -> dict[str, object]:
         }
     )
     analysis_bytes = canonical_json_bytes(analysis_policy.model_dump(mode="json"))
+    heldout_case = {
+        "case_id": "held-interval",
+        "split": "held-out",
+        "authority_sha256": "e" * 64,
+    }
+    heldout_root = sha256_bytes(canonical_json_bytes([heldout_case]))
     return {
         "schema_version": "cernora.reference.study-intent/v1",
         "study_kind": "contract-proof",
@@ -87,11 +94,7 @@ def study_intent_payload() -> dict[str, object]:
                 "split": "development",
                 "authority_sha256": "d" * 64,
             },
-            {
-                "case_id": "held-interval",
-                "split": "held-out",
-                "authority_sha256": "e" * 64,
-            },
+            heldout_case,
             {
                 "case_id": "reg-query",
                 "split": "regression",
@@ -106,7 +109,7 @@ def study_intent_payload() -> dict[str, object]:
                 "schema_version": "cernora.reference.heldout-commitment/v1",
                 "manifest_sha256": "7" * 64,
                 "case_count": 1,
-                "case_commitment_root_sha256": "8" * 64,
+                "case_commitment_root_sha256": heldout_root,
                 "reveal_policy_sha256": "9" * 64,
             }
         ).model_dump(mode="json"),
@@ -316,7 +319,8 @@ def test_advance_is_idempotent_and_binds_fresh_acceptance(tmp_path: Path) -> Non
     destination = custody_parent / f"advance-{tmp_path.name}"
 
     try:
-        prepared = prepare(materialize_study_intent(study_intent_payload()), destination)
+        intent = materialize_study_intent(study_intent_payload())
+        prepared = prepare(intent, destination)
         reveal = {
             "schema_version": "cernora.reference.advance-directive/v1",
             "action": "request-reveal",
@@ -330,7 +334,18 @@ def test_advance_is_idempotent_and_binds_fresh_acceptance(tmp_path: Path) -> Non
             {
                 "schema_version": "cernora.reference.advance-directive/v1",
                 "action": "bind-reveal",
-                "reveal_receipt_sha256": "6" * 64,
+                "reveal": materialize_heldout_reveal(
+                    {
+                        "schema_version": "cernora.reference.heldout-reveal/v1",
+                        "commitment_id": intent.heldout_commitment.commitment_id,
+                        "manifest_sha256": intent.heldout_commitment.manifest_sha256,
+                        "cases": [
+                            item.model_dump(mode="json")
+                            for item in intent.cases
+                            if item.split == "held-out"
+                        ],
+                    }
+                ).model_dump(mode="json"),
             },
         )
         assert awaiting_acceptance.status == "awaiting-acceptance"
@@ -356,6 +371,51 @@ def test_advance_is_idempotent_and_binds_fresh_acceptance(tmp_path: Path) -> Non
         assert running.status == "running"
         assert running.study_id == prepared.study_id
         assert len(tuple((destination / "ledger").glob("*.json"))) == 4
+    finally:
+        shutil.rmtree(destination, ignore_errors=True)
+
+
+def test_advance_rejects_a_reveal_outside_the_frozen_commitment(tmp_path: Path) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    custody_parent = repository / ".agent" / "test-controlled-study"
+    custody_parent.mkdir(parents=True, exist_ok=True)
+    destination = custody_parent / f"reveal-{tmp_path.name}"
+    intent = materialize_study_intent(study_intent_payload())
+
+    try:
+        prepare(intent, destination)
+        advance(
+            destination,
+            {
+                "schema_version": "cernora.reference.advance-directive/v1",
+                "action": "request-reveal",
+            },
+        )
+        reveal = materialize_heldout_reveal(
+            {
+                "schema_version": "cernora.reference.heldout-reveal/v1",
+                "commitment_id": intent.heldout_commitment.commitment_id,
+                "manifest_sha256": intent.heldout_commitment.manifest_sha256,
+                "cases": [
+                    {
+                        "case_id": "held-interval",
+                        "split": "held-out",
+                        "authority_sha256": "0" * 64,
+                    }
+                ],
+            }
+        )
+        with pytest.raises(ControlledStudyError) as mismatch:
+            advance(
+                destination,
+                {
+                    "schema_version": "cernora.reference.advance-directive/v1",
+                    "action": "bind-reveal",
+                    "reveal": reveal.model_dump(mode="json"),
+                },
+            )
+        assert mismatch.value.code == "authority-mismatch"
+        assert len(tuple((destination / "ledger").glob("*.json"))) == 2
     finally:
         shutil.rmtree(destination, ignore_errors=True)
 
