@@ -23,7 +23,7 @@ from cernora_reference_workflow.controlled_run_plan import (
 )
 from cernora_reference_workflow.controlled_runtime import observe_runtime_authority
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority, load_visible_task
-from cernora_reference_workflow.execution import initialize_execution
+from cernora_reference_workflow.execution import initialize_execution, reload_execution
 from cernora_reference_workflow.runner import _AttemptRequest, advance_repeat
 from tests.unit.test_controlled_execution import lifecycle_attempt
 from tests.unit.test_controlled_live_attempt import _spec
@@ -197,6 +197,31 @@ class FakeEvaluatedStudyAttemptAdapter:
         )
 
 
+class FakeRetryThenEvaluatedStudyAttemptAdapter(FakeEvaluatedStudyAttemptAdapter):
+    def __call__(self, request: _AttemptRequest) -> None:
+        if request.active_record.ordinal != 1:
+            super().__call__(request)
+            return
+        self.requests.append(request)
+        specification = request.specification
+        assert isinstance(specification, ControlledExperimentSpecV2)
+        assert isinstance(request.trial.slot, ControlledTrialSlotV2)
+        controlled_request = ControlledAttemptRequest(
+            trial_id=request.trial.trial_id,
+            slot=request.trial.slot,
+            specification=specification,
+            ordinal=request.active_record.ordinal,
+            predecessor_attempt_id=request.active_record.predecessor_attempt_id,
+            global_deadline_monotonic=0.0,
+        )
+        attempt = lifecycle_attempt(controlled_request, retry_eligible=True)
+        publish_controlled_attempt_artifact(
+            request.destination,
+            attempt=attempt,
+            specification=specification,
+        )
+
+
 def test_repeat_runner_adopts_one_v2_attempt_without_the_legacy_m4_store(
     tmp_path: Path,
 ) -> None:
@@ -302,3 +327,75 @@ def test_evaluated_attempt_rejects_a_package_for_another_source_attempt(
 
     with pytest.raises(ValueError, match="does not bind the source Attempt"):
         materialize_controlled_attempt(payload)
+
+
+def test_advance_adopts_evaluated_artifact_after_callback_crash_without_reexecution(
+    tmp_path: Path,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    run_plan = _evaluated_plan(task)
+    root = tmp_path / "execution"
+    initialize_execution(root, run_plan, nonce="e" * 64)
+    publisher = FakeEvaluatedStudyAttemptAdapter(task, tmp_path / "evaluations")
+
+    def publish_then_crash(request: _AttemptRequest) -> None:
+        publisher(request)
+        raise RuntimeError("simulated crash after evaluated artifact publication")
+
+    with pytest.raises(RuntimeError, match="after evaluated artifact publication"):
+        advance_repeat(root, publish_then_crash)
+
+    interrupted = reload_execution(root)
+    assert len(interrupted.active_attempts) == 1
+    assert not interrupted.trial_results
+    assert not interrupted.trial_manifests
+    artifact = verify_controlled_attempt_artifact(publisher.requests[0].destination)
+    assert artifact.attempt.evaluation is not None
+
+    def must_not_execute(request: _AttemptRequest) -> None:
+        raise AssertionError(f"adopted evaluated Attempt was rerun: {request.destination}")
+
+    stopped = advance_repeat(root, must_not_execute, should_stop=lambda: True)
+
+    assert stopped.status == "stopped"
+    assert len(stopped.state.active_attempts) == 1
+    assert len(stopped.state.trial_manifests) == 1
+    assert stopped.state.trial_manifests[0].terminal_state == "behavioral-failure"
+
+
+def test_advance_preserves_one_authorized_retry_before_evaluated_terminal(
+    tmp_path: Path,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    run_plan = _evaluated_plan(task)
+    root = tmp_path / "execution"
+    initialize_execution(root, run_plan, nonce="f" * 64)
+    adapter = FakeRetryThenEvaluatedStudyAttemptAdapter(task, tmp_path / "evaluations")
+    delays: list[float] = []
+
+    first = advance_repeat(root, adapter)
+
+    assert first.status == "running"
+    first_boundary = reload_execution(root)
+    assert len(first_boundary.active_attempts) == 1
+    first_artifact = verify_controlled_attempt_artifact(adapter.requests[0].destination)
+    assert first_artifact.terminal.retry_eligible
+
+    second = advance_repeat(root, adapter, sleeper=delays.append)
+
+    assert second.status == "running"
+    assert delays == [10]
+    second_boundary = reload_execution(root)
+    assert len(second_boundary.active_attempts) == 2
+    second_artifact = verify_controlled_attempt_artifact(adapter.requests[1].destination)
+    assert second_artifact.attempt.evaluation is not None
+    assert second_artifact.attempt.predecessor_attempt_id == first_artifact.attempt.attempt_id
+    assert not second_artifact.terminal.retry_eligible
+
+    stopped = advance_repeat(root, adapter, should_stop=lambda: True)
+
+    assert stopped.status == "stopped"
+    assert len(adapter.requests) == 2
+    first_binding, second_binding = stopped.state.trial_manifests[0].attempts
+    assert second_binding.predecessor_attempt_id == first_binding.attempt_id
+    assert stopped.state.trial_manifests[0].terminal_state == "behavioral-failure"
