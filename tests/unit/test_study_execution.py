@@ -23,11 +23,17 @@ from cernora_reference_workflow.controlled_run_plan import (
 )
 from cernora_reference_workflow.controlled_runtime import observe_runtime_authority
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority, load_visible_task
-from cernora_reference_workflow.execution import initialize_execution, reload_execution
+from cernora_reference_workflow.execution import (
+    ControlledTrialResultManifest,
+    initialize_execution,
+    reload_execution,
+    verify_execution_pack,
+)
 from cernora_reference_workflow.runner import _AttemptRequest, advance_repeat
 from tests.unit.test_controlled_execution import lifecycle_attempt
 from tests.unit.test_controlled_live_attempt import _spec
 from tests.unit.test_controlled_run_plan import valid_payload as valid_run_plan_payload
+from tests.unit.test_improvement_loop import _all_task_authorities, _final_plan, _manifest
 from tests.unit.test_study_projection import study_payload_for_m4
 
 
@@ -75,6 +81,7 @@ def _evaluated_attempt(
     task: ControlledTaskAuthority,
     evaluation_root: Path,
     passed: bool = False,
+    tasks: tuple[ControlledTaskAuthority, ...] | None = None,
 ) -> ControlledAttempt:
     result = materialize_repair_result(
         {
@@ -108,7 +115,7 @@ def _evaluated_attempt(
     )
     package = evaluate_repair_result_package(
         task=task,
-        tasks=(task,),
+        tasks=tasks or (task,),
         result=result,
         source_attempt_id=source_attempt_id,
         output=evaluation_root / f"{request.trial_id}-{request.ordinal}",
@@ -222,6 +229,53 @@ class FakeRetryThenEvaluatedStudyAttemptAdapter(FakeEvaluatedStudyAttemptAdapter
         )
 
 
+class FakeEvaluatedMatrixAdapter:
+    def __init__(
+        self,
+        tasks: tuple[ControlledTaskAuthority, ...],
+        evaluation_root: Path,
+    ) -> None:
+        self.tasks = tuple(sorted(tasks, key=lambda item: item.case.case_id))
+        self.task_by_id = {item.case.case_id: item for item in self.tasks}
+        self.evaluation_root = evaluation_root
+        self.evaluation_root.mkdir()
+        self.requests: list[_AttemptRequest] = []
+
+    def __call__(self, request: _AttemptRequest) -> None:
+        self.requests.append(request)
+        specification = request.specification
+        assert isinstance(specification, ControlledExperimentSpecV2)
+        assert isinstance(request.trial.slot, ControlledTrialSlotV2)
+        controlled_request = ControlledAttemptRequest(
+            trial_id=request.trial.trial_id,
+            slot=request.trial.slot,
+            specification=specification,
+            ordinal=request.active_record.ordinal,
+            predecessor_attempt_id=request.active_record.predecessor_attempt_id,
+            global_deadline_monotonic=0.0,
+        )
+        attempt = _evaluated_attempt(
+            controlled_request,
+            task=self.task_by_id[specification.task.task_id],
+            evaluation_root=self.evaluation_root,
+            passed=specification.configuration_id == "candidate",
+            tasks=self.tasks,
+        )
+        publish_controlled_attempt_artifact(
+            request.destination,
+            attempt=attempt,
+            specification=specification,
+        )
+
+
+def _tree_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
 def test_repeat_runner_adopts_one_v2_attempt_without_the_legacy_m4_store(
     tmp_path: Path,
 ) -> None:
@@ -254,6 +308,8 @@ def test_repeat_runner_finalizes_a_v2_lifecycle_trial_before_stopping(
     assert stopped.status == "stopped"
     assert len(adapter.requests) == 1
     assert len(stopped.state.trial_results) == 1
+    assert isinstance(stopped.state.trial_results[0], ControlledTrialResultManifest)
+    assert stopped.state.trial_results[0].evaluation_status == "unavailable"
     assert len(stopped.state.trial_manifests) == 1
     assert stopped.state.trial_manifests[0].attempts[0].artifact_kind == "controlled-attempt"
     assert stopped.state.checkpoints[-1].status == "stopped"
@@ -294,6 +350,8 @@ def test_repeat_runner_adopts_and_finalizes_one_strict_evaluated_v2_attempt(
     assert stopped.status == "stopped"
     assert len(adapter.requests) == 1
     assert len(stopped.state.trial_results) == 1
+    assert isinstance(stopped.state.trial_results[0], ControlledTrialResultManifest)
+    assert stopped.state.trial_results[0].evaluation_status == "evaluated"
     assert len(stopped.state.trial_manifests) == 1
     assert stopped.state.trial_manifests[0].terminal_state == terminal_state
 
@@ -399,3 +457,46 @@ def test_advance_preserves_one_authorized_retry_before_evaluated_terminal(
     first_binding, second_binding = stopped.state.trial_manifests[0].attempts
     assert second_binding.predecessor_attempt_id == first_binding.attempt_id
     assert stopped.state.trial_manifests[0].terminal_state == "behavioral-failure"
+
+
+def test_public_advance_closes_the_full_offline_m4_matrix_and_byte_stable_pack(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest()
+    tasks = tuple(sorted(_all_task_authorities(manifest), key=lambda item: item.case.case_id))
+    run_plan = _final_plan(manifest, task_authorities=tasks)
+    root = tmp_path / "execution"
+    first_pack = tmp_path / "execution-pack-a"
+    second_pack = tmp_path / "execution-pack-b"
+    initialize_execution(root, run_plan, nonce="9" * 64)
+    adapter = FakeEvaluatedMatrixAdapter(tasks, tmp_path / "evaluations")
+
+    outcome = None
+    for _ in range(55):
+        before = len(adapter.requests)
+        outcome = advance_repeat(root, adapter, pack_root=first_pack)
+        assert len(adapter.requests) - before <= 1
+        assert reload_execution(root) == outcome.state
+        if outcome.status == "completed":
+            break
+
+    assert outcome is not None and outcome.status == "completed"
+    assert len(adapter.requests) == 54
+    assert tuple(request.trial.slot for request in adapter.requests) == (
+        run_plan.expand_trial_slots()
+    )
+    assert len(outcome.state.active_attempts) == 54
+    assert len(outcome.state.trial_results) == 54
+    assert len(outcome.state.trial_manifests) == 54
+    assert outcome.state.diagnostic is not None
+    assert {item.result_status for item in outcome.state.diagnostic.trials} == {"evaluated"}
+    assert verify_execution_pack(first_pack).execution_id == outcome.state.record.execution_id
+
+    def must_not_execute(request: _AttemptRequest) -> None:
+        raise AssertionError(f"completed matrix attempted new work: {request.destination}")
+
+    rebuilt = advance_repeat(root, must_not_execute, pack_root=second_pack)
+
+    assert rebuilt.status == "completed"
+    assert verify_execution_pack(second_pack).pack_id == verify_execution_pack(first_pack).pack_id
+    assert _tree_bytes(second_pack) == _tree_bytes(first_pack)

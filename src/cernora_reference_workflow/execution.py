@@ -215,6 +215,7 @@ class ControlledTrialResultManifest(StrictContract):
     selected_attempt_id: Digest
     selected_attempt_artifact_id: Digest
     selected_attempt_sha256: Digest
+    evaluation_status: Literal["evaluated", "unavailable"]
 
     @model_validator(mode="after")
     def validate_identity(self) -> ControlledTrialResultManifest:
@@ -752,6 +753,8 @@ def _verify_controlled_trial_result(
         != sha256_file(
             _attempt_path(path.parents[1], slot.trial_id, len(verified_artifacts)) / "attempt.json"
         )
+        or result.evaluation_status
+        != ("evaluated" if controlled.attempt.evaluation is not None else "unavailable")
     ):
         raise ContractError("controlled Trial result does not bind its frozen Attempt")
     return result
@@ -802,6 +805,8 @@ def _build_diagnostic(
             result.evaluation, TrialEvaluationAvailable
         ):
             return "evaluated"
+        if isinstance(result, ControlledTrialResultManifest):
+            return result.evaluation_status
         return "unavailable"
 
     diagnostic_trials = tuple(
@@ -1431,6 +1436,9 @@ def publish_controlled_trial_result(
             "selected_attempt_id": selected.attempt.attempt_id,
             "selected_attempt_artifact_id": selected.manifest.artifact_id,
             "selected_attempt_sha256": sha256_file(selected_root / "attempt.json"),
+            "evaluation_status": (
+                "evaluated" if selected.attempt.evaluation is not None else "unavailable"
+            ),
         }
         payload["result_id"] = canonical_content_id(payload, excluded=frozenset())
         result = ControlledTrialResultManifest.model_validate(payload)
