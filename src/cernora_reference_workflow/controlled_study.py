@@ -16,6 +16,12 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, StrictInt, StrictStr, TypeAdapter, field_validator, model_validator
 
+from cernora_reference_workflow.candidate_development import (
+    BaselineAuthority,
+    CandidateDevelopmentRecord,
+    CandidateHypothesis,
+    CandidatePatch,
+)
 from cernora_reference_workflow.common import (
     ContractError,
     canonical_content_id,
@@ -32,18 +38,10 @@ from cernora_reference_workflow.publication import atomic_publish_directory
 ImplementationKind = Literal["wheel", "source-tree", "container-image", "policy-bundle"]
 ImplementationName = Annotated[StrictStr, Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")]
 Identifier = Annotated[StrictStr, Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")]
-NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
 StudyKind = Literal["contract-proof", "confirmatory-effect"]
 StudySplit = Literal["development", "regression", "held-out"]
 ConfigurationRole = Literal["baseline", "candidate"]
-TreatmentAxis = Literal[
-    "prompt-instruction",
-    "model",
-    "tool-schema",
-    "generation-configuration",
-    "runtime-version",
-]
 ConfirmatoryStopReason = Literal[
     "ambiguous-active-attempt",
     "budget-exhausted",
@@ -134,41 +132,72 @@ def materialize_implementation_lock(
     return ImplementationLock.model_validate(payload)
 
 
-class BaselineAuthority(StrictContract):
-    configuration_id: Literal["baseline"]
-    authority_sha256: Digest
-
-
-class CandidatePatch(StrictContract):
-    """One declared Treatment applied over the frozen Baseline authority."""
-
-    configuration_id: Literal["candidate"]
-    baseline_authority_sha256: Digest
-    authority_sha256: Digest
-    treatment_axis: TreatmentAxis
-    treatment_sha256: Digest
-
-    @model_validator(mode="after")
-    def substantive_change(self) -> Self:
-        if self.authority_sha256 == self.baseline_authority_sha256:
-            raise ValueError("CandidatePatch must change the Baseline authority")
-        return self
-
-
-class CandidateHypothesis(StrictContract):
-    """Predeclared causal account for one Candidate intervention."""
-
-    observed_failure_code: Identifier
-    mechanism: NonEmpty
-    intervention_scope: NonEmpty
-    expected_observation: NonEmpty
-    falsifier: NonEmpty
-
-
 class StudyCaseAuthority(StrictContract):
     case_id: Identifier
     split: StudySplit
     authority_sha256: Digest
+
+
+class HeldoutCommitment(StrictContract):
+    """Opaque held-out suite authority frozen without task content."""
+
+    schema_version: Literal["cernora.reference.heldout-commitment/v1"]
+    commitment_id: Digest
+    manifest_sha256: Digest
+    case_count: PositiveInt
+    case_commitment_root_sha256: Digest
+    reveal_policy_sha256: Digest
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"commitment_id"})
+        )
+        if self.commitment_id != expected:
+            raise ValueError("held-out commitment identity does not match canonical content")
+        return self
+
+
+def materialize_heldout_commitment(
+    payload_without_identity: Mapping[str, object],
+) -> HeldoutCommitment:
+    if "commitment_id" in payload_without_identity:
+        raise ContractError("held-out commitment input must omit commitment_id")
+    payload = dict(payload_without_identity)
+    payload["commitment_id"] = canonical_content_id(payload, excluded=frozenset())
+    return HeldoutCommitment.model_validate(payload)
+
+
+class StudyAnalysisPolicy(StrictContract):
+    """Frozen confirmatory analysis and claim boundary."""
+
+    schema_version: Literal["cernora.reference.study-analysis-policy/v1"]
+    policy_id: Digest
+    primary_outcome: Literal["paired-reliable-success-rate-delta"]
+    bootstrap_resamples: Literal[10000]
+    confidence_level: Literal["0.95"]
+    guardrail_rule: Literal["no-protected-regression"]
+    missing_evidence: Literal["inconclusive"]
+    claim_source: Literal["held-out-only"]
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"policy_id"})
+        )
+        if self.policy_id != expected:
+            raise ValueError("Study analysis policy identity does not match canonical content")
+        return self
+
+
+def materialize_study_analysis_policy(
+    payload_without_identity: Mapping[str, object],
+) -> StudyAnalysisPolicy:
+    if "policy_id" in payload_without_identity:
+        raise ContractError("Study analysis policy input must omit policy_id")
+    payload = dict(payload_without_identity)
+    payload["policy_id"] = canonical_content_id(payload, excluded=frozenset())
+    return StudyAnalysisPolicy.model_validate(payload)
 
 
 class StudyIntent(StrictContract):
@@ -177,15 +206,13 @@ class StudyIntent(StrictContract):
     schema_version: Literal["cernora.reference.study-intent/v1"]
     intent_id: Digest
     study_kind: StudyKind
-    baseline: BaselineAuthority
-    candidate: CandidatePatch
-    hypothesis: CandidateHypothesis
+    candidate_development: CandidateDevelopmentRecord
     cases: tuple[StudyCaseAuthority, ...] = Field(min_length=3)
     repetitions: PositiveInt
     max_attempt_count: PositiveInt
     max_wall_seconds: PositiveInt
-    heldout_manifest_sha256: Digest
-    analysis_policy_sha256: Digest
+    heldout_commitment: HeldoutCommitment
+    analysis_policy: StudyAnalysisPolicy
     implementation_lock: ImplementationLock
 
     @field_validator("cases", mode="before")
@@ -200,12 +227,21 @@ class StudyIntent(StrictContract):
             raise ValueError("StudyIntent Cases must be sorted and unique")
         if {item.split for item in self.cases} != {"development", "regression", "held-out"}:
             raise ValueError("StudyIntent requires development, regression, and held-out Cases")
-        if self.candidate.baseline_authority_sha256 != self.baseline.authority_sha256:
-            raise ValueError("CandidatePatch does not derive from the frozen Baseline")
+        cases_by_id = {item.case_id: item for item in self.cases}
+        for observation in self.candidate_development.observations:
+            case = cases_by_id.get(observation.case_id)
+            if case is None or case.split != observation.split:
+                raise ValueError("Candidate Development observation is outside its declared split")
+        heldout_count = sum(item.split == "held-out" for item in self.cases)
+        if heldout_count != self.heldout_commitment.case_count:
+            raise ValueError("held-out commitment count does not match opaque Case authorities")
         planned = len(self.cases) * 2 * self.repetitions
         if self.max_attempt_count < planned:
             raise ValueError("Attempt budget cannot omit a planned Trial")
-        if self.analysis_policy_sha256 != self.implementation_lock.analysis_policy.sha256:
+        policy_sha256 = sha256_bytes(
+            canonical_json_bytes(self.analysis_policy.model_dump(mode="json"))
+        )
+        if policy_sha256 != self.implementation_lock.analysis_policy.sha256:
             raise ValueError("analysis policy does not match ImplementationLock")
         expected = canonical_content_id(
             self.model_dump(mode="json"), excluded=frozenset({"intent_id"})
@@ -251,6 +287,29 @@ class StudyClaimPolicy(StrictContract):
     regression: Literal["guardrail"]
     heldout: Literal["confirmatory-primary"]
     effect_conclusion: Literal["descriptive-only", "confirmatory"]
+    descriptive_case_ids: tuple[Identifier, ...] = Field(min_length=1)
+    guardrail_case_ids: tuple[Identifier, ...] = Field(min_length=1)
+    primary_case_ids: tuple[Identifier, ...] = Field(min_length=1)
+
+    @field_validator(
+        "descriptive_case_ids", "guardrail_case_ids", "primary_case_ids", mode="before"
+    )
+    @classmethod
+    def tuple_case_ids(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def disjoint_claim_scopes(self) -> Self:
+        scopes = (
+            self.descriptive_case_ids,
+            self.guardrail_case_ids,
+            self.primary_case_ids,
+        )
+        if any(scope != tuple(sorted(scope)) or len(scope) != len(set(scope)) for scope in scopes):
+            raise ValueError("claim-scope Case identities must be sorted and unique")
+        if len(set().union(*(set(scope) for scope in scopes))) != sum(map(len, scopes)):
+            raise ValueError("a Case cannot belong to multiple claim scopes")
+        return self
 
 
 class StudyProtocol(StrictContract):
@@ -320,6 +379,13 @@ def compile_study_protocol(intent: StudyIntent) -> StudyProtocol:
             "development": "descriptive",
             "regression": "guardrail",
             "heldout": "confirmatory-primary",
+            "descriptive_case_ids": [
+                case.case_id for case in intent.cases if case.split == "development"
+            ],
+            "guardrail_case_ids": [
+                case.case_id for case in intent.cases if case.split == "regression"
+            ],
+            "primary_case_ids": [case.case_id for case in intent.cases if case.split == "held-out"],
             "effect_conclusion": (
                 "descriptive-only" if intent.study_kind == "contract-proof" else "confirmatory"
             ),
@@ -1042,6 +1108,7 @@ __all__ = [
     "AwaitingAcceptanceOutcome",
     "AwaitingRevealOutcome",
     "BaselineAuthority",
+    "CandidateDevelopmentRecord",
     "CandidateHypothesis",
     "CandidatePatch",
     "CompletedOutcome",
@@ -1049,11 +1116,13 @@ __all__ = [
     "ControlledStudyErrorCode",
     "ControlledStudyPhase",
     "ExecutionOutcome",
+    "HeldoutCommitment",
     "ImplementationArtifact",
     "ImplementationLock",
     "PausedOutcome",
     "PreparedOutcome",
     "RunningOutcome",
+    "StudyAnalysisPolicy",
     "StudyArtifactManifest",
     "StudyArtifactReference",
     "StudyCaseAuthority",
@@ -1066,7 +1135,9 @@ __all__ = [
     "advance",
     "compile_study_protocol",
     "materialize_execution_outcome",
+    "materialize_heldout_commitment",
     "materialize_implementation_lock",
+    "materialize_study_analysis_policy",
     "materialize_study_artifact_manifest",
     "materialize_study_intent",
     "prepare",

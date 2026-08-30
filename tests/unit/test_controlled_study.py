@@ -10,19 +10,24 @@ import pytest
 from pydantic import ValidationError
 
 import cernora_reference_workflow.controlled_study as controlled_study_module
+from cernora_reference_workflow.candidate_development import freeze_candidate_development
+from cernora_reference_workflow.common import canonical_json_bytes, sha256_bytes
 from cernora_reference_workflow.controlled_study import (
     ControlledStudyError,
     advance,
     compile_study_protocol,
     materialize_execution_outcome,
+    materialize_heldout_commitment,
     materialize_implementation_lock,
+    materialize_study_analysis_policy,
     materialize_study_artifact_manifest,
     materialize_study_intent,
     prepare,
 )
+from tests.unit.test_candidate_development import candidate_development_payload
 
 
-def implementation_payload() -> dict[str, object]:
+def implementation_payload(*, analysis_sha256: str = "5" * 64) -> dict[str, object]:
     return {
         "schema_version": "cernora.reference.implementation-lock/v1",
         "companion": {
@@ -53,33 +58,29 @@ def implementation_payload() -> dict[str, object]:
             "name": "controlled-study-policy",
             "version": "1",
             "kind": "policy-bundle",
-            "sha256": "5" * 64,
+            "sha256": analysis_sha256,
         },
     }
 
 
 def study_intent_payload() -> dict[str, object]:
+    candidate_development = freeze_candidate_development(candidate_development_payload())
+    analysis_policy = materialize_study_analysis_policy(
+        {
+            "schema_version": "cernora.reference.study-analysis-policy/v1",
+            "primary_outcome": "paired-reliable-success-rate-delta",
+            "bootstrap_resamples": 10000,
+            "confidence_level": "0.95",
+            "guardrail_rule": "no-protected-regression",
+            "missing_evidence": "inconclusive",
+            "claim_source": "held-out-only",
+        }
+    )
+    analysis_bytes = canonical_json_bytes(analysis_policy.model_dump(mode="json"))
     return {
         "schema_version": "cernora.reference.study-intent/v1",
         "study_kind": "contract-proof",
-        "baseline": {
-            "configuration_id": "baseline",
-            "authority_sha256": "a" * 64,
-        },
-        "candidate": {
-            "configuration_id": "candidate",
-            "baseline_authority_sha256": "a" * 64,
-            "authority_sha256": "b" * 64,
-            "treatment_axis": "prompt-instruction",
-            "treatment_sha256": "c" * 64,
-        },
-        "hypothesis": {
-            "observed_failure_code": "interval-boundary-v1",
-            "mechanism": "The agent misses inclusive endpoint overlap.",
-            "intervention_scope": "Prompt guidance for interval repair reasoning.",
-            "expected_observation": "Fewer boundary failures on unseen interval tasks.",
-            "falsifier": "No held-out boundary improvement or a protected-path regression.",
-        },
+        "candidate_development": candidate_development.model_dump(mode="json"),
         "cases": [
             {
                 "case_id": "dev-ledger",
@@ -100,11 +101,19 @@ def study_intent_payload() -> dict[str, object]:
         "repetitions": 2,
         "max_attempt_count": 12,
         "max_wall_seconds": 7200,
-        "heldout_manifest_sha256": "7" * 64,
-        "analysis_policy_sha256": "5" * 64,
-        "implementation_lock": materialize_implementation_lock(implementation_payload()).model_dump(
-            mode="json"
-        ),
+        "heldout_commitment": materialize_heldout_commitment(
+            {
+                "schema_version": "cernora.reference.heldout-commitment/v1",
+                "manifest_sha256": "7" * 64,
+                "case_count": 1,
+                "case_commitment_root_sha256": "8" * 64,
+                "reveal_policy_sha256": "9" * 64,
+            }
+        ).model_dump(mode="json"),
+        "analysis_policy": analysis_policy.model_dump(mode="json"),
+        "implementation_lock": materialize_implementation_lock(
+            implementation_payload(analysis_sha256=sha256_bytes(analysis_bytes))
+        ).model_dump(mode="json"),
     }
 
 
@@ -152,6 +161,9 @@ def test_protocol_separates_claim_scopes_and_counterbalances_pairs() -> None:
     assert protocol.claims.development == "descriptive"
     assert protocol.claims.regression == "guardrail"
     assert protocol.claims.heldout == "confirmatory-primary"
+    assert protocol.claims.descriptive_case_ids == ("dev-ledger",)
+    assert protocol.claims.guardrail_case_ids == ("reg-query",)
+    assert protocol.claims.primary_case_ids == ("held-interval",)
     assert protocol.claims.effect_conclusion == "descriptive-only"
     assert protocol.confirmatory_quality_stop is False
 
@@ -279,6 +291,22 @@ def test_prepare_rejects_temporary_custody(tmp_path: Path) -> None:
         prepare(materialize_study_intent(study_intent_payload()), tmp_path / "study")
 
     assert raised.value.code == "invalid-intent"
+
+
+def test_study_intent_rejects_development_evidence_outside_its_split() -> None:
+    payload = study_intent_payload()
+    assert isinstance(payload["candidate_development"], dict)
+    observations = payload["candidate_development"]["observations"]
+    assert isinstance(observations, list)
+    assert isinstance(observations[0], dict)
+    observations[0]["case_id"] = "held-interval"
+    del payload["candidate_development"]["development_id"]
+    payload["candidate_development"] = freeze_candidate_development(
+        payload["candidate_development"]
+    ).model_dump(mode="json")
+
+    with pytest.raises(ValidationError):
+        materialize_study_intent(payload)
 
 
 def test_advance_is_idempotent_and_binds_fresh_acceptance(tmp_path: Path) -> None:
