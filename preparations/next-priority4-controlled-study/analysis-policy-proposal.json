@@ -1,0 +1,1 @@
+{"bootstrap_resamples":10000,"claim_source":"held-out-only","confidence_level":"0.95","guardrail_rule":"no-protected-regression","missing_evidence":"inconclusive","policy_id":"2938315baf2c2012d12209d83e8202b9a6c8f6ba1a34bbf55474d5324d7cc63f","primary_outcome":"paired-reliable-success-rate-delta","schema_version":"cernora.reference.study-analysis-policy/v1"}

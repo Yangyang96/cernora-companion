@@ -45,6 +45,19 @@ Only a complete evaluated matrix publishes an Evidence Pack containing its ledge
 Execution Pack, strict Core Batch, and held-out-primary Comparison. `study rebuild` uses no Runtime
 or credentials: it rederives the Core packages and reproduces the exact closed artifact bytes.
 See `docs/controlled-study.md` for the state, custody, and authority contracts.
+Before any authenticated study, complete `docs/live-controlled-study-dossier.md`; it freezes the
+human review record and live authorization boundary but never replaces the canonical Study
+authorities or grants permission to execute.
+
+The checked-in `preparations/next-priority4-controlled-study` bundle is the machine-verifiable
+starting point for that review. It binds the current offline Core and Companion wheel candidates
+and carries an explicitly non-binding recommendation for a confirmatory held-out analysis and
+9 × 2 × 3 bounds. The study mode, scientific question, fresh Candidate, independent reviewer,
+fresh held-out custodian/commitment, remaining implementation lock, and administrative fields all
+remain caller-owned and pending. It contains no `StudyIntent`, reveal, acceptance, execution
+nonce, RunPlan, ComparisonPlan, or execution directive. Use
+`scripts/create_study_preparation_bundle.py verify` to strictly reload it against the exact wheel
+bytes; this maintenance script is not a fourth `experiment study` operation.
 
 The standalone `verify`, `run`, `resume`, `rebuild`, `summarize`, and `compare` commands below are
 retained only to read or reproduce historical M1–M3 artifacts. They are not the supported path for

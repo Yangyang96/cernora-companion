@@ -49,6 +49,23 @@ M1–M3 artifacts. New controlled work must not compose those commands into a pa
 3. The prepared state and its ledger root bind the Intent and Protocol before any reveal,
    acceptance, credential use, or Runtime action.
 
+### Pre-authority preparation bundle
+
+When required scientific or custody decisions are not yet available, do not manufacture a
+placeholder `StudyIntent`. The non-authoritative
+[`next Priority 4 preparation bundle`](../preparations/next-priority4-controlled-study/manifest.json)
+provides a strict earlier stop. Its manifest content-identifies the exact Core and Companion wheel
+candidates, review worksheet, every pending user or custodian decision, and an explicitly
+non-binding `confirmatory-effect` design and analysis proposal. The proposal does not pre-empt the
+caller's study-mode or scientific choices. Structural inspection rejects an unknown or changed
+file; strict verification additionally requires and checks both exact wheel artifacts.
+
+The preparation bundle is not a Study state and adds no orchestration transition. It contains no
+`StudyIntent`, `StudyProtocol`, held-out reveal, acceptance, execution nonce,
+`ControlledRunPlanV2`, `ComparisonPlanV1`, or advance directive. Only after a new Candidate record
+and independently created held-out commitment exist may an operator assemble the canonical
+`StudyIntent` and enter the existing `prepare` seam.
+
 `ImplementationLock` identifies exact bytes, not display versions, for Companion, Cernora,
 Runtime adapter, Harness, and analysis policy. Any changed artifact digest creates a different
 lock and therefore a different protocol authority. Acceptance is valid only for the exact
@@ -88,11 +105,15 @@ The only supported state progression is:
 
 ```text
 Prepared
-  -> AwaitingReveal
-  -> AwaitingAcceptance
-  -> Running
-  -> Paused | Completed | Terminated
+  -- request-reveal --> AwaitingReveal
+  -- bind-reveal --> AwaitingAcceptance
+  -- start-execution(acceptance + RunPlan + ComparisonPlan) --> Running
+  -- step-execution --> Running | Paused | Completed | Terminated
 ```
+
+There is no standalone `accept` transition. `start-execution` atomically binds the fresh
+acceptance, complete execution and comparison authorities, schedule, nonce, and shared Repeat
+Runner identity. An acceptance without those authorities is rejected before a ledger write.
 
 Every transition appends a content-addressed, hash-chained ledger record before exposing the new
 state. `advance` first reloads and verifies the ledger, then either returns the already-materialized
@@ -156,3 +177,8 @@ plugin SDK, move Runtime concerns into Core, infer implementation identity from 
 promote a Candidate, or turn incomplete evidence into a quality conclusion. General Runtime
 extensibility belongs to a later Priority 6 decision after the single supported adapter path is
 stable and evidenced.
+
+Before proposing authenticated execution, complete the separate
+[`Live Controlled Study Dossier`](live-controlled-study-dossier.md). The dossier is a review and
+authorization checklist, not a substitute for the canonical Study authorities or a live
+authorization.
