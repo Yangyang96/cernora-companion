@@ -64,6 +64,10 @@ class ControlledAttempt(StrictV2Contract):
                 raise ValueError("evaluated Attempt requires observation, result, and package")
             if self.retry_eligible:
                 raise ValueError("evaluated behavioral outcomes are never retry eligible")
+            assert self.repair_result is not None
+            if not self.repair_result.evaluation_valid:
+                raise ValueError("evaluated Attempt requires a valid repair evaluation")
+            self._verify_evaluation_evidence()
         elif any(evaluated):
             raise ValueError("infrastructure Attempt cannot carry evaluated evidence")
         elif self.retry_eligible != self.lifecycle.retry_eligible:
@@ -91,10 +95,66 @@ class ControlledAttempt(StrictV2Contract):
             or self.repair_result.protected_paths != spec.task.protected_paths
         ):
             raise ValueError("repair result does not bind the selected Experiment authority")
+        if self.evaluation is not None:
+            receipt, _ = _evaluation_documents(self.evaluation)
+            if receipt.get("authority") != spec.expected_evaluation_authority.model_dump(
+                mode="json"
+            ):
+                raise ValueError("Evaluation authority does not bind the selected Experiment")
+            authority = receipt.get("authority")
+            if not isinstance(authority, dict):
+                raise ValueError("Evaluation receipt authority must be a JSON object")
+            policy_payload = {
+                "schema_version": "agent.evaluator.comparison-evaluation-policy/v1",
+                "profile": receipt.get("profile"),
+                "projection": authority.get("projection"),
+                "scorer": receipt.get("scorer"),
+                "case_gate": receipt.get("case_gate"),
+            }
+            if (
+                canonical_content_id(policy_payload, excluded=frozenset())
+                != spec.expected_evaluation_policy.policy_sha256
+            ):
+                raise ValueError("Evaluation policy does not bind the selected Experiment")
         if self.lifecycle is not None and self.retry_eligible:
             eligible = self.lifecycle.category.replace("_", "-")
             if eligible not in spec.retry.eligible_states:
                 raise ValueError("Attempt retries a lifecycle outside the frozen retry policy")
+
+    def _verify_evaluation_evidence(self) -> None:
+        assert self.evaluation is not None
+        assert self.repair_result is not None
+        receipt, evidence = _evaluation_documents(self.evaluation)
+        run = receipt.get("run")
+        if not isinstance(run, dict) or run.get("attempt_id") != self.source_attempt_id:
+            raise ValueError("Evaluation Package does not bind the source Attempt")
+        metadata = evidence.get("metadata")
+        if not isinstance(metadata, dict) or metadata.get("result_id") != (
+            self.repair_result.result_id
+        ):
+            raise ValueError("Evaluation Package does not bind the repair result")
+        case = receipt.get("case")
+        if not isinstance(case, dict) or case.get("case_id") != self.repair_result.case_id:
+            raise ValueError("Evaluation Package does not bind the repair Case")
+        expected_outcome = "pass" if self.repair_result.passed else "fail"
+        if receipt.get("case_outcome") != expected_outcome:
+            raise ValueError("Evaluation outcome contradicts the repair result")
+
+
+def _evaluation_documents(
+    package: BatchEvaluationPackage,
+) -> tuple[dict[str, object], dict[str, object]]:
+    files = package.file_payloads()
+    documents: list[dict[str, object]] = []
+    for name in ("evaluation-receipt.json", "evidence.json"):
+        raw = files.get(name)
+        if raw is None:
+            raise ValueError(f"Evaluation Package is missing {name}")
+        payload = load_json_bytes(raw)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Evaluation Package {name} must contain one JSON object")
+        documents.append(payload)
+    return documents[0], documents[1]
 
 
 def materialize_controlled_attempt(
@@ -135,10 +195,21 @@ class VerifiedControlledAttemptArtifact:
     terminal: TerminalRecord
 
 
-def _controlled_lifecycle_terminal(attempt: ControlledAttempt) -> TerminalRecord:
+def _controlled_terminal(attempt: ControlledAttempt) -> TerminalRecord:
     lifecycle = attempt.lifecycle
     if lifecycle is None:
-        raise ContractError("evaluated controlled Attempt artifacts are not yet supported")
+        repair_result = attempt.repair_result
+        if repair_result is None:
+            raise ContractError("evaluated controlled Attempt is missing its repair result")
+        passed = repair_result.passed
+        return TerminalRecord(
+            schema_version="cernora.reference.terminal/v1",
+            attempt_id=attempt.attempt_id,
+            state="completed" if passed else "behavioral-failure",
+            reason="authoritative-repair-passed" if passed else "authoritative-repair-failed",
+            retry_eligible=False,
+            predecessor_attempt_id=attempt.predecessor_attempt_id,
+        )
     states: dict[str, TerminalState] = {
         "timed_out": "timed-out",
         "interrupted": "interrupted",
@@ -173,7 +244,7 @@ def verify_controlled_attempt_artifact(root: Path) -> VerifiedControlledAttemptA
         payload = load_json_bytes(raw)
         if not isinstance(payload, dict):
             raise ContractError(f"controlled Attempt {name} must contain one JSON object")
-        value = model.model_validate(payload)
+        value = model.model_validate_json(raw)
         if raw != canonical_json_bytes(value.model_dump(mode="json")):
             raise ContractError(f"controlled Attempt {name} is not canonical JSON")
         parsed.append(value)
@@ -209,7 +280,7 @@ def publish_controlled_attempt_artifact(
     if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
         raise ContractError("controlled Attempt destination must be one new child")
     attempt.verify_authority(specification)
-    terminal = _controlled_lifecycle_terminal(attempt)
+    terminal = _controlled_terminal(attempt)
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent))
     published = False
     try:
