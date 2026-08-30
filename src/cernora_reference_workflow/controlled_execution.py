@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Literal, Protocol, Self
 
 from cernora import BatchAttemptResources, BatchEvaluationPackage, BatchLifecycleRecord
 from pydantic import Field, field_validator, model_validator
 
-from cernora_reference_workflow.common import canonical_content_id
+from cernora_reference_workflow.common import (
+    ContractError,
+    canonical_content_id,
+    canonical_json_bytes,
+    closed_regular_tree,
+    load_json_bytes,
+    read_regular_file_bytes,
+    sha256_file,
+)
 from cernora_reference_workflow.controlled_evaluation import RepairResultRecord
 from cernora_reference_workflow.controlled_experiment_spec import (
     ControlledExperimentSpecV2,
@@ -20,6 +31,8 @@ from cernora_reference_workflow.controlled_run_plan import (
     ControlledTrialSlotV2,
 )
 from cernora_reference_workflow.controlled_runtime import RuntimeAuthorityObservation
+from cernora_reference_workflow.lifecycle import TerminalRecord, TerminalState
+from cernora_reference_workflow.publication import atomic_publish_directory
 
 
 class ControlledAttempt(StrictV2Contract):
@@ -92,6 +105,140 @@ def materialize_controlled_attempt(
     payload = dict(payload_without_identity)
     payload["attempt_id"] = canonical_content_id(payload, excluded=frozenset())
     return ControlledAttempt.model_validate(payload)
+
+
+class ControlledAttemptArtifactManifest(StrictV2Contract):
+    """Closed on-disk binding for one V2 Attempt adopted by the Repeat Runner."""
+
+    schema_version: Literal["cernora.reference.controlled-attempt-artifact/v1"]
+    artifact_id: Digest
+    experiment_id: Digest
+    trial_id: Digest
+    attempt_id: Digest
+    attempt_sha256: Digest
+    terminal_sha256: Digest
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"artifact_id"})
+        )
+        if self.artifact_id != expected:
+            raise ValueError("controlled Attempt artifact identity mismatch")
+        return self
+
+
+@dataclass(frozen=True)
+class VerifiedControlledAttemptArtifact:
+    manifest: ControlledAttemptArtifactManifest
+    attempt: ControlledAttempt
+    terminal: TerminalRecord
+
+
+def _controlled_lifecycle_terminal(attempt: ControlledAttempt) -> TerminalRecord:
+    lifecycle = attempt.lifecycle
+    if lifecycle is None:
+        raise ContractError("evaluated controlled Attempt artifacts are not yet supported")
+    states: dict[str, TerminalState] = {
+        "timed_out": "timed-out",
+        "interrupted": "interrupted",
+        "infrastructure_start_failure": "infrastructure-start-failure",
+        "transient_provider_pre_terminal": "transient-provider-pre-terminal",
+        "runtime_pre_terminal_failure": "runtime-pre-terminal-failure",
+        "other_verified_infrastructure_failure": "runtime-pre-terminal-failure",
+    }
+    return TerminalRecord(
+        schema_version="cernora.reference.terminal/v1",
+        attempt_id=attempt.attempt_id,
+        state=states[lifecycle.category],
+        reason=lifecycle.source_state,
+        retry_eligible=attempt.retry_eligible,
+        predecessor_attempt_id=attempt.predecessor_attempt_id,
+    )
+
+
+def verify_controlled_attempt_artifact(root: Path) -> VerifiedControlledAttemptArtifact:
+    """Strictly reload one closed V2 Attempt artifact without Runtime access."""
+
+    files = closed_regular_tree(root)
+    if set(files) != {"attempt.json", "manifest.json", "terminal.json"}:
+        raise ContractError("controlled Attempt artifact has an invalid closed file set")
+    parsed: list[object] = []
+    for name, model in (
+        ("manifest.json", ControlledAttemptArtifactManifest),
+        ("attempt.json", ControlledAttempt),
+        ("terminal.json", TerminalRecord),
+    ):
+        raw = read_regular_file_bytes(files[name])
+        payload = load_json_bytes(raw)
+        if not isinstance(payload, dict):
+            raise ContractError(f"controlled Attempt {name} must contain one JSON object")
+        value = model.model_validate(payload)
+        if raw != canonical_json_bytes(value.model_dump(mode="json")):
+            raise ContractError(f"controlled Attempt {name} is not canonical JSON")
+        parsed.append(value)
+    manifest, attempt, terminal = parsed
+    assert isinstance(manifest, ControlledAttemptArtifactManifest)
+    assert isinstance(attempt, ControlledAttempt)
+    assert isinstance(terminal, TerminalRecord)
+    if (
+        manifest.trial_id != attempt.trial_id
+        or manifest.attempt_id != attempt.attempt_id
+        or terminal.attempt_id != attempt.attempt_id
+        or terminal.predecessor_attempt_id != attempt.predecessor_attempt_id
+        or terminal.retry_eligible != attempt.retry_eligible
+        or manifest.attempt_sha256 != sha256_file(files["attempt.json"])
+        or manifest.terminal_sha256 != sha256_file(files["terminal.json"])
+    ):
+        raise ContractError("controlled Attempt artifact bindings do not match")
+    return VerifiedControlledAttemptArtifact(
+        manifest=manifest,
+        attempt=attempt,
+        terminal=terminal,
+    )
+
+
+def publish_controlled_attempt_artifact(
+    destination: Path,
+    *,
+    attempt: ControlledAttempt,
+    specification: ControlledExperimentSpecV2,
+) -> VerifiedControlledAttemptArtifact:
+    """Atomically publish one authority-verified V2 Attempt into assigned custody."""
+
+    if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
+        raise ContractError("controlled Attempt destination must be one new child")
+    attempt.verify_authority(specification)
+    terminal = _controlled_lifecycle_terminal(attempt)
+    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.staging-", dir=destination.parent))
+    published = False
+    try:
+        (staging / "attempt.json").write_bytes(
+            canonical_json_bytes(attempt.model_dump(mode="json"))
+        )
+        (staging / "terminal.json").write_bytes(
+            canonical_json_bytes(terminal.model_dump(mode="json"))
+        )
+        payload: dict[str, object] = {
+            "schema_version": "cernora.reference.controlled-attempt-artifact/v1",
+            "experiment_id": specification.experiment_id,
+            "trial_id": attempt.trial_id,
+            "attempt_id": attempt.attempt_id,
+            "attempt_sha256": sha256_file(staging / "attempt.json"),
+            "terminal_sha256": sha256_file(staging / "terminal.json"),
+        }
+        payload["artifact_id"] = canonical_content_id(payload, excluded=frozenset())
+        manifest = ControlledAttemptArtifactManifest.model_validate(payload)
+        (staging / "manifest.json").write_bytes(
+            canonical_json_bytes(manifest.model_dump(mode="json"))
+        )
+        verified = verify_controlled_attempt_artifact(staging)
+        atomic_publish_directory(staging, destination)
+        published = True
+        return verified
+    finally:
+        if not published:
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 class ControlledTrialExecution(StrictV2Contract):
@@ -188,9 +335,13 @@ class ControlledAttemptExecutor(Protocol):
 
 __all__ = [
     "ControlledAttempt",
+    "ControlledAttemptArtifactManifest",
     "ControlledAttemptExecutor",
     "ControlledAttemptRequest",
     "ControlledExecutionResult",
     "ControlledTrialExecution",
+    "VerifiedControlledAttemptArtifact",
     "materialize_controlled_attempt",
+    "publish_controlled_attempt_artifact",
+    "verify_controlled_attempt_artifact",
 ]

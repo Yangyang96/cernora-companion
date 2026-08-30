@@ -16,6 +16,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 from cernora_reference_workflow.attempt_record import verify_preterminal_attempt
 from cernora_reference_workflow.common import ContractError, load_json_file, sha256_file
+from cernora_reference_workflow.controlled_execution import verify_controlled_attempt_artifact
 from cernora_reference_workflow.controlled_experiment_spec import ControlledExperimentSpecV2
 from cernora_reference_workflow.execution import (
     ActiveAttemptRecord,
@@ -107,7 +108,7 @@ class _AttemptFacts:
     terminal: TerminalRecord
     source_trial_id: str
     manifest_sha256: str
-    kind: Literal["completed-export", "preterminal"]
+    kind: Literal["completed-export", "preterminal", "controlled-attempt"]
 
 
 def _attempt_path(root: Path, trial_id: str, ordinal: int) -> Path:
@@ -162,11 +163,15 @@ def _attempt_facts(path: Path) -> _AttemptFacts:
     if schema_version == "cernora.reference.completed-export/v1":
         completed = verify_completed_export(path)
         source_trial_id = completed.source_trial_id
-        kind: Literal["completed-export", "preterminal"] = "completed-export"
+        kind: Literal["completed-export", "preterminal", "controlled-attempt"] = "completed-export"
     elif schema_version == "cernora.reference.preterminal-attempt/v1":
         preterminal = verify_preterminal_attempt(path)
         source_trial_id = preterminal.source_trial_id
         kind = "preterminal"
+    elif schema_version == "cernora.reference.controlled-attempt-artifact/v1":
+        controlled = verify_controlled_attempt_artifact(path)
+        source_trial_id = controlled.attempt.trial_id
+        kind = "controlled-attempt"
     else:
         raise ContractError("Attempt executor published an unknown artifact contract")
     terminal = TerminalRecord.model_validate(terminal_payload)

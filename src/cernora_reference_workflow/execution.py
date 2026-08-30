@@ -24,6 +24,11 @@ from cernora_reference_workflow.common import (
     sha256_file,
     validate_relative_path,
 )
+from cernora_reference_workflow.controlled_execution import (
+    ControlledAttempt,
+    verify_controlled_attempt_artifact,
+)
+from cernora_reference_workflow.controlled_experiment_spec import ControlledExperimentSpecV2
 from cernora_reference_workflow.controlled_run_plan import (
     ControlledRunPlanV2,
     ControlledTrialSlotV2,
@@ -140,7 +145,7 @@ class AttemptBinding(StrictContract):
     attempt_id: Digest
     predecessor_attempt_id: Digest | None
     source_trial_id: NonEmpty
-    artifact_kind: Literal["completed-export", "preterminal"]
+    artifact_kind: Literal["completed-export", "preterminal", "controlled-attempt"]
     artifact_manifest_sha256: Digest
     terminal_sha256: Digest
 
@@ -376,9 +381,10 @@ class ExecutionPackManifest(StrictContract):
 class _AttemptArtifact:
     terminal: TerminalRecord
     source_trial_id: str
-    kind: Literal["completed-export", "preterminal"]
+    kind: Literal["completed-export", "preterminal", "controlled-attempt"]
     manifest_sha256: str
     terminal_sha256: str
+    controlled_attempt: ControlledAttempt | None
 
 
 @dataclass(frozen=True)
@@ -521,12 +527,20 @@ def _verify_attempt(path: Path) -> _AttemptArtifact:
         verified = verify_completed_export(path)
         verified_attempt_id = verified.attempt_id
         source_trial_id = verified.source_trial_id
-        kind: Literal["completed-export", "preterminal"] = "completed-export"
+        kind: Literal["completed-export", "preterminal", "controlled-attempt"] = "completed-export"
+        controlled_attempt = None
     elif schema == "cernora.reference.preterminal-attempt/v1":
         verified_preterminal = verify_preterminal_attempt(path)
         verified_attempt_id = verified_preterminal.attempt_id
         source_trial_id = verified_preterminal.source_trial_id
         kind = "preterminal"
+        controlled_attempt = None
+    elif schema == "cernora.reference.controlled-attempt-artifact/v1":
+        verified_controlled = verify_controlled_attempt_artifact(path)
+        verified_attempt_id = verified_controlled.attempt.attempt_id
+        source_trial_id = verified_controlled.attempt.trial_id
+        kind = "controlled-attempt"
+        controlled_attempt = verified_controlled.attempt
     else:
         raise ContractError("Attempt directory has an unknown artifact contract")
     terminal = _load_canonical(path / "terminal.json", TerminalRecord)
@@ -538,6 +552,7 @@ def _verify_attempt(path: Path) -> _AttemptArtifact:
         kind=kind,
         manifest_sha256=sha256_file(path / "manifest.json"),
         terminal_sha256=sha256_file(path / "terminal.json"),
+        controlled_attempt=controlled_attempt,
     )
 
 
@@ -823,6 +838,15 @@ def _load_state(root: Path, *, allow_ambiguous: bool) -> ExecutionState:
                     != active_record.predecessor_attempt_id
                 ):
                     raise ContractError("Attempt artifact does not bind its active Trial record")
+                if artifact.controlled_attempt is not None:
+                    specification = next(
+                        specification
+                        for specification in run_plan.experiment_specs
+                        if specification.experiment_id == item.slot.experiment_id
+                    )
+                    if not isinstance(specification, ControlledExperimentSpecV2):
+                        raise ContractError("controlled Attempt requires a controlled V2 plan")
+                    artifact.controlled_attempt.verify_authority(specification)
                 artifacts[(item.trial_id, ordinal)] = artifact
             elif not allow_ambiguous:
                 raise ContractError("active Attempt has no verifiable terminal artifact")
