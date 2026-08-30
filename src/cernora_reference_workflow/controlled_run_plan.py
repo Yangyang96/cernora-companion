@@ -154,6 +154,7 @@ class ControlledRunPlanV2(StrictV2Contract):
                 raise ValueError("Companion 0.3.0 requires the accepted M3 analysis boundary")
         elif (
             self.analysis.method_version != "m4"
+            or configuration_ids != ("baseline", "candidate")
             or len(self.cases) != 9
             or self.repetitions != 3
             or self.planned_trial_count != 54
@@ -189,27 +190,47 @@ class ControlledRunPlanV2(StrictV2Contract):
 
     def expand_trial_slots(self) -> tuple[ControlledTrialSlotV2, ...]:
         slots: list[ControlledTrialSlotV2] = []
-        for cell in self.cells:
+        if self.companion_version == "0.3.0":
+            coordinates = tuple(
+                (cell, repetition)
+                for cell in self.cells
+                for repetition in range(1, self.repetitions + 1)
+            )
+        else:
+            cells = {(item.case_id, item.configuration_id): item for item in self.cells}
+            ordered: list[tuple[RunPlanCell, int]] = []
             for repetition in range(1, self.repetitions + 1):
-                identity = {
-                    "case_id": cell.case_id,
-                    "configuration_id": cell.configuration_id,
-                    "experiment_id": cell.experiment_id,
-                    "repetition": repetition,
-                    "run_plan_id": self.run_plan_id,
-                }
-                slots.append(
-                    ControlledTrialSlotV2(
-                        schema_version="cernora.reference.controlled-trial-slot/v2",
-                        trial_slot_id=canonical_content_id(identity, excluded=frozenset()),
-                        run_plan_id=self.run_plan_id,
-                        slot_index=len(slots) + 1,
-                        case_id=cell.case_id,
-                        configuration_id=cell.configuration_id,
-                        experiment_id=cell.experiment_id,
-                        repetition=repetition,
+                for case_index, case in enumerate(self.cases):
+                    configuration_order = (
+                        ("baseline", "candidate")
+                        if (case_index + repetition) % 2 == 1
+                        else ("candidate", "baseline")
                     )
+                    ordered.extend(
+                        (cells[(case.case_id, configuration_id)], repetition)
+                        for configuration_id in configuration_order
+                    )
+            coordinates = tuple(ordered)
+        for cell, repetition in coordinates:
+            identity = {
+                "case_id": cell.case_id,
+                "configuration_id": cell.configuration_id,
+                "experiment_id": cell.experiment_id,
+                "repetition": repetition,
+                "run_plan_id": self.run_plan_id,
+            }
+            slots.append(
+                ControlledTrialSlotV2(
+                    schema_version="cernora.reference.controlled-trial-slot/v2",
+                    trial_slot_id=canonical_content_id(identity, excluded=frozenset()),
+                    run_plan_id=self.run_plan_id,
+                    slot_index=len(slots) + 1,
+                    case_id=cell.case_id,
+                    configuration_id=cell.configuration_id,
+                    experiment_id=cell.experiment_id,
+                    repetition=repetition,
                 )
+            )
         return tuple(slots)
 
 

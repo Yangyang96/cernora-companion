@@ -222,9 +222,19 @@ def test_v2_plan_expands_exact_authority_bound_matrix() -> None:
 
 def test_m4_plan_requires_exact_nine_by_two_by_three_matrix() -> None:
     plan = materialize_controlled_run_plan(valid_m4_payload())
+    slots = plan.expand_trial_slots()
     assert len(plan.cases) == 9
-    assert len(plan.expand_trial_slots()) == 54
+    assert len(slots) == 54
     assert plan.worst_case_attempt_count == plan.execution.max_attempt_count == 108
+    assert tuple((item.case_id, item.configuration_id, item.repetition) for item in slots[:6]) == (
+        ("repair-case-1", "baseline", 1),
+        ("repair-case-1", "candidate", 1),
+        ("repair-case-2", "candidate", 1),
+        ("repair-case-2", "baseline", 1),
+        ("repair-case-3", "baseline", 1),
+        ("repair-case-3", "candidate", 1),
+    )
+    assert slots[18].repetition == 2
 
 
 @pytest.mark.parametrize("planned", (12, 53, 55))
