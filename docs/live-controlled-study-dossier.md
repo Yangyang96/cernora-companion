@@ -219,8 +219,23 @@ selected proxy endpoints, cleans the process group on operator signals, records 
 incidents, and can ledger-adopt only the exact artifact for an active claim without rerunning it.
 Custody stores the canonical request and replays its Plan, ordered Case authorities, envelope,
 request ID, and physical path before any claim.
-The custody contains zero Attempts and zero completed Trials. It awaits explicit authorization;
-no provider call, smoke, held-out reveal, or 54-Trial work has started.
+The user authorized the exact request, and execution completed all six Trials with exactly six
+Attempts. Outcome `f381df0db6cdcbea00d6bd8f850100a5b519a171f92d6c38757dc91d7a56a08b`
+is `inconclusive`. Every Attempt published a non-retry `runtime-pre-terminal-failure` lifecycle
+artifact with no Runtime observation, repair result, evaluation, or Agent observation. Recorded
+Attempt durations range from 316,149 to 319,974 milliseconds, and total execution elapsed time is
+2,130,235 milliseconds, within the frozen 7,200-second wall bound. Strict replay finds six
+claim/publication pairs, one completion, and no ambiguous claim, orphan artifact, or incident.
+
+The lifecycle artifacts are not behavioral failures and cannot support Candidate construction.
+No smoke, held-out access or reveal, Controlled Study execution, or 54-Trial work has started or
+is authorized. The repaired development-only pilot stops at this completed `inconclusive` outcome.
+
+Post-completion focused tests, static checks, repository/custody secret scans, and exact
+credential-value absence scanning passed. Independent read-only replay recomputed every ledger,
+artifact, request, Plan, execution, outcome, and physical path binding, found no unresolved P0-P3,
+and recorded custody-tree snapshot digest
+`8caac73411d024dde246914b2654c7cddd7785044c89f982a95477702efe2ff9`.
 
 ## 6. Offline freeze sequence
 

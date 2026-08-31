@@ -211,6 +211,24 @@ custody path before any claim. Plans v1 and v2 remain inspectable but cannot sta
 | Cernora Core wheel | `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
 | Companion wheel | `7288579a4676fbcd2f4c3e31a0f4f6c34979184a70c90987a2e031606bbc151b` |
 
-The new custody is prepared with zero Attempts and zero completed Trials. No Agent/provider call
-has been made under this request. Execution must stop here until that exact request receives new
-development-only pilot authorization.
+The user authorized the complete development-only pilot for request
+`d34dfab521aeadb749d06f8d37b3df27a6eca4d0977374f88e27f39d65ed1c26`. Execution completed all
+six Trials with exactly six Attempts and outcome
+`f381df0db6cdcbea00d6bd8f850100a5b519a171f92d6c38757dc91d7a56a08b`, status `inconclusive`.
+Each Attempt published an exact non-retry lifecycle artifact with
+`runtime-pre-terminal-failure`, no Runtime observation, no repair result, and no evaluation. The
+individual recorded durations were 316,149 through 319,974 milliseconds; the full execution used
+2,130,235 milliseconds, within the frozen 7,200-second wall bound. The ledger contains one
+`execution-started`, six claim/publication pairs, and one `completed` event. Offline replay finds
+no ambiguous claim, orphan artifact, or incident receipt.
+
+These lifecycle records are not Agent failures or behavioral observations. No Candidate is
+eligible, and no Candidate construction, smoke, held-out access or reveal, Controlled Study
+execution, or 54-Trial work is authorized or has started. Stop at the completed `inconclusive`
+development-pilot outcome.
+
+Post-completion replay, 121 focused offline tests, Ruff, format checking, strict Mypy, repository
+and custody secret scans, and an exact credential-value absence scan all passed. Independent
+read-only review recomputed the ledger, artifact, request, Plan, execution, outcome, and physical
+path bindings and found no unresolved P0-P3. The reviewed custody-tree snapshot digest is
+`8caac73411d024dde246914b2654c7cddd7785044c89f982a95477702efe2ff9`.
