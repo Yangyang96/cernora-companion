@@ -317,6 +317,7 @@ def _build_all_images(
     build_base_image: str,
     work_root: Path,
     environment: Mapping[str, str],
+    image_prefix: str = "cernora-reference/m4-",
 ) -> dict[str, str]:
     base_id, base_platform = _inspect_image(build_base_image, environment=environment)
     if build_base_image.rsplit("@", 1)[-1] != base_id or base_platform != _PLATFORM:
@@ -324,8 +325,8 @@ def _build_all_images(
     image_references: dict[str, str] = {}
     for task in tasks:
         case_id = task.case.case_id
-        primary_tag = f"cernora-reference/m4-{case_id}:{_PRIMARY_TAG}"
-        repro_tag = f"cernora-reference/m4-{case_id}:{_REPRO_TAG}"
+        primary_tag = f"{image_prefix}{case_id}:{_PRIMARY_TAG}"
+        repro_tag = f"{image_prefix}{case_id}:{_REPRO_TAG}"
         if (
             _run(("docker", "image", "inspect", primary_tag), environment=environment).returncode
             == 0
@@ -344,7 +345,7 @@ def _build_all_images(
             if first != second:
                 raise ContractError("M4 task image is not reproducible across no-cache builds")
             digest = first.removeprefix("sha256:")
-            image_references[case_id] = f"cernora-reference/m4-{case_id}@sha256:{digest}"
+            image_references[case_id] = f"{image_prefix}{case_id}@sha256:{digest}"
         finally:
             shutil.rmtree(context, ignore_errors=True)
     return image_references

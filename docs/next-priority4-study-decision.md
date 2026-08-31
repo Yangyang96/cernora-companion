@@ -1,8 +1,9 @@
 # Next Priority 4 Study Decision Proposal
 
-Status: **proposal only — not selected, frozen, revealed, or authorized**
+Status: **`confirmatory-effect` selected; development pilot offline-prepared, not authorized**
 
-This document records the next decision boundary after the offline preparation bundle. It is not a
+This document records the next decision boundary after the offline preparation bundle. The user
+selected the recommended `confirmatory-effect` design on 2026-08-31. This file is not a
 `StudyIntent`, `StudyProtocol`, Candidate Development record, held-out commitment, acceptance,
 RunPlan, ComparisonPlan, or execution directive. No command in this document is authorized merely
 because the document exists.
@@ -23,11 +24,11 @@ Therefore a fresh Candidate and its causal hypothesis cannot be honestly frozen 
 currently admissible evidence. Do not manufacture an observation or relabel a verifier failure as
 an Agent failure.
 
-## Recommended study-design selection
+## Selected study design
 
-The recommended choice, still awaiting explicit user selection, is:
+The selected choice is:
 
-| Field | Proposed value |
+| Field | Selected value |
 |---|---|
 | Study mode | `confirmatory-effect` |
 | Candidate Treatment axis | `prompt-instruction` only |
@@ -42,12 +43,10 @@ The recommended choice, still awaiting explicit user selection, is:
 | Missing or incomplete evidence | `inconclusive` |
 | Proposed bounds | 9 Cases x 2 Configurations x 3 repetitions; 54 Trials; at most 108 Attempts; 43,200 seconds |
 
-The mode, Primary scope, bounds, bootstrap resample count, confidence level, and missing-evidence
-rule match the current non-binding preparation proposal. The case-clustered bootstrap method,
-practical threshold, and detailed Guardrails are new proposals in this document and still require
-explicit selection. The Candidate axis name `prompt-instruction` projects to ComparisonPlan
-Treatment kind `prompt_instruction`. Every selected value must be frozen into a replacement
-preparation before any Study authority is materialized.
+The Candidate axis name `prompt-instruction` projects to ComparisonPlan Treatment kind
+`prompt_instruction`. These values select the design direction but do not freeze a Candidate or
+authorize a Study. They must be frozen into a replacement preparation only after admissible
+development evidence exists.
 
 ## Scientific-question template
 
@@ -64,8 +63,7 @@ question remains pending.
 
 ## Next bounded work package
 
-If the user selects the proposed design, prepare a separate development-only work package in this
-order:
+The selected design uses this separate development-only work package in order:
 
 1. Create and review a fresh development/regression corpus without held-out material.
 2. Freeze Baseline, Runtime, Harness, model, reasoning, tool schema, timeout, retry, and resource
@@ -80,12 +78,48 @@ order:
 7. Obtain an independent review of the Candidate and development evidence.
 8. Only then ask an independent custodian for a fresh opaque held-out commitment.
 
+Steps 1 and 2 are complete. Step 3 is the current boundary. Steps 4 through 8 have not begun.
+There is no authoritative Agent observation, failure mechanism, Candidate, Candidate Development
+record, held-out commitment, reveal, smoke, or Study execution.
+
 The development pilot authorization must state the exact task authorities, maximum Attempts,
 timeout, external provider scope, custody location, and stop conditions. It must not authorize
 held-out reveal, `start-execution`, `step-execution`, or any part of the 54-Trial matrix.
 
+## Offline development-pilot preparation
+
+The closed request bundle is
+[`preparations/next-priority4-development-pilot`](../preparations/next-priority4-development-pilot).
+Its exact identities and implementation candidates are:
+
+| Authority | Value |
+|---|---|
+| Bundle | `b6000764aba499927e381edace151bca83756d12dd488b4559ae77689a1e1b16` |
+| Authorization request | `0ae0c5a7f65a0444decdb32d25ac99a1851f710dd87c08cf3e2898a058cea1ad` |
+| Development pilot plan | `273b259f2f0528dbccee2808c5e42e73173841b2b313f13bf84c467369710c43` |
+| Corpus | `dd6fa131ddcf717fb589e6398e4916998ab3d53bd297cfce3c08529ce46adece` |
+| Image set | `ec601643b2f92edb907997d4fd742421d9527f2932817156f73ef62a7c5a448e` |
+| Cernora Core wheel | `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `ba404810b046bd65545f28b5e66bc725f9ba2f5d4d666874205d781d7df82106` |
+| Prepared execution | `46004fc1f812cbef2edfc5534a5a6e133a35ef85b05c9c4e5420722c5b8cd2a8` |
+
+Both wheel candidates were built twice offline with byte-identical SHA-256 values. Each of the six
+task images was built twice with network disabled and matched its recorded immutable digest. The
+prepared custody has zero Attempts and zero completed Trials; its ledger contains no
+`execution-started` event. Calibration only establishes that each frozen baseline fails and each
+fixture solution passes its verifier. Every calibration says `source=verifier-calibration` and
+`agent_outcome=not-observed`; none is a real Agent failure.
+
+Authorization would cover exactly six baseline-only Trials, at most twelve Attempts, concurrency
+one, 300 seconds per Attempt, and 7,200 seconds total wall time. Provider scope is authenticated
+OpenAI Codex generation only. Custody is the git-ignored directory
+`.agent/custody/development-pilot-273b259f2f0528dbccee2808c5e42e73173841b2b313f13bf84c467369710c43`.
+The pilot must stop as `no-candidate` if all six Agent outcomes pass, `inconclusive` for missing or
+incomplete evidence, or `candidate-eligible` before Candidate construction when a matching real
+behavioral failure exists.
+
 ## Exact stop point
 
-Stop here. The preparation remains `awaiting-user-decisions`. No fresh Candidate exists, no
-held-out commitment has been requested, no Study authority has been materialized, and no live or
-provider execution is authorized.
+Stop here. The bundle remains `awaiting-development-pilot-authorization`, and the prepared custody
+remains `prepared`. No fresh Candidate exists, no held-out commitment has been requested, no Study
+authority has been materialized, and no Agent or provider execution is authorized.

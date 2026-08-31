@@ -392,6 +392,61 @@ def _specification(
     return materialize_controlled_experiment_spec(payload)
 
 
+def build_controlled_specifications(
+    *,
+    tasks: tuple[ControlledTaskAuthority, ...],
+    images: Mapping[str, str],
+    build_base_image: str,
+    configurations: tuple[tuple[str, CanonicalAuthoritySource], ...],
+    bootstrap: BootstrapPlan,
+    pass_k: PassKPlan | None,
+) -> tuple[ControlledExperimentSpecV2, ...]:
+    """Build exact controlled specifications for one closed task/configuration matrix."""
+
+    ordered_tasks = tuple(sorted(tasks, key=lambda item: item.case.case_id))
+    case_ids = tuple(item.case.case_id for item in ordered_tasks)
+    configuration_ids = tuple(item[0] for item in configurations)
+    if (
+        not ordered_tasks
+        or len(case_ids) != len(set(case_ids))
+        or case_ids != tuple(sorted(images))
+        or not configurations
+        or len(configuration_ids) != len(set(configuration_ids))
+    ):
+        raise ContractError("controlled specification inputs are incomplete or ambiguous")
+    profile = build_controlled_profile_authority(ordered_tasks)
+    profile_source = _source(
+        "profile", cast(JsonValue, profile.model_dump(mode="json", exclude_none=False))
+    )
+    materials = {
+        task.case.case_id: _task_material(
+            task,
+            image=images[task.case.case_id],
+            build_base_image=build_base_image,
+            profile_source=profile_source,
+        )
+        for task in ordered_tasks
+    }
+    dataset = materialize_dataset_authority(tuple(materials[case_id][1] for case_id in case_ids))
+    statistics = materialize_statistical_policy(bootstrap=bootstrap, pass_k=pass_k)
+    return tuple(
+        _specification(
+            task,
+            configuration_id=configuration_id,
+            prompt_source=prompt,
+            image=images[task.case.case_id],
+            build_base_image=build_base_image,
+            profile_source=profile_source,
+            dataset=dataset.model_dump(mode="json"),
+            statistics=statistics.model_dump(mode="json"),
+            task_payload=materials[task.case.case_id][0],
+            evaluation_payload=materials[task.case.case_id][2],
+        )
+        for task in ordered_tasks
+        for configuration_id, prompt in configurations
+    )
+
+
 def build_m4_final_plans(
     *,
     tasks: tuple[ControlledTaskAuthority, ...],
@@ -419,20 +474,14 @@ def build_m4_final_plans(
     if set(image_by_case) != set(case_ids):
         raise ContractError("M4 image authorities do not exhaust the task authorities")
 
-    profile = build_controlled_profile_authority(ordered_tasks)
-    profile_source = _source(
-        "profile", cast(JsonValue, profile.model_dump(mode="json", exclude_none=False))
-    )
-    materials: dict[str, tuple[dict[str, object], DatasetCaseAuthority, dict[str, object]]] = {}
-    for task in ordered_tasks:
-        materials[task.case.case_id] = _task_material(
-            task,
-            image=image_by_case[task.case.case_id],
-            build_base_image=image_authorities.build_base_image,
-            profile_source=profile_source,
-        )
-    dataset = materialize_dataset_authority(tuple(materials[case_id][1] for case_id in case_ids))
-    statistics = materialize_statistical_policy(
+    specs = build_controlled_specifications(
+        tasks=ordered_tasks,
+        images=image_by_case,
+        build_base_image=image_authorities.build_base_image,
+        configurations=(
+            (_BASELINE_CONFIGURATION, freeze.baseline_prompt_authority),
+            (_CANDIDATE_CONFIGURATION, freeze.candidate_prompt_authority),
+        ),
         bootstrap=BootstrapPlan(
             method="case-clustered-paired-bootstrap/v1",
             confidence_basis_points=9500,
@@ -442,25 +491,7 @@ def build_m4_final_plans(
         ),
         pass_k=PassKPlan(k=3, independent_trials=True),
     )
-    specs = tuple(
-        _specification(
-            task,
-            configuration_id=configuration_id,
-            prompt_source=prompt,
-            image=image_by_case[task.case.case_id],
-            build_base_image=image_authorities.build_base_image,
-            profile_source=profile_source,
-            dataset=dataset.model_dump(mode="json"),
-            statistics=statistics.model_dump(mode="json"),
-            task_payload=materials[task.case.case_id][0],
-            evaluation_payload=materials[task.case.case_id][2],
-        )
-        for task in ordered_tasks
-        for configuration_id, prompt in (
-            (_BASELINE_CONFIGURATION, freeze.baseline_prompt_authority),
-            (_CANDIDATE_CONFIGURATION, freeze.candidate_prompt_authority),
-        )
-    )
+    statistics = specs[0].statistical_policy
     plan = materialize_controlled_run_plan(
         {
             "schema_version": "cernora.reference.controlled-run-plan/v2",
@@ -588,6 +619,7 @@ def build_m4_final_plans(
 __all__ = [
     "M4ImageAuthoritySet",
     "M4TaskImageAuthority",
+    "build_controlled_specifications",
     "build_m4_final_plans",
     "materialize_m4_image_authority_set",
 ]

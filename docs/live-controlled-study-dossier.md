@@ -150,7 +150,26 @@ replace the preparation rather than filling canonical contracts with placeholder
 
 The evidence gap and the recommended next bounded development-only work package are recorded in
 [`next-priority4-study-decision.md`](next-priority4-study-decision.md). That proposal is also
-non-authoritative and stops before any Agent pilot or held-out action.
+non-authoritative; its selected work package stops before any Agent pilot or held-out action.
+
+### Selected development-only pilot boundary
+
+The user selected `confirmatory-effect` on 2026-08-31. The separate closed development-only bundle
+is [`preparations/next-priority4-development-pilot`](../preparations/next-priority4-development-pilot),
+with bundle ID
+`b6000764aba499927e381edace151bca83756d12dd488b4559ae77689a1e1b16`, plan ID
+`273b259f2f0528dbccee2808c5e42e73173841b2b313f13bf84c467369710c43`, and authorization-request
+ID `0ae0c5a7f65a0444decdb32d25ac99a1851f710dd87c08cf3e2898a058cea1ad`.
+Its six fresh visible Cases are three `development` and three `regression` Cases; it contains no
+held-out material. The custody ledger is prepared offline with execution ID
+`46004fc1f812cbef2edfc5534a5a6e133a35ef85b05c9c4e5420722c5b8cd2a8`, zero Attempts, and no
+`execution-started` event.
+
+This boundary is not the dossier's live authorization. It permits neither held-out access or
+reveal, smoke execution, `start-execution`, `step-execution`, nor any Trial in the future 54-Trial
+matrix. A separate explicit authorization may cover only the six baseline Agent pilot Trials and
+their frozen maximum of twelve Attempts. Candidate construction remains impossible until that
+pilot produces at least one matching authoritative behavioral failure.
 
 ## 6. Offline freeze sequence
 
