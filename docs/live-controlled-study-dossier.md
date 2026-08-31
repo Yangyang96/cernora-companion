@@ -171,6 +171,13 @@ matrix. A separate explicit authorization may cover only the six baseline Agent 
 their frozen maximum of twelve Attempts. Candidate construction remains impossible until that
 pilot produces at least one matching authoritative behavioral failure.
 
+Independent read-only Standards and Spec review tasks examined the implementation from `d3109df`
+through `072ce59`. Two strict-tree findings were fixed and adversarially re-reviewed; both axes
+report no unresolved P0-P3. The exact post-fix implementation passed 533 offline tests, Ruff,
+format checking, strict Mypy, reproducible wheel/sdist builds, and repository/archive secret scans.
+This review satisfies only the development-pilot authorization boundary; it is not Candidate,
+held-out, reveal, smoke, or live-study review.
+
 ## 6. Offline freeze sequence
 
 This sequence performs no live Attempt:

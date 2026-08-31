@@ -118,6 +118,24 @@ The pilot must stop as `no-candidate` if all six Agent outcomes pass, `inconclus
 incomplete evidence, or `candidate-eligible` before Candidate construction when a matching real
 behavioral failure exists.
 
+## Independent offline review and validation
+
+Two independent read-only review tasks examined `d3109df...072ce59` on separate axes:
+
+- `/root/standards_review` checked repository standards and safety-state implementation. Its
+  initial P1 corpus-symlink and P2 orphan-artifact findings were fixed in `072ce59` and passed
+  adversarial re-review. Its remaining module-cohesion observation was formally dispositioned as
+  a non-defect because the contracts, replay, outcome derivation, and stepping share one durable
+  pilot state machine and its cross-cutting safety invariants.
+- `/root/spec_review` checked both Priority 4 documents and the explicit user boundaries. It found
+  no missing requirement, scope creep, or incorrect implementation, and reverified the final
+  bundle, plan, request, wheel, and prepared-custody identities after the fixes.
+
+Both axes report no unresolved P0-P3. The final offline publication gate passed 533 tests, Ruff,
+format checking, strict Mypy across 143 source files, wheel and sdist builds, license inventory,
+repository secret scanning, and built-artifact secret scanning. No validation step used Runtime
+credentials or submitted an Agent/provider Attempt.
+
 ## Exact stop point
 
 Stop here. The bundle remains `awaiting-development-pilot-authorization`, and the prepared custody
