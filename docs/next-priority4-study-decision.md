@@ -1,6 +1,6 @@
 # Next Priority 4 Study Decision Proposal
 
-Status: **`confirmatory-effect` selected; recovery development pilot offline-prepared, not authorized**
+Status: **`confirmatory-effect` selected; recovery development pilot inconclusive**
 
 This document records the next decision boundary after the offline preparation bundle. The user
 selected the recommended `confirmatory-effect` design on 2026-08-31. This file is not a
@@ -78,9 +78,10 @@ The selected design uses this separate development-only work package in order:
 7. Obtain an independent review of the Candidate and development evidence.
 8. Only then ask an independent custodian for a fresh opaque held-out commitment.
 
-Steps 1 and 2 are complete. Step 3 is the current boundary. Steps 4 through 8 have not begun.
-There is no authoritative Agent observation, failure mechanism, Candidate, Candidate Development
-record, held-out commitment, reveal, smoke, or Study execution.
+Steps 1 through 3 are complete. Step 4 stopped as `inconclusive` because the first recovery
+Attempt was claimed but no terminal Attempt artifact was published. Steps 5 through 8 cannot
+advance. There is no authoritative Agent observation, failure mechanism, Candidate, Candidate
+Development record, held-out commitment, reveal, smoke, or Study execution.
 
 The development pilot authorization must state the exact task authorities, maximum Attempts,
 timeout, external provider scope, custody location, and stop conditions. It must not authorize
@@ -174,8 +175,17 @@ credentials or submitted an Agent/provider Attempt.
 
 ## Exact recovery stop point
 
-Stop here. The recovery bundle remains `awaiting-development-pilot-authorization`, and its new
-custody remains `prepared` with zero Attempts and zero completed Trials. The historical custody
-remains ambiguous and must not be retried. No fresh Candidate exists, no held-out commitment has
-been requested, no Study authority has been materialized, and no Agent or provider execution is
-authorized for the replacement request.
+The user authorized the complete development-only pilot for request
+`df60c04812b9e1755848fe0c61face5d45bfa1294dd3b874023e1caa12f585fd`. Execution
+`c655a8db6dc3fa5014049f5fcafd57d3db0f7f4546e077234fc649925e67be96` durably recorded
+`execution-started` and one `attempt-claimed` event for ordinal 1, slot 1, then the host control
+process disappeared before publishing an Attempt artifact. The already-started container Agent
+exec was allowed to end without intervention; the attributable container and temporary Runtime
+tree then disappeared without a verifiable terminal artifact. Offline custody replay reports
+`status=running`, zero published Attempts, zero completed Trials, and no outcome.
+
+Stop here with an `inconclusive` pilot result. The outstanding claim is permanently ambiguous and
+must not be retried, resumed, converted into lifecycle evidence, or used as an Agent observation.
+No later Trial was started. No fresh Candidate exists, no held-out commitment has been requested,
+and no Study authority has been materialized. This authorization did not cover held-out access or
+reveal, smoke execution, or any Trial in the future 54-Trial matrix.

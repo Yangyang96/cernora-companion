@@ -181,9 +181,17 @@ with bundle ID
 `3d5a11931a3aa9ddfcf8ab3a9052dd17d43512726e68829a89429019b54ca223`, and authorization-request
 ID `df60c04812b9e1755848fe0c61face5d45bfa1294dd3b874023e1caa12f585fd`. Plan v2 binds the exact
 Core and Companion wheel candidates. The new custody execution
-`c655a8db6dc3fa5014049f5fcafd57d3db0f7f4546e077234fc649925e67be96` is `prepared` with zero
-Attempts and no `execution-started` event. It requires a separate exact authorization before its
-first provider call.
+`c655a8db6dc3fa5014049f5fcafd57d3db0f7f4546e077234fc649925e67be96` was exactly authorized for
+the complete development-only pilot. It recorded `execution-started` and one `attempt-claimed`
+event for ordinal 1, slot 1, but the host control process disappeared before publishing a terminal
+Attempt artifact. The already-started container Agent exec ended, and the attributable container
+and temporary Runtime tree disappeared without a verifiable terminal artifact. Offline custody
+replay reports `status=running`, zero published Attempts, zero completed Trials, and no outcome.
+
+The recovery pilot therefore stops as `inconclusive`. Its outstanding claim is permanently
+ambiguous and cannot be retried, resumed, converted into lifecycle evidence, or used as an Agent
+observation. No later Trial was started. The authorization covered no held-out access or reveal,
+smoke execution, or Trial in the future 54-Trial matrix.
 
 Independent read-only Standards and Spec review tasks examined the implementation from `d3109df`
 through `072ce59`. Two strict-tree findings were fixed and adversarially re-reviewed; both axes
