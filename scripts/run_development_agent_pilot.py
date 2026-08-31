@@ -15,6 +15,7 @@ from cernora_reference_workflow.development_agent_pilot import DevelopmentAgentP
 from cernora_reference_workflow.development_pilot_bundle import (
     DevelopmentPilotAuthorizationRequest,
     inspect_development_pilot_bundle,
+    verify_development_pilot_runtime,
 )
 from cernora_reference_workflow.development_pilot_execution import (
     AmbiguousDevelopmentPilotAttempt,
@@ -39,6 +40,8 @@ def _parser() -> argparse.ArgumentParser:
     step.add_argument("custody", type=Path)
     step.add_argument("--repository-root", type=Path, required=True)
     step.add_argument("--accept-plan-id", required=True)
+    step.add_argument("--companion-wheel", type=Path, required=True)
+    step.add_argument("--cernora-wheel", type=Path, required=True)
     return parser
 
 
@@ -52,7 +55,11 @@ def _prepare(bundle: Path, repository_root: Path) -> DevelopmentPilotStepResult:
     request = DevelopmentPilotAuthorizationRequest.model_validate_json(
         (bundle / "authorization-request.json").read_bytes()
     )
-    if manifest.plan_id != plan.plan_id or request.plan_id != plan.plan_id:
+    if (
+        manifest.plan_id != plan.plan_id
+        or request.plan_id != plan.plan_id
+        or plan.implementation_candidates != manifest.implementation_candidates
+    ):
         raise ContractError("development pilot bundle Plan authority is inconsistent")
     root = repository_root.resolve(strict=True)
     custody = root.joinpath(*request.custody_subdirectory.split("/"))
@@ -65,9 +72,19 @@ def _inspect(custody: Path) -> DevelopmentPilotStepResult:
 
 
 def _step(
-    custody: Path, repository_root: Path, accepted_plan_id: str
+    custody: Path,
+    repository_root: Path,
+    accepted_plan_id: str,
+    companion_wheel: Path,
+    cernora_wheel: Path,
 ) -> DevelopmentPilotStepResult:
     state = inspect_development_pilot_execution(custody)
+    verify_development_pilot_runtime(
+        state.plan,
+        repository_root=repository_root,
+        companion_wheel=companion_wheel,
+        cernora_wheel=cernora_wheel,
+    )
     auth_value = os.environ.get("CODEX_AUTH_JSON_PATH")
     if not auth_value:
         raise ContractError("development pilot requires explicit CODEX_AUTH_JSON_PATH")
@@ -79,6 +96,7 @@ def _step(
             evaluation_root=Path(temporary),
             auth_file=auth_file,
             proxy_environment=os.environ,
+            close_unusable_runtime_evidence=True,
         )
         return step_development_pilot_execution(
             custody,
@@ -99,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.custody,
                 arguments.repository_root,
                 arguments.accept_plan_id,
+                arguments.companion_wheel,
+                arguments.cernora_wheel,
             )
     except AmbiguousDevelopmentPilotAttempt:
         print("error: development pilot Attempt state is ambiguous", file=sys.stderr)

@@ -1360,6 +1360,7 @@ class ControlledHarborAttemptExecutor:
         cli_validator: CliValidator = validate_installed_harbor_cli,
         image_verifier: ImageVerifier = _verify_local_task_image,
         disk_free: DiskProbe = lambda path: shutil.disk_usage(path).free,
+        close_unusable_runtime_evidence: bool = False,
     ) -> None:
         self._repository_root = repository_root
         self._tasks = {item.case.case_id: item for item in tasks}
@@ -1373,6 +1374,7 @@ class ControlledHarborAttemptExecutor:
         self._containers = container_controller or DockerContainerController()
         self._image_verifier = image_verifier
         self._disk_free = disk_free
+        self._close_unusable_runtime_evidence = close_unusable_runtime_evidence
         cli_validator(repository_root / ".venv/bin/harbor")
 
     @property
@@ -1492,13 +1494,6 @@ class ControlledHarborAttemptExecutor:
                     safe_stop_free_bytes=SAFE_STOP_FREE_BYTES,
                 )
                 trial_name = _trial_name_hint(job_root, job_name)
-                trial_result = _trial_result(job_root, job_name)
-                trial = trial_result[0] if trial_result is not None else None
-                result = trial_result[1] if trial_result is not None else None
-                trial_name_value = result.get("trial_name") if result is not None else trial_name
-                if trial_name_value is not None and not isinstance(trial_name_value, str):
-                    raise LiveAttemptError("Harbor trial_name is malformed")
-                trial_name = trial_name_value
             finally:
                 self._containers.cleanup_new(
                     before,
@@ -1521,49 +1516,70 @@ class ControlledHarborAttemptExecutor:
                 and process.finished_monotonic >= request.global_deadline_monotonic
             ):
                 raise ControlledActiveSafeStop("hard_wall_deadline_elapsed")
-            if result is not None:
-                job_config = _object(job_root / job_name / "config.json", label="Harbor job config")
-                _validate_job_config(
-                    job_config,
+            try:
+                trial_result = _trial_result(job_root, job_name)
+                trial = trial_result[0] if trial_result is not None else None
+                result = trial_result[1] if trial_result is not None else None
+                if result is not None:
+                    job_config = _object(
+                        job_root / job_name / "config.json", label="Harbor job config"
+                    )
+                    _validate_job_config(
+                        job_config,
+                        request,
+                        task_root=task_root,
+                        job_root=job_root,
+                        job_name=job_name,
+                        proxy_environment=self._proxy_environment,
+                    )
+                classification = _classify_preterminal(
+                    process,
+                    result,
                     request,
+                    task,
+                    task_root=task_root,
+                    job_root=job_root,
+                    job_name=job_name,
+                    task_checksum=task_checksum,
+                )
+                if classification is not None:
+                    category, retry = classification
+                    return _lifecycle_attempt(
+                        request, process, category=category, retry_eligible=retry
+                    )
+                if process.exit_code != 0 or trial is None or result is None:
+                    raise LiveAttemptError("Harbor did not publish one terminal Trial result")
+                if (
+                    result.get("agent_result") is None
+                    or result.get("verifier_result") is None
+                    or (result.get("exception_info") is not None)
+                ):
+                    raise LiveAttemptError("terminal Harbor result is incomplete")
+                repair = _result_from_job(request, task, trial)
+                observation = _runtime_observation(
+                    request,
+                    task,
+                    command,
                     task_root=task_root,
                     job_root=job_root,
                     job_name=job_name,
                     proxy_environment=self._proxy_environment,
+                    result=result,
+                    task_checksum=task_checksum,
                 )
-            classification = _classify_preterminal(
-                process,
-                result,
-                request,
-                task,
-                task_root=task_root,
-                job_root=job_root,
-                job_name=job_name,
-                task_checksum=task_checksum,
-            )
-            if classification is not None:
-                category, retry = classification
-                return _lifecycle_attempt(request, process, category=category, retry_eligible=retry)
-            if process.exit_code != 0 or trial is None or result is None:
-                raise LiveAttemptError("Harbor did not publish one terminal Trial result")
-            if (
-                result.get("agent_result") is None
-                or result.get("verifier_result") is None
-                or (result.get("exception_info") is not None)
-            ):
-                raise LiveAttemptError("terminal Harbor result is incomplete")
-            repair = _result_from_job(request, task, trial)
-            observation = _runtime_observation(
-                request,
-                task,
-                command,
-                task_root=task_root,
-                job_root=job_root,
-                job_name=job_name,
-                proxy_environment=self._proxy_environment,
-                result=result,
-                task_checksum=task_checksum,
-            )
+            except LiveAttemptError:
+                if not self._close_unusable_runtime_evidence:
+                    raise
+                # A closed process whose outputs passed the private-value scan but cannot
+                # satisfy the exact Harbor/result authority is terminal, unusable evidence.
+                # Publishing a non-retry lifecycle Attempt closes the durable claim without
+                # relabeling the event as an Agent observation or weakening strict validation.
+                return _lifecycle_attempt(
+                    request,
+                    process,
+                    category="runtime_pre_terminal_failure",
+                    retry_eligible=False,
+                )
             raw = canonical_json_bytes(repair.model_dump(mode="json"))
             source_attempt_id = canonical_content_id(
                 {

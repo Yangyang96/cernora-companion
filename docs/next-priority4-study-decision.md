@@ -1,6 +1,6 @@
 # Next Priority 4 Study Decision Proposal
 
-Status: **`confirmatory-effect` selected; development pilot offline-prepared, not authorized**
+Status: **`confirmatory-effect` selected; recovery development pilot offline-prepared, not authorized**
 
 This document records the next decision boundary after the offline preparation bundle. The user
 selected the recommended `confirmatory-effect` design on 2026-08-31. This file is not a
@@ -86,9 +86,9 @@ The development pilot authorization must state the exact task authorities, maxim
 timeout, external provider scope, custody location, and stop conditions. It must not authorize
 held-out reveal, `start-execution`, `step-execution`, or any part of the 54-Trial matrix.
 
-## Offline development-pilot preparation
+## Historical first development-pilot request
 
-The closed request bundle is
+The first closed request bundle was
 [`preparations/next-priority4-development-pilot`](../preparations/next-priority4-development-pilot).
 Its exact identities and implementation candidates are:
 
@@ -118,6 +118,42 @@ The pilot must stop as `no-candidate` if all six Agent outcomes pass, `inconclus
 incomplete evidence, or `candidate-eligible` before Candidate construction when a matching real
 behavioral failure exists.
 
+The user authorized request
+`0ae0c5a7f65a0444decdb32d25ac99a1851f710dd87c08cf3e2898a058cea1ad`. The first
+Attempt durably recorded `execution-started` and `attempt-claimed`, then the closed Harbor process
+failed strict result processing before publishing an Attempt artifact. No later Trial was started.
+The Runtime and attributable container disappeared, so the claim is ambiguous and permanently
+non-retryable under the frozen policy. This is not an Agent failure, cannot support a Candidate,
+and does not authorize reuse of the first request or custody.
+
+## Recovery development-pilot preparation
+
+The replacement closed request bundle is
+[`preparations/next-priority4-development-pilot-recovery`](../preparations/next-priority4-development-pilot-recovery).
+It retains the same fresh six-Case corpus and exact image set, but binds the reviewed implementation
+wheel identities directly into Plan v2. Historical Plan v1 remains inspectable but cannot be used
+to prepare or step a new execution.
+
+| Authority | Value |
+|---|---|
+| Bundle | `a826de5070aed79a143081cf3b9d22b69190399c88e8addec4f792c3df686cba` |
+| Authorization request | `df60c04812b9e1755848fe0c61face5d45bfa1294dd3b874023e1caa12f585fd` |
+| Development pilot plan | `3d5a11931a3aa9ddfcf8ab3a9052dd17d43512726e68829a89429019b54ca223` |
+| Prepared execution | `c655a8db6dc3fa5014049f5fcafd57d3db0f7f4546e077234fc649925e67be96` |
+| Corpus | `dd6fa131ddcf717fb589e6398e4916998ab3d53bd297cfce3c08529ce46adece` |
+| Image set | `ec601643b2f92edb907997d4fd742421d9527f2932817156f73ef62a7c5a448e` |
+| Cernora Core wheel | `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `cdf8cf1c6e245c6bf9c3b8536d438797aa0504ed4bdef4c24b5400b2b2fce411` |
+
+The recovery implementation closes a post-process authority failure only after process closure,
+container cleanup, and private-value scanning succeed. It publishes a non-retry lifecycle Attempt
+with no Runtime observation, repair result, or evaluation, so the affected Trial is inconclusive.
+Private-value failures, cleanup failures, and real process loss remain fail-closed and ambiguous.
+The lifecycle policy is explicitly enabled only by the development-pilot entry point. Before any
+claim, that entry point verifies the active repository venv and every installed wheel member
+against the exact Core and Companion candidates bound by Plan v2. The replacement Companion wheel
+was built twice offline with byte-identical SHA-256 values.
+
 ## Independent offline review and validation
 
 Two independent read-only review tasks examined `d3109df...072ce59` on separate axes:
@@ -136,8 +172,10 @@ format checking, strict Mypy across 143 source files, wheel and sdist builds, li
 repository secret scanning, and built-artifact secret scanning. No validation step used Runtime
 credentials or submitted an Agent/provider Attempt.
 
-## Exact stop point
+## Exact recovery stop point
 
-Stop here. The bundle remains `awaiting-development-pilot-authorization`, and the prepared custody
-remains `prepared`. No fresh Candidate exists, no held-out commitment has been requested, no Study
-authority has been materialized, and no Agent or provider execution is authorized.
+Stop here. The recovery bundle remains `awaiting-development-pilot-authorization`, and its new
+custody remains `prepared` with zero Attempts and zero completed Trials. The historical custody
+remains ambiguous and must not be retried. No fresh Candidate exists, no held-out commitment has
+been requested, no Study authority has been materialized, and no Agent or provider execution is
+authorized for the replacement request.

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib.metadata
 import json
+import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -17,6 +20,7 @@ from cernora_reference_workflow.development_pilot_bundle import (
     create_development_pilot_bundle,
     inspect_development_pilot_bundle,
     verify_development_pilot_bundle,
+    verify_development_pilot_runtime,
 )
 from tests.unit.test_study_preparation import _candidate_wheels
 
@@ -89,6 +93,7 @@ def test_bundle_closes_exact_unapproved_development_request(tmp_path: Path) -> N
     )
     assert b'"agent_outcome":"behavioral-failure"' not in serialized
     plan = DevelopmentAgentPilotPlan.from_file(destination / "plan.json")
+    assert plan.implementation_candidates == created.implementation_candidates
     assert {item.configuration_id for item in plan.experiment_specs} == {"baseline"}
     DevelopmentPilotImageSet.from_file(destination / "images.json")
 
@@ -118,3 +123,70 @@ def test_bundle_rejects_tampering_and_changed_wheel(tmp_path: Path) -> None:
     (destination / "authorization-request.json").write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ContractError, match="bundle file"):
         inspect_development_pilot_bundle(destination)
+
+
+def test_historical_unbound_bundle_remains_inspectable_but_not_current() -> None:
+    historical = ROOT / "preparations" / "next-priority4-development-pilot"
+
+    manifest = inspect_development_pilot_bundle(historical)
+    plan = DevelopmentAgentPilotPlan.from_file(historical / "plan.json")
+
+    assert manifest.plan_id == plan.plan_id
+    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v1"
+    assert plan.implementation_candidates is None
+
+
+def test_runtime_attestation_binds_active_venv_to_exact_wheels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    companion, cernora = _candidate_wheels(tmp_path)
+    destination = tmp_path / "bundle"
+    create_development_pilot_bundle(
+        destination,
+        corpus_root=CORPUS,
+        image_authorities=_image_authorities(tmp_path),
+        companion_wheel=companion,
+        cernora_wheel=cernora,
+        companion_version="0.4.0",
+        cernora_version="0.1.4",
+    )
+    plan = DevelopmentAgentPilotPlan.from_file(destination / "plan.json")
+    repository = tmp_path / "runtime"
+    prefix = repository / ".venv"
+    installed = prefix / "site-packages"
+    installed.mkdir(parents=True)
+    for wheel in (companion, cernora):
+        with zipfile.ZipFile(wheel) as archive:
+            archive.extractall(installed)
+
+    class Distribution:
+        def __init__(self, version: str) -> None:
+            self.version = version
+
+        def locate_file(self, path: str) -> Path:
+            return installed / path
+
+    versions = {"cernora": "0.1.4", "cernora-reference-workflow": "0.4.0"}
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distribution",
+        lambda name: Distribution(versions[name]),
+    )
+
+    verify_development_pilot_runtime(
+        plan,
+        repository_root=repository,
+        companion_wheel=companion,
+        cernora_wheel=cernora,
+    )
+
+    changed = next(installed.glob("cernora_reference_workflow*/__init__.py"))
+    changed.write_bytes(changed.read_bytes() + b"drift")
+    with pytest.raises(ContractError, match="distribution bytes changed"):
+        verify_development_pilot_runtime(
+            plan,
+            repository_root=repository,
+            companion_wheel=companion,
+            cernora_wheel=cernora,
+        )

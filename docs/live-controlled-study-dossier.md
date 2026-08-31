@@ -152,24 +152,38 @@ The evidence gap and the recommended next bounded development-only work package 
 [`next-priority4-study-decision.md`](next-priority4-study-decision.md). That proposal is also
 non-authoritative; its selected work package stops before any Agent pilot or held-out action.
 
-### Selected development-only pilot boundary
+### Historical development-only pilot boundary
 
-The user selected `confirmatory-effect` on 2026-08-31. The separate closed development-only bundle
-is [`preparations/next-priority4-development-pilot`](../preparations/next-priority4-development-pilot),
+The user selected `confirmatory-effect` on 2026-08-31. The first closed development-only bundle was
+[`preparations/next-priority4-development-pilot`](../preparations/next-priority4-development-pilot),
 with bundle ID
 `80cbc4aac215d16b7e3f4adcdb5f276250ac064bdff64afdb8553e629bb8d51c`, plan ID
 `273b259f2f0528dbccee2808c5e42e73173841b2b313f13bf84c467369710c43`, and authorization-request
 ID `0ae0c5a7f65a0444decdb32d25ac99a1851f710dd87c08cf3e2898a058cea1ad`.
 Its six fresh visible Cases are three `development` and three `regression` Cases; it contains no
-held-out material. The custody ledger is prepared offline with execution ID
-`46004fc1f812cbef2edfc5534a5a6e133a35ef85b05c9c4e5420722c5b8cd2a8`, zero Attempts, and no
-`execution-started` event.
+held-out material. After authorization, custody execution
+`46004fc1f812cbef2edfc5534a5a6e133a35ef85b05c9c4e5420722c5b8cd2a8` recorded
+`execution-started` and one `attempt-claimed` event but no terminal Attempt artifact. The Runtime
+and attributable container disappeared. This custody is permanently ambiguous: it cannot be
+retried, resumed, or used as Agent evidence.
 
-This boundary is not the dossier's live authorization. It permits neither held-out access or
-reveal, smoke execution, `start-execution`, `step-execution`, nor any Trial in the future 54-Trial
-matrix. A separate explicit authorization may cover only the six baseline Agent pilot Trials and
-their frozen maximum of twelve Attempts. Candidate construction remains impossible until that
-pilot produces at least one matching authoritative behavioral failure.
+This historical boundary permits no further action. It authorizes neither a retry nor held-out
+access or reveal, smoke execution, `start-execution`, `step-execution`, or any Trial in the future
+54-Trial matrix. Candidate construction remains impossible without a matching authoritative
+behavioral failure.
+
+### Recovery development-only pilot boundary
+
+The replacement bundle is
+[`preparations/next-priority4-development-pilot-recovery`](../preparations/next-priority4-development-pilot-recovery),
+with bundle ID
+`a826de5070aed79a143081cf3b9d22b69190399c88e8addec4f792c3df686cba`, plan ID
+`3d5a11931a3aa9ddfcf8ab3a9052dd17d43512726e68829a89429019b54ca223`, and authorization-request
+ID `df60c04812b9e1755848fe0c61face5d45bfa1294dd3b874023e1caa12f585fd`. Plan v2 binds the exact
+Core and Companion wheel candidates. The new custody execution
+`c655a8db6dc3fa5014049f5fcafd57d3db0f7f4546e077234fc649925e67be96` is `prepared` with zero
+Attempts and no `execution-started` event. It requires a separate exact authorization before its
+first provider call.
 
 Independent read-only Standards and Spec review tasks examined the implementation from `d3109df`
 through `072ce59`. Two strict-tree findings were fixed and adversarially re-reviewed; both axes
@@ -270,6 +284,13 @@ Only after exact authorization:
 8. Never issue a second step while the prior Attempt is active or ambiguous.
 9. Stop on any frozen pause/termination condition; do not increase timeout or budget in place.
 10. On completion, verify the Evidence Pack and perform two offline rebuilds into new directories.
+
+For a development-only pilot, a closed Runtime process may produce output that fails the frozen
+Harbor/result authority checks. After exact container cleanup and private-value scanning succeed,
+such output must close the claim as a non-retry `runtime_pre_terminal_failure` lifecycle Attempt.
+It supplies no Agent observation and makes the affected Trial inconclusive. An authority failure
+before process closure, a cleanup failure, a private-value scan failure, or an actual process loss
+remains ambiguous and must not be converted into lifecycle evidence.
 
 A quiet long-running Attempt is not itself a failure. Do not use a short supervisory timeout to
 manufacture a pre-terminal result. Conversely, a disappeared Runtime with no verifiable terminal

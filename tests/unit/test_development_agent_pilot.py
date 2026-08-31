@@ -14,10 +14,26 @@ from cernora_reference_workflow.development_agent_pilot import (
     load_development_pilot_corpus,
     materialize_development_pilot_image_set,
 )
+from cernora_reference_workflow.study_preparation import ImplementationCandidate
 
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "examples" / "priority4-development-pilot"
 BASE = "cernora-reference/codex-runtime@sha256:" + "a" * 64
+
+
+def _implementations() -> tuple[ImplementationCandidate, ...]:
+    return (
+        ImplementationCandidate(
+            name="cernora", version="0.1.4", kind="wheel", size=1, sha256="b" * 64
+        ),
+        ImplementationCandidate(
+            name="cernora-reference-workflow",
+            version="0.4.0",
+            kind="wheel",
+            size=1,
+            sha256="c" * 64,
+        ),
+    )
 
 
 def _images() -> dict[str, str]:
@@ -56,10 +72,15 @@ def test_confirmatory_pilot_plan_is_exact_baseline_only_and_not_authorized() -> 
         images=_images(),
     )
 
-    plan = build_development_agent_pilot_plan(corpus=corpus, images=image_set)
+    plan = build_development_agent_pilot_plan(
+        corpus=corpus,
+        images=image_set,
+        implementation_candidates=_implementations(),
+    )
 
     assert plan.selected_study_mode == "confirmatory-effect"
     assert plan.execution_authorized is False
+    assert plan.implementation_candidates == _implementations()
     assert plan.treatment_axis_if_eligible == "prompt-instruction"
     assert plan.planned_trial_count == 6
     assert plan.worst_case_attempt_count == 12
@@ -102,10 +123,19 @@ def test_plan_rejects_image_or_authorization_drift() -> None:
         build_base_image=BASE,
         images=_images(),
     )
-    plan = build_development_agent_pilot_plan(corpus=corpus, images=image_set)
+    plan = build_development_agent_pilot_plan(
+        corpus=corpus,
+        images=image_set,
+        implementation_candidates=_implementations(),
+    )
     payload = plan.model_dump(mode="json")
     payload["execution_authorized"] = True
 
+    with pytest.raises(ValidationError):
+        DevelopmentAgentPilotPlan.model_validate(payload)
+
+    payload = plan.model_dump(mode="json")
+    payload["implementation_candidates"][1]["sha256"] = "d" * 64
     with pytest.raises(ValidationError):
         DevelopmentAgentPilotPlan.model_validate(payload)
 

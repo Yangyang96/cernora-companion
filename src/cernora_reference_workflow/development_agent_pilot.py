@@ -38,6 +38,7 @@ from cernora_reference_workflow.run_plan import (
     ConnectorIdentity,
     RunExecutionPolicy,
 )
+from cernora_reference_workflow.study_preparation import ImplementationCandidate
 
 PILOT_CASE_IDS = (
     "p4-dev-json-pointer",
@@ -225,7 +226,10 @@ class DevelopmentPilotStopPolicy(StrictV2Contract):
 class DevelopmentAgentPilotPlan(StrictV2Contract):
     """Exact authority requested for the bounded development-only Agent pilot."""
 
-    schema_version: Literal["cernora.reference.development-agent-pilot-plan/v1"]
+    schema_version: Literal[
+        "cernora.reference.development-agent-pilot-plan/v1",
+        "cernora.reference.development-agent-pilot-plan/v2",
+    ]
     plan_id: Digest
     selected_study_mode: Literal["confirmatory-effect"]
     authority_scope: Literal["development-only-agent-pilot"]
@@ -233,6 +237,7 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
     treatment_axis_if_eligible: Literal["prompt-instruction"]
     corpus: DevelopmentPilotCorpus
     images: DevelopmentPilotImageSet
+    implementation_candidates: tuple[ImplementationCandidate, ...] | None = None
     baseline_prompt: CanonicalAuthoritySource
     connector: ConnectorIdentity
     experiment_specs: Annotated[
@@ -258,7 +263,9 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
         ...,
     ]
 
-    @field_validator("experiment_specs", "prohibited_actions", mode="before")
+    @field_validator(
+        "experiment_specs", "implementation_candidates", "prohibited_actions", mode="before"
+    )
     @classmethod
     def tuple_values(cls, value: object) -> object:
         return tuple(value) if isinstance(value, list) else value
@@ -276,6 +283,13 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
             "study-step-execution",
             "54-trial-matrix",
         )
+        if self.schema_version == "cernora.reference.development-agent-pilot-plan/v1":
+            if self.implementation_candidates is not None:
+                raise ValueError("legacy development pilot Plan cannot bind implementations")
+        elif self.implementation_candidates is None or tuple(
+            item.name for item in self.implementation_candidates
+        ) != ("cernora", "cernora-reference-workflow"):
+            raise ValueError("development pilot implementation authority is incomplete")
         if spec_ids != case_ids or self.prohibited_actions != expected_prohibitions:
             raise ValueError("development pilot matrix or prohibitions are not exact")
         if self.baseline_prompt.source_id != "p4-confirmatory-baseline-prompt-v1":
@@ -302,9 +316,10 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
             != sum(1 + item.retry.max_retries for item in self.experiment_specs)
         ):
             raise ValueError("development pilot bounds do not equal the exact retry matrix")
-        expected = canonical_content_id(
-            self.model_dump(mode="json"), excluded=frozenset({"plan_id"})
-        )
+        identity = self.model_dump(mode="json")
+        if self.implementation_candidates is None:
+            identity.pop("implementation_candidates")
+        expected = canonical_content_id(identity, excluded=frozenset({"plan_id"}))
         if self.plan_id != expected:
             raise ValueError("development Agent pilot Plan identity mismatch")
         return self
@@ -324,7 +339,10 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
         return cls.from_bytes(read_regular_file_bytes(path))
 
     def canonical_bytes(self) -> bytes:
-        return canonical_json_bytes(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        if self.implementation_candidates is None:
+            payload.pop("implementation_candidates")
+        return canonical_json_bytes(payload)
 
     def expand_trial_slots(self) -> tuple[ControlledTrialSlotV2, ...]:
         slots: list[ControlledTrialSlotV2] = []
@@ -447,7 +465,10 @@ def load_development_pilot_corpus(root: Path) -> DevelopmentPilotCorpus:
 
 
 def build_development_agent_pilot_plan(
-    *, corpus: DevelopmentPilotCorpus, images: DevelopmentPilotImageSet
+    *,
+    corpus: DevelopmentPilotCorpus,
+    images: DevelopmentPilotImageSet,
+    implementation_candidates: tuple[ImplementationCandidate, ...],
 ) -> DevelopmentAgentPilotPlan:
     """Freeze the exact baseline-only pilot without granting execution authority."""
 
@@ -470,13 +491,16 @@ def build_development_agent_pilot_plan(
         pass_k=None,
     )
     payload: dict[str, object] = {
-        "schema_version": "cernora.reference.development-agent-pilot-plan/v1",
+        "schema_version": "cernora.reference.development-agent-pilot-plan/v2",
         "selected_study_mode": "confirmatory-effect",
         "authority_scope": "development-only-agent-pilot",
         "execution_authorized": False,
         "treatment_axis_if_eligible": "prompt-instruction",
         "corpus": corpus.model_dump(mode="json"),
         "images": images.model_dump(mode="json"),
+        "implementation_candidates": [
+            item.model_dump(mode="json") for item in implementation_candidates
+        ],
         "baseline_prompt": baseline.model_dump(mode="json"),
         "connector": {
             "connector_id": "cernora-reference-harbor-codex",

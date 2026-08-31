@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from cernora_reference_workflow.common import ContractError
+import cernora_reference_workflow.development_pilot_execution as pilot_execution_module
+from cernora_reference_workflow.common import ContractError, canonical_content_id
 from cernora_reference_workflow.controlled_execution import (
     ControlledAttempt,
     ControlledAttemptRequest,
@@ -23,6 +25,7 @@ from cernora_reference_workflow.development_pilot_execution import (
     step_development_pilot_execution,
     summarize_development_pilot_execution,
 )
+from cernora_reference_workflow.study_preparation import ImplementationCandidate
 from tests.unit.test_controlled_execution import lifecycle_attempt
 from tests.unit.test_study_execution import _evaluated_attempt
 
@@ -40,7 +43,32 @@ def _plan() -> DevelopmentAgentPilotPlan:
             for index, case_id in enumerate(PILOT_CASE_IDS, start=1)
         },
     )
-    return build_development_agent_pilot_plan(corpus=corpus, images=images)
+    implementations = (
+        ImplementationCandidate(
+            name="cernora", version="0.1.4", kind="wheel", size=1, sha256="b" * 64
+        ),
+        ImplementationCandidate(
+            name="cernora-reference-workflow",
+            version="0.4.0",
+            kind="wheel",
+            size=1,
+            sha256="c" * 64,
+        ),
+    )
+    return build_development_agent_pilot_plan(
+        corpus=corpus,
+        images=images,
+        implementation_candidates=implementations,
+    )
+
+
+def _legacy_plan() -> DevelopmentAgentPilotPlan:
+    payload = _plan().model_dump(mode="json")
+    payload["schema_version"] = "cernora.reference.development-agent-pilot-plan/v1"
+    payload.pop("implementation_candidates")
+    payload.pop("plan_id")
+    payload["plan_id"] = canonical_content_id(payload, excluded=frozenset())
+    return DevelopmentAgentPilotPlan.model_validate(payload)
 
 
 class EvaluatedExecutor:
@@ -156,6 +184,39 @@ def test_prepared_custody_is_not_reported_as_running(tmp_path: Path) -> None:
     assert summary.status == "prepared"
     assert summary.attempt_count == 0
     assert summary.completed_trial_count == 0
+
+
+def test_core_prepare_rejects_historical_unbound_plan(tmp_path: Path) -> None:
+    with pytest.raises(ContractError, match="implementation-bound Plan v2"):
+        prepare_development_pilot_execution(
+            _legacy_plan(),
+            tmp_path / "legacy-custody",
+            disk_free=lambda _: FREE,
+        )
+
+
+def test_core_step_rejects_historical_unbound_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custody = tmp_path / "legacy-custody"
+    custody.mkdir()
+    (custody / ".writer.lock").write_bytes(b"")
+    monkeypatch.setattr(
+        pilot_execution_module,
+        "inspect_development_pilot_execution",
+        lambda _: SimpleNamespace(plan=_legacy_plan()),
+    )
+    executor = CrashingExecutor()
+
+    with pytest.raises(ContractError, match="implementation-bound Plan v2"):
+        step_development_pilot_execution(
+            custody,
+            executor,
+            accepted_plan_id=_legacy_plan().plan_id,
+            disk_free=lambda _: FREE,
+        )
+
+    assert executor.requests == []
 
 
 def test_custody_rejects_orphan_artifact_entries(tmp_path: Path) -> None:

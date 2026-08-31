@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import os
+import sys
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
@@ -26,7 +29,11 @@ from cernora_reference_workflow.development_agent_pilot import (
     load_development_pilot_corpus,
 )
 from cernora_reference_workflow.experiment_spec import Digest, StrictContract
-from cernora_reference_workflow.study_preparation import ImplementationCandidate, _candidate
+from cernora_reference_workflow.study_preparation import (
+    ImplementationCandidate,
+    ImplementationName,
+    _candidate,
+)
 
 BundlePath = Literal[
     "authorization-request.json",
@@ -244,8 +251,6 @@ def create_development_pilot_bundle(
         raise ContractError("development pilot bundle destination must be new")
     corpus = load_development_pilot_corpus(corpus_root)
     images = DevelopmentPilotImageSet.from_file(image_authorities)
-    plan = build_development_agent_pilot_plan(corpus=corpus, images=images)
-    request = _authorization_request(plan)
     candidates = tuple(
         sorted(
             (
@@ -263,6 +268,12 @@ def create_development_pilot_bundle(
             key=lambda item: item.name,
         )
     )
+    plan = build_development_agent_pilot_plan(
+        corpus=corpus,
+        images=images,
+        implementation_candidates=candidates,
+    )
+    request = _authorization_request(plan)
     contents: dict[BundlePath, bytes] = {
         "authorization-request.json": request.canonical_bytes(),
         "corpus.json": corpus.canonical_bytes(),
@@ -331,6 +342,10 @@ def inspect_development_pilot_bundle(root: Path) -> DevelopmentPilotBundleManife
         or plan.plan_id != manifest.plan_id
         or plan.corpus != corpus
         or plan.images != images
+        or (
+            plan.implementation_candidates is not None
+            and plan.implementation_candidates != manifest.implementation_candidates
+        )
         or request.plan_id != plan.plan_id
         or request.request_id != manifest.authorization_request_id
         or request.canonical_bytes() != read_regular_file_bytes(files["authorization-request.json"])
@@ -346,15 +361,63 @@ def verify_development_pilot_bundle(
     cernora_wheel: Path,
 ) -> DevelopmentPilotBundleManifest:
     manifest = inspect_development_pilot_bundle(root)
-    for wheel, name in (
+    wheel_authorities: tuple[tuple[Path, ImplementationName], ...] = (
         (cernora_wheel, "cernora"),
         (companion_wheel, "cernora-reference-workflow"),
-    ):
+    )
+    for wheel, name in wheel_authorities:
         expected = next(item for item in manifest.implementation_candidates if item.name == name)
         actual = _candidate(wheel, expected_name=expected.name, expected_version=expected.version)
         if actual != expected:
             raise ContractError("development pilot implementation candidate bytes changed")
     return manifest
+
+
+def verify_development_pilot_runtime(
+    plan: DevelopmentAgentPilotPlan,
+    *,
+    repository_root: Path,
+    companion_wheel: Path,
+    cernora_wheel: Path,
+) -> None:
+    """Bind the active pilot interpreter to both exact Plan v2 wheel candidates."""
+
+    candidates = plan.implementation_candidates
+    if candidates is None:
+        raise ContractError("development pilot Runtime requires implementation-bound Plan v2")
+    expected_prefix = repository_root.resolve(strict=True) / ".venv"
+    if Path(sys.prefix).resolve(strict=True) != expected_prefix.resolve(strict=True):
+        raise ContractError("development pilot Runtime interpreter is outside repository .venv")
+    expected_by_name = {item.name: item for item in candidates}
+    runtime_wheels: tuple[tuple[Path, ImplementationName], ...] = (
+        (cernora_wheel, "cernora"),
+        (companion_wheel, "cernora-reference-workflow"),
+    )
+    for wheel, name in runtime_wheels:
+        expected = expected_by_name.get(name)
+        if expected is None:
+            raise ContractError("development pilot Runtime implementation authority is incomplete")
+        actual = _candidate(wheel, expected_name=name, expected_version=expected.version)
+        if actual != expected:
+            raise ContractError("development pilot Runtime wheel bytes changed")
+        try:
+            distribution = importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise ContractError("development pilot Runtime distribution is unavailable") from exc
+        if distribution.version != expected.version:
+            raise ContractError("development pilot Runtime distribution version changed")
+        with zipfile.ZipFile(wheel) as archive:
+            members = tuple(
+                item
+                for item in archive.infolist()
+                if not item.is_dir() and not item.filename.endswith(".dist-info/RECORD")
+            )
+            if not members:
+                raise ContractError("development pilot Runtime wheel is empty")
+            for member in members:
+                installed = Path(str(distribution.locate_file(member.filename)))
+                if read_regular_file_bytes(installed, maximum=None) != archive.read(member):
+                    raise ContractError("development pilot Runtime distribution bytes changed")
 
 
 __all__ = [
@@ -363,4 +426,5 @@ __all__ = [
     "create_development_pilot_bundle",
     "inspect_development_pilot_bundle",
     "verify_development_pilot_bundle",
+    "verify_development_pilot_runtime",
 ]

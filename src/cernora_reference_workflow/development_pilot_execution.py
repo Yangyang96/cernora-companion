@@ -308,6 +308,8 @@ def prepare_development_pilot_execution(
 ) -> DevelopmentPilotStepResult:
     """Prepare durable custody offline; this operation performs no external Attempt."""
 
+    if plan.implementation_candidates is None:
+        raise ContractError("development pilot prepare requires implementation-bound Plan v2")
     if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
         raise ContractError("development pilot custody destination must be new")
     if disk_free(destination.parent) < PILOT_PREFLIGHT_FREE_BYTES:
@@ -665,6 +667,8 @@ def step_development_pilot_execution(
 
     with _writer_lock(root):
         state = inspect_development_pilot_execution(root)
+        if state.plan.implementation_candidates is None:
+            raise ContractError("development pilot step requires implementation-bound Plan v2")
         if accepted_plan_id != state.plan.plan_id:
             raise ContractError("development pilot acceptance does not equal the exact Plan ID")
         if state.ambiguous_claim is not None:

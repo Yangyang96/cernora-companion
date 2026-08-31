@@ -838,6 +838,86 @@ def test_live_executor_rejects_actual_harbor_result_drift(
         executor(_request(spec, trial=f"result-{mutation}-drift"))
 
 
+def test_pilot_policy_closes_unusable_runtime_evidence_without_observation(
+    tmp_path: Path,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=ResultDriftProcess(task, spec, "agent"),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+        close_unusable_runtime_evidence=True,
+    )
+
+    attempt = executor(_request(spec, trial="pilot-unusable-evidence"))
+
+    assert attempt.retry_eligible is False
+    assert attempt.lifecycle is not None
+    assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
+    assert attempt.runtime_observation is None
+    assert attempt.repair_result is None
+
+
+def test_live_executor_keeps_private_output_failure_fail_closed(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    proxy = _proxy_environment()
+
+    class PrivateOutputProcess(FakeProcess):
+        def __call__(
+            self,
+            command: tuple[str, ...],
+            *,
+            cwd: Path,
+            environment: Mapping[str, str],
+            deadline_monotonic: float,
+            timeout_seconds: int,
+            disk_free: object = None,
+            safe_stop_free_bytes: int | None = None,
+        ) -> SubprocessResult:
+            process = super().__call__(
+                command,
+                cwd=cwd,
+                environment=environment,
+                deadline_monotonic=deadline_monotonic,
+                timeout_seconds=timeout_seconds,
+                disk_free=disk_free,
+                safe_stop_free_bytes=safe_stop_free_bytes,
+            )
+            return replace(process, stdout=proxy["CERNORA_HTTP_PROXY"].encode())
+
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=proxy,
+        process_runner=PrivateOutputProcess(task, spec),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+        close_unusable_runtime_evidence=True,
+    )
+
+    with pytest.raises(LiveAttemptError, match="private value"):
+        executor(_request(spec, trial="private-output"))
+
+
 def test_unverified_start_failure_does_not_receive_retry(
     tmp_path: Path,
 ) -> None:
@@ -1028,10 +1108,16 @@ def test_unverified_preterminal_result_never_receives_retry(
         container_controller=FakeContainers(),
         cli_validator=lambda _: None,
         image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+        close_unusable_runtime_evidence=True,
     )
 
-    with pytest.raises(LiveAttemptError):
-        executor(_request(spec, trial=f"unverified-{mutation}"))
+    attempt = executor(_request(spec, trial=f"unverified-{mutation}"))
+
+    assert attempt.retry_eligible is False
+    assert attempt.lifecycle is not None
+    assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
+    assert attempt.runtime_observation is None
+    assert attempt.repair_result is None
 
 
 def test_loose_transient_token_match_is_not_retry_eligible(tmp_path: Path) -> None:
