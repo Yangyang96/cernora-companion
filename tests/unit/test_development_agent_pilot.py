@@ -83,6 +83,12 @@ def test_corpus_rejects_extra_or_relabelled_cases(tmp_path: Path) -> None:
         load_development_pilot_corpus(copied)
 
     shutil.rmtree(copied / "extra")
+    extra_link = copied / "extra-link"
+    extra_link.symlink_to(copied / "dev-json-pointer", target_is_directory=True)
+    with pytest.raises(ContractError, match="closed six-directory"):
+        load_development_pilot_corpus(copied)
+
+    extra_link.unlink()
     manifest = copied / "dev-json-pointer" / "case.json"
     raw = manifest.read_text(encoding="utf-8").replace('"development"', '"held-out"')
     manifest.write_text(raw, encoding="utf-8")

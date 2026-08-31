@@ -416,10 +416,8 @@ def load_development_pilot_corpus(root: Path) -> DevelopmentPilotCorpus:
     if not root.is_dir() or root.is_symlink():
         raise ContractError("development pilot corpus root must be one real directory")
     root = root.resolve(strict=True)
-    roots = tuple(
-        sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink())
-    )
-    if len(roots) != 6 or any(not path.is_dir() for path in root.iterdir()):
+    roots = tuple(sorted(root.iterdir()))
+    if len(roots) != 6 or any(not path.is_dir() or path.is_symlink() for path in roots):
         raise ContractError("development pilot corpus must be a closed six-directory tree")
     tasks = tuple(
         sorted((load_visible_task(path) for path in roots), key=lambda item: item.case.case_id)

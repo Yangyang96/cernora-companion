@@ -157,7 +157,7 @@ non-authoritative; its selected work package stops before any Agent pilot or hel
 The user selected `confirmatory-effect` on 2026-08-31. The separate closed development-only bundle
 is [`preparations/next-priority4-development-pilot`](../preparations/next-priority4-development-pilot),
 with bundle ID
-`b6000764aba499927e381edace151bca83756d12dd488b4559ae77689a1e1b16`, plan ID
+`80cbc4aac215d16b7e3f4adcdb5f276250ac064bdff64afdb8553e629bb8d51c`, plan ID
 `273b259f2f0528dbccee2808c5e42e73173841b2b313f13bf84c467369710c43`, and authorization-request
 ID `0ae0c5a7f65a0444decdb32d25ac99a1851f710dd87c08cf3e2898a058cea1ad`.
 Its six fresh visible Cases are three `development` and three `regression` Cases; it contains no

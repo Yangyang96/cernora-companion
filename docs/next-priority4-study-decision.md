@@ -94,13 +94,13 @@ Its exact identities and implementation candidates are:
 
 | Authority | Value |
 |---|---|
-| Bundle | `b6000764aba499927e381edace151bca83756d12dd488b4559ae77689a1e1b16` |
+| Bundle | `80cbc4aac215d16b7e3f4adcdb5f276250ac064bdff64afdb8553e629bb8d51c` |
 | Authorization request | `0ae0c5a7f65a0444decdb32d25ac99a1851f710dd87c08cf3e2898a058cea1ad` |
 | Development pilot plan | `273b259f2f0528dbccee2808c5e42e73173841b2b313f13bf84c467369710c43` |
 | Corpus | `dd6fa131ddcf717fb589e6398e4916998ab3d53bd297cfce3c08529ce46adece` |
 | Image set | `ec601643b2f92edb907997d4fd742421d9527f2932817156f73ef62a7c5a448e` |
 | Cernora Core wheel | `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
-| Companion wheel | `ba404810b046bd65545f28b5e66bc725f9ba2f5d4d666874205d781d7df82106` |
+| Companion wheel | `c4f24d6e5443fdc67b1232cfb11855c0ec5d9aced6fd502140d15a1c46e74c6f` |
 | Prepared execution | `46004fc1f812cbef2edfc5534a5a6e133a35ef85b05c9c4e5420722c5b8cd2a8` |
 
 Both wheel candidates were built twice offline with byte-identical SHA-256 values. Each of the six

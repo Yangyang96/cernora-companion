@@ -158,6 +158,22 @@ def test_prepared_custody_is_not_reported_as_running(tmp_path: Path) -> None:
     assert summary.completed_trial_count == 0
 
 
+def test_custody_rejects_orphan_artifact_entries(tmp_path: Path) -> None:
+    plan = _plan()
+    custody = tmp_path / "custody"
+    _prepare(plan, custody)
+    orphan = custody / "artifacts" / "orphan"
+    orphan.write_bytes(b"not an artifact")
+
+    with pytest.raises(ContractError, match="unknown entry"):
+        inspect_development_pilot_execution(custody)
+
+    orphan.unlink()
+    orphan.mkdir()
+    with pytest.raises(ContractError, match="omits a real manifest"):
+        inspect_development_pilot_execution(custody)
+
+
 def test_real_evaluated_failure_is_selected_without_heldout_or_fabrication(
     tmp_path: Path,
 ) -> None:

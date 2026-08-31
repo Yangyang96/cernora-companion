@@ -562,10 +562,14 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
             completed = True
         else:
             raise ContractError("development pilot ledger event is out of order")
-    actual_artifact_paths = {
-        path.relative_to(root).parent.as_posix()
-        for path in (root / "artifacts").glob("*/manifest.json")
-    }
+    actual_artifact_paths: set[str] = set()
+    for path in (root / "artifacts").iterdir():
+        if not path.is_dir() or path.is_symlink():
+            raise ContractError("development pilot Attempt artifacts contain an unknown entry")
+        manifest = path / "manifest.json"
+        if not manifest.is_file() or manifest.is_symlink():
+            raise ContractError("development pilot Attempt artifact omits a real manifest")
+        actual_artifact_paths.add(path.relative_to(root).as_posix())
     if actual_artifact_paths != expected_artifact_paths:
         raise ContractError("development pilot Attempt artifacts are orphaned or missing")
     attempts_tuple = tuple(tuple(items) for items in attempts_by_slot)
