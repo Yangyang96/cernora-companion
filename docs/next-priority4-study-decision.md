@@ -1,6 +1,6 @@
 # Next Priority 4 Study Decision Proposal
 
-Status: **`confirmatory-effect` selected; recovery development pilot inconclusive**
+Status: **`confirmatory-effect` selected; repaired development pilot awaiting authorization**
 
 This document records the next decision boundary after the offline preparation bundle. The user
 selected the recommended `confirmatory-effect` design on 2026-08-31. This file is not a
@@ -78,10 +78,10 @@ The selected design uses this separate development-only work package in order:
 7. Obtain an independent review of the Candidate and development evidence.
 8. Only then ask an independent custodian for a fresh opaque held-out commitment.
 
-Steps 1 through 3 are complete. Step 4 stopped as `inconclusive` because the first recovery
-Attempt was claimed but no terminal Attempt artifact was published. Steps 5 through 8 cannot
-advance. There is no authoritative Agent observation, failure mechanism, Candidate, Candidate
-Development record, held-out commitment, reveal, smoke, or Study execution.
+Steps 1 through 3 have been repeated under a repaired Plan v3 authority. Step 4 is pending explicit
+authorization for the new request below. The two earlier claimed Attempts remain permanently
+ambiguous and are not reused. There is no authoritative Agent observation, failure mechanism,
+Candidate, Candidate Development record, held-out commitment, reveal, smoke, or Study execution.
 
 The development pilot authorization must state the exact task authorities, maximum Attempts,
 timeout, external provider scope, custody location, and stop conditions. It must not authorize
@@ -123,9 +123,11 @@ The user authorized request
 `0ae0c5a7f65a0444decdb32d25ac99a1851f710dd87c08cf3e2898a058cea1ad`. The first
 Attempt durably recorded `execution-started` and `attempt-claimed`, then the closed Harbor process
 failed strict result processing before publishing an Attempt artifact. No later Trial was started.
-The Runtime and attributable container disappeared, so the claim is ambiguous and permanently
-non-retryable under the frozen policy. This is not an Agent failure, cannot support a Candidate,
-and does not authorize reuse of the first request or custody.
+The outer command actually returned exit code 1 after 304.913924 seconds; loss of the observer
+handle was not evidence that the host process disappeared. The then-active private-value scan bug
+and equal inner/outer timeout were both present, but the surviving custody cannot prove which
+prepublication boundary was reached. The claim therefore remains ambiguous and permanently
+non-retryable. This is not an Agent failure and does not authorize reuse of the request or custody.
 
 ## Recovery development-pilot preparation
 
@@ -157,19 +159,14 @@ was built twice offline with byte-identical SHA-256 values.
 
 ## Independent offline review and validation
 
-Two independent read-only review tasks examined `d3109df...072ce59` on separate axes:
+Independent read-only and adversarial review examined the implementation from `d3109df` through
+the final working-tree snapshot on separate Standards, Spec, runtime, custody, and authorization
+axes. Findings covering strict trees, orphan artifacts, spawn-window cleanup, duplicate custody,
+self-consistent custody rewriting, and contradictory request authorities were fixed and
+re-reviewed. The final review reports no unresolved P0-P3.
 
-- `/root/standards_review` checked repository standards and safety-state implementation. Its
-  initial P1 corpus-symlink and P2 orphan-artifact findings were fixed in `072ce59` and passed
-  adversarial re-review. Its remaining module-cohesion observation was formally dispositioned as
-  a non-defect because the contracts, replay, outcome derivation, and stepping share one durable
-  pilot state machine and its cross-cutting safety invariants.
-- `/root/spec_review` checked both Priority 4 documents and the explicit user boundaries. It found
-  no missing requirement, scope creep, or incorrect implementation, and reverified the final
-  bundle, plan, request, wheel, and prepared-custody identities after the fixes.
-
-Both axes report no unresolved P0-P3. The final offline publication gate passed 533 tests, Ruff,
-format checking, strict Mypy across 143 source files, wheel and sdist builds, license inventory,
+The final offline publication gate passed 572 tests, Ruff, format checking, strict Mypy across 143
+source files, byte-identical dual wheel builds, wheel and sdist builds, license inventory,
 repository secret scanning, and built-artifact secret scanning. No validation step used Runtime
 credentials or submitted an Agent/provider Attempt.
 
@@ -178,14 +175,42 @@ credentials or submitted an Agent/provider Attempt.
 The user authorized the complete development-only pilot for request
 `df60c04812b9e1755848fe0c61face5d45bfa1294dd3b874023e1caa12f585fd`. Execution
 `c655a8db6dc3fa5014049f5fcafd57d3db0f7f4546e077234fc649925e67be96` durably recorded
-`execution-started` and one `attempt-claimed` event for ordinal 1, slot 1, then the host control
-process disappeared before publishing an Attempt artifact. The already-started container Agent
-exec was allowed to end without intervention; the attributable container and temporary Runtime
-tree then disappeared without a verifiable terminal artifact. Offline custody replay reports
-`status=running`, zero published Attempts, zero completed Trials, and no outcome.
+`execution-started` and one `attempt-claimed` event for ordinal 1, slot 1. The outer command then
+returned exit code 1 after 302.364721 seconds with only the value-free generic error. Reproduction
+showed that the entry point passed all ambient environment values into the private-value scanner;
+ordinary values such as `1`, `2`, and `dumb` were consequently treated as proxy secrets, so normal
+Harbor output triggered a false private-value failure before the lifecycle-closing catch. The
+temporary artifact tree was correctly removed by that fail-closed path, leaving no publication.
+Offline custody replay reports `status=running`, zero published Attempts, zero completed Trials,
+and no outcome.
 
 Stop here with an `inconclusive` pilot result. The outstanding claim is permanently ambiguous and
 must not be retried, resumed, converted into lifecycle evidence, or used as an Agent observation.
 No later Trial was started. No fresh Candidate exists, no held-out commitment has been requested,
 and no Study authority has been materialized. This authorization did not cover held-out access or
 reveal, smoke execution, or any Trial in the future 54-Trial matrix.
+
+## Repaired development-pilot preparation
+
+The new closed request bundle is
+[`preparations/next-priority4-development-pilot-repair`](../preparations/next-priority4-development-pilot-repair).
+Plan v3 scans only the three proxy endpoints actually selected by policy, gives the 300-second
+Agent limit a separately frozen 360-second Attempt envelope, terminates the complete process group
+on interrupts, writes value-free incident receipts, and adopts only an exact already-published
+orphan artifact without another provider call. The canonical authorization request is stored in
+custody and replay binds its exact ID, Plan, ordered Case authorities, envelope, and physical
+custody path before any claim. Plans v1 and v2 remain inspectable but cannot start new execution.
+
+| Authority | Value |
+|---|---|
+| Bundle | `197d4bf9cf25b902a0706d978f242c5d5f325e9659ff5934ad1fbcd9abcd77d4` |
+| Authorization request | `d34dfab521aeadb749d06f8d37b3df27a6eca4d0977374f88e27f39d65ed1c26` |
+| Development pilot plan | `33544aa6d8ec292daf8b69390c4731ee67ee70184f2e7cd788c3baeeb4824099` |
+| Prepared execution | `bb5e9c7b87650a788c0eca899329110fd25c2ef6421ec4865c894cb5e9945ebf` |
+| Physical custody path | `7ee5eb85c6c136af2169805efdb5166a1d07816d2336da54d90078c0446430fb` |
+| Cernora Core wheel | `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `7288579a4676fbcd2f4c3e31a0f4f6c34979184a70c90987a2e031606bbc151b` |
+
+The new custody is prepared with zero Attempts and zero completed Trials. No Agent/provider call
+has been made under this request. Execution must stop here until that exact request receives new
+development-only pilot authorization.

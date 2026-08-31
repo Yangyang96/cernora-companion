@@ -19,6 +19,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create")
+    create.add_argument("--repository-root", type=Path, required=True)
     create.add_argument("--corpus-root", type=Path, required=True)
     create.add_argument("--image-authorities", type=Path, required=True)
     create.add_argument("--companion-wheel", type=Path, required=True)
@@ -51,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
                 cernora_wheel=arguments.cernora_wheel,
                 companion_version=arguments.companion_version,
                 cernora_version=arguments.cernora_version,
+                repository_root=arguments.repository_root,
             )
         else:
             manifest = verify_development_pilot_bundle(

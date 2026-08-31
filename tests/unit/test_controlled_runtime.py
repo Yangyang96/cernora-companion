@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import cernora_reference_workflow.controlled_runtime as controlled_runtime_module
 from cernora_reference_workflow.controlled_experiment_spec import (
     materialize_controlled_experiment_spec,
 )
@@ -274,6 +276,167 @@ def test_active_disk_drop_kills_process_group_as_resumable_safe_stop(tmp_path: P
     assert result.exit_code is None
 
 
+def test_base_exception_after_process_start_kills_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    killed: list[int] = []
+    real_kill = controlled_runtime_module._kill_process_group
+
+    def recording_kill(process: object) -> None:
+        killed.append(process.pid)  # type: ignore[attr-defined]
+        real_kill(process)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(controlled_runtime_module, "_kill_process_group", recording_kill)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_subprocess_until(
+            (sys.executable, "-c", "import time; time.sleep(30)"),
+            cwd=tmp_path,
+            environment={},
+            deadline_monotonic=time.monotonic() + 10,
+            timeout_seconds=10,
+            disk_free=lambda: (_ for _ in ()).throw(KeyboardInterrupt()),
+            safe_stop_free_bytes=8 * 1024**3,
+        )
+
+    assert len(killed) == 1
+    with pytest.raises(ProcessLookupError):
+        os.kill(killed[0], signal.SIGCONT)
+
+
+@pytest.mark.parametrize("control_signal", (signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
+def test_signal_in_spawn_return_window_is_deferred_until_group_is_guarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, control_signal: signal.Signals
+) -> None:
+    real_popen = subprocess.Popen
+    spawned: list[int] = []
+
+    def interrupt_before_return(*args: object, **kwargs: object) -> object:
+        process = real_popen(*args, **kwargs)  # type: ignore[call-overload]
+        spawned.append(process.pid)
+        os.kill(os.getpid(), control_signal)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", interrupt_before_return)
+    previous_handler = signal.signal(control_signal, signal.default_int_handler)
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run_subprocess_until(
+                (sys.executable, "-c", "import time; time.sleep(30)"),
+                cwd=tmp_path,
+                environment={},
+                deadline_monotonic=time.monotonic() + 10,
+                timeout_seconds=10,
+            )
+    finally:
+        signal.signal(control_signal, previous_handler)
+
+    assert len(spawned) == 1
+    with pytest.raises(ProcessLookupError):
+        os.kill(spawned[0], signal.SIGCONT)
+
+
+def test_spawned_command_does_not_inherit_parent_control_signal_mask(tmp_path: Path) -> None:
+    script = (
+        "import signal; "
+        "blocked=signal.pthread_sigmask(signal.SIG_BLOCK,set()); "
+        "print(','.join(sorted(item.name for item in blocked)))"
+    )
+    result = run_subprocess_until(
+        (sys.executable, "-c", script),
+        cwd=tmp_path,
+        environment={},
+        deadline_monotonic=time.monotonic() + 5,
+        timeout_seconds=5,
+    )
+
+    assert result.status == "exited"
+    assert result.exit_code == 0
+    assert result.stdout == b"\n"
+
+
+def test_unavailable_executable_remains_a_start_failure(tmp_path: Path) -> None:
+    result = run_subprocess_until(
+        ("/definitely/missing/cernora-review",),
+        cwd=tmp_path,
+        environment={},
+        deadline_monotonic=time.monotonic() + 5,
+        timeout_seconds=5,
+    )
+
+    assert result.status == "start_failure"
+    assert result.exit_code is None
+
+    unavailable = tmp_path / "not-executable"
+    unavailable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    denied = run_subprocess_until(
+        (str(unavailable),),
+        cwd=tmp_path,
+        environment={},
+        deadline_monotonic=time.monotonic() + 5,
+        timeout_seconds=5,
+    )
+    assert denied.status == "start_failure"
+    assert denied.exit_code is None
+
+    broken_shebang = tmp_path / "broken-shebang"
+    broken_shebang.write_text("#!/definitely/missing/interpreter\n", encoding="utf-8")
+    broken_shebang.chmod(0o755)
+    broken = run_subprocess_until(
+        (str(broken_shebang),),
+        cwd=tmp_path,
+        environment={},
+        deadline_monotonic=time.monotonic() + 5,
+        timeout_seconds=5,
+    )
+    assert broken.status == "start_failure"
+    assert broken.exit_code is None
+
+
+def test_exec_handshake_oserror_kills_started_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    killed: list[int] = []
+    real_kill = controlled_runtime_module._kill_process_group
+
+    def recording_kill(process: object) -> None:
+        killed.append(process.pid)  # type: ignore[attr-defined]
+        real_kill(process)  # type: ignore[arg-type]
+
+    popen_returned = False
+    real_popen = subprocess.Popen
+    real_read = os.read
+
+    def marked_popen(*args: object, **kwargs: object) -> object:
+        nonlocal popen_returned
+        process = real_popen(*args, **kwargs)  # type: ignore[call-overload]
+        popen_returned = True
+        return process
+
+    def fail_handshake_read(descriptor: int, size: int) -> bytes:
+        if popen_returned:
+            raise OSError
+        return real_read(descriptor, size)
+
+    monkeypatch.setattr(controlled_runtime_module, "_kill_process_group", recording_kill)
+    monkeypatch.setattr(subprocess, "Popen", marked_popen)
+    monkeypatch.setattr(os, "read", fail_handshake_read)
+
+    result = run_subprocess_until(
+        (sys.executable, "-c", "import time; time.sleep(30)"),
+        cwd=tmp_path,
+        environment={},
+        deadline_monotonic=time.monotonic() + 5,
+        timeout_seconds=5,
+    )
+
+    assert result.status == "start_failure"
+    assert len(killed) == 1
+    with pytest.raises(ProcessLookupError):
+        os.kill(killed[0], signal.SIGCONT)
+
+
 def test_deadline_kills_descendant_process_group(tmp_path: Path) -> None:
     child_pid = tmp_path / "child.pid"
     script = (
@@ -290,6 +453,30 @@ def test_deadline_kills_descendant_process_group(tmp_path: Path) -> None:
     )
 
     assert result.status == "timed_out"
+    pid = int(child_pid.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, signal.SIGCONT)
+
+
+def test_normal_group_leader_exit_with_live_descendant_is_killed_and_rejected(
+    tmp_path: Path,
+) -> None:
+    child_pid = tmp_path / "normal-exit-child.pid"
+    command = (
+        "/bin/sh",
+        "-c",
+        f"sleep 30 & echo $! > {child_pid}",
+    )
+
+    with pytest.raises(RuntimeError, match="descendants survived"):
+        run_subprocess_until(
+            command,
+            cwd=tmp_path,
+            environment={"PATH": "/bin:/usr/bin"},
+            deadline_monotonic=time.monotonic() + 5,
+            timeout_seconds=5,
+        )
+
     pid = int(child_pid.read_text())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, signal.SIGCONT)

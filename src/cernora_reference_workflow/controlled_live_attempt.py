@@ -11,6 +11,7 @@ import tempfile
 import time
 import tomllib
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
@@ -56,7 +57,7 @@ from cernora_reference_workflow.runtime_policy import (
     RUNTIME_CONFIGURATION_SHA256,
     RUNTIME_POLICY,
     TELEMETRY_CONFIG_TOML,
-    resolve_provider_proxy_environment,
+    resolve_provider_proxy_configuration,
 )
 
 AGENT_IMPORT = "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex"
@@ -374,7 +375,7 @@ def _assert_private_values_absent(
         str(auth_path).encode("utf-8"),
         str(resolved_auth_path).encode("utf-8"),
         *markers,
-        *(value.encode("utf-8") for value in proxy_environment.values()),
+        *(value.encode("utf-8") for name, value in proxy_environment.items() if name != "NO_PROXY"),
         *(value.encode("utf-8") for value in explicit_proxy_endpoints),
     )
     if any(marker in process.stdout or marker in process.stderr for marker in prohibited):
@@ -1361,14 +1362,19 @@ class ControlledHarborAttemptExecutor:
         image_verifier: ImageVerifier = _verify_local_task_image,
         disk_free: DiskProbe = lambda path: shutil.disk_usage(path).free,
         close_unusable_runtime_evidence: bool = False,
+        attempt_envelope_grace_seconds: int = 0,
     ) -> None:
         self._repository_root = repository_root
         self._tasks = {item.case.case_id: item for item in tasks}
         self._task_suite = tasks
         self._evaluation_root = evaluation_root
         self._auth_file = auth_file
-        self._explicit_proxy_endpoints = tuple(sorted(set(proxy_environment.values())))
-        self._proxy_environment = resolve_provider_proxy_environment(proxy_environment)
+        proxy = resolve_provider_proxy_configuration(proxy_environment)
+        self._explicit_proxy_endpoints = proxy.source_endpoints
+        self._proxy_environment = proxy.environment
+        if attempt_envelope_grace_seconds < 0:
+            raise ContractError("Attempt envelope grace must be non-negative")
+        self._attempt_envelope_grace_seconds = attempt_envelope_grace_seconds
         self._ambient_environment = ambient_environment
         self._process_runner = process_runner
         self._containers = container_controller or DockerContainerController()
@@ -1483,24 +1489,49 @@ class ControlledHarborAttemptExecutor:
                 raise LiveAttemptError("cannot compute the real Harbor task checksum") from exc
             before = self._containers.snapshot()
             trial_name: str | None = None
+            cleanup_job = job_root / job_name
+            try:
+                cleanup_trial_names = tuple(
+                    sorted(
+                        item.name
+                        for item in cleanup_job.iterdir()
+                        if item.is_dir() and not item.is_symlink()
+                    )
+                )
+            except OSError:
+                cleanup_trial_names = ()
             try:
                 process = self._process_runner(
                     command,
                     cwd=self._repository_root,
                     environment=environment,
                     deadline_monotonic=request.global_deadline_monotonic,
-                    timeout_seconds=request.specification.limits.timeout_seconds,
+                    timeout_seconds=(
+                        request.specification.limits.timeout_seconds
+                        + self._attempt_envelope_grace_seconds
+                    ),
                     disk_free=lambda: self._disk_free(self._evaluation_root),
                     safe_stop_free_bytes=SAFE_STOP_FREE_BYTES,
                 )
-                trial_name = _trial_name_hint(job_root, job_name)
             finally:
-                self._containers.cleanup_new(
-                    before,
-                    expected_image_id=expected_image,
-                    job_name=job_name,
-                    trial_name=trial_name,
-                )
+                try:
+                    trial_name = _trial_name_hint(job_root, job_name)
+                finally:
+                    with suppress(OSError):
+                        cleanup_trial_names = tuple(
+                            sorted(
+                                item.name
+                                for item in cleanup_job.iterdir()
+                                if item.is_dir() and not item.is_symlink()
+                            )
+                        )
+                    for cleanup_trial_name in cleanup_trial_names or (trial_name,):
+                        self._containers.cleanup_new(
+                            before,
+                            expected_image_id=expected_image,
+                            job_name=job_name,
+                            trial_name=cleanup_trial_name,
+                        )
             _assert_private_values_absent(
                 job_root / job_name,
                 auth_path=self._auth_file,

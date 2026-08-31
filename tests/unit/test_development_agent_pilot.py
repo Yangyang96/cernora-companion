@@ -79,6 +79,8 @@ def test_confirmatory_pilot_plan_is_exact_baseline_only_and_not_authorized() -> 
     )
 
     assert plan.selected_study_mode == "confirmatory-effect"
+    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v3"
+    assert plan.attempt_envelope_timeout_seconds == 360
     assert plan.execution_authorized is False
     assert plan.implementation_candidates == _implementations()
     assert plan.treatment_axis_if_eligible == "prompt-instruction"

@@ -16,6 +16,7 @@ from cernora_reference_workflow.runtime_agent import (
 from cernora_reference_workflow.runtime_policy import (
     CODEX_RUNTIME_INSTALLATION,
     PREINSTALLED_CODEX_CHECK_COMMAND,
+    resolve_provider_proxy_configuration,
     resolve_provider_proxy_environment,
 )
 
@@ -115,6 +116,25 @@ def test_provider_proxy_is_external_and_loopback_is_mapped_into_docker() -> None
         "ALL_PROXY": "socks5://host.docker.internal:11080",
         "NO_PROXY": "localhost,127.0.0.1",
     }
+
+
+def test_proxy_private_scan_inputs_exclude_unrelated_ambient_values() -> None:
+    configuration = resolve_provider_proxy_configuration(
+        {
+            "http_proxy": "http://127.0.0.1:7890",
+            "https_proxy": "http://127.0.0.1:7890",
+            "all_proxy": "socks5://127.0.0.1:7890",
+            "NO_COLOR": "1",
+            "SHLVL": "2",
+            "TERM": "dumb",
+        }
+    )
+
+    assert configuration.source_endpoints == (
+        "http://127.0.0.1:7890",
+        "socks5://127.0.0.1:7890",
+    )
+    assert not {"1", "2", "dumb"}.intersection(configuration.source_endpoints)
 
 
 @pytest.mark.parametrize(

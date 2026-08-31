@@ -6,6 +6,7 @@ import os
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping
@@ -30,6 +31,14 @@ from cernora_reference_workflow.controlled_experiment_spec import (
 Clock = Callable[[], float]
 DiskProbe = Callable[[], int]
 MAX_CAPTURE_BYTES = 1_048_576
+_UNBLOCK_AND_EXEC = (
+    "import os,signal,sys;"
+    "fd=int(sys.argv[1]);os.set_inheritable(fd,False);"
+    "signal.pthread_sigmask(signal.SIG_UNBLOCK,"
+    "{signal.SIGINT,signal.SIGTERM,signal.SIGHUP});"
+    "\ntry: os.execvpe(sys.argv[2],sys.argv[2:],os.environ)"
+    "\nexcept OSError: os.write(fd,b'1');os._exit(127)"
+)
 
 
 def _path_is_inside_git_worktree(path: Path) -> bool:
@@ -282,16 +291,18 @@ class SubprocessResult:
 
 
 def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
-    with suppress(ProcessLookupError):
+    with suppress(ProcessLookupError, PermissionError):
         os.killpg(process.pid, signal.SIGKILL)
     process.wait()
-    try:
-        os.killpg(process.pid, 0)
-    except (ProcessLookupError, PermissionError):
-        # Darwin may report EPERM for a fully killed orphaned group. Because the
-        # initial SIGKILL was accepted for our same-session group, EPERM proves
-        # no remaining member is signalable by the spawning identity.
-        return
+    for _ in range(100):
+        try:
+            os.killpg(process.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            # Darwin may report EPERM for a fully killed orphaned group. Because the
+            # initial SIGKILL was accepted for our same-session group, EPERM proves
+            # no remaining member is signalable by the spawning identity.
+            return
+        time.sleep(0.01)
     raise RuntimeError("controlled subprocess process group survived cleanup")
 
 
@@ -350,17 +361,44 @@ def run_subprocess_until(
             os.fdopen(stdout_fd, "wb") as stdout_handle,
             os.fdopen(stderr_fd, "wb") as stderr_handle,
         ):
+            process: subprocess.Popen[bytes] | None = None
+            exec_status_read, exec_status_write = os.pipe()
+            blocked_signals = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+            previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked_signals)
+            exec_failed = False
             try:
-                process = subprocess.Popen(
-                    command,
-                    cwd=cwd,
-                    env=dict(environment),
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout_handle,
-                    stderr=stderr_handle,
-                    start_new_session=True,
-                )
+                try:
+                    process = subprocess.Popen(
+                        (
+                            sys.executable,
+                            "-c",
+                            _UNBLOCK_AND_EXEC,
+                            str(exec_status_write),
+                            *command,
+                        ),
+                        cwd=cwd,
+                        env=dict(environment),
+                        stdin=subprocess.DEVNULL,
+                        stdout=stdout_handle,
+                        stderr=stderr_handle,
+                        start_new_session=True,
+                        pass_fds=(exec_status_write,),
+                    )
+                    os.close(exec_status_write)
+                    exec_status_write = -1
+                    exec_failed = bool(os.read(exec_status_read, 1))
+                finally:
+                    with suppress(OSError):
+                        os.close(exec_status_read)
+                    if exec_status_write >= 0:
+                        with suppress(OSError):
+                            os.close(exec_status_write)
             except OSError as exc:
+                try:
+                    if process is not None:
+                        _kill_process_group(process)
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
                 finished = clock()
                 receipt = canonical_content_id(
                     {"error": type(exc).__name__, "status": "start_failure"},
@@ -375,33 +413,72 @@ def run_subprocess_until(
                     finished_monotonic=finished,
                     receipt_sha256=receipt,
                 )
-            status: Literal[
-                "exited", "timed_out", "start_failure", "output_limit", "safe_stopped"
-            ] = "exited"
-            while process.poll() is None:
-                if (
-                    disk_free is not None
-                    and safe_stop_free_bytes is not None
-                    and disk_free() < safe_stop_free_bytes
-                ):
-                    status = "safe_stopped"
-                    _kill_process_group(process)
-                    break
-                if os.fstat(stdout_handle.fileno()).st_size > MAX_CAPTURE_BYTES or (
-                    os.fstat(stderr_handle.fileno()).st_size > MAX_CAPTURE_BYTES
-                ):
-                    status = "output_limit"
-                    _kill_process_group(process)
-                    break
-                remaining = min(started + available, deadline_monotonic) - clock()
-                if remaining <= 0:
-                    status = "timed_out"
-                    _kill_process_group(process)
-                    break
+            except BaseException:
                 try:
-                    process.wait(timeout=min(0.05, remaining))
-                except subprocess.TimeoutExpired:
-                    continue
+                    if process is not None:
+                        _kill_process_group(process)
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+                raise
+            try:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+                assert process is not None
+                if exec_failed:
+                    process.wait()
+                    finished = clock()
+                    receipt = canonical_content_id(
+                        {"error": "ExecFailure", "status": "start_failure"},
+                        excluded=frozenset(),
+                    )
+                    return SubprocessResult(
+                        status="start_failure",
+                        exit_code=None,
+                        stdout=b"",
+                        stderr=b"",
+                        started_monotonic=started,
+                        finished_monotonic=finished,
+                        receipt_sha256=receipt,
+                    )
+                status: Literal[
+                    "exited", "timed_out", "start_failure", "output_limit", "safe_stopped"
+                ] = "exited"
+                while process.poll() is None:
+                    if (
+                        disk_free is not None
+                        and safe_stop_free_bytes is not None
+                        and disk_free() < safe_stop_free_bytes
+                    ):
+                        status = "safe_stopped"
+                        _kill_process_group(process)
+                        break
+                    if os.fstat(stdout_handle.fileno()).st_size > MAX_CAPTURE_BYTES or (
+                        os.fstat(stderr_handle.fileno()).st_size > MAX_CAPTURE_BYTES
+                    ):
+                        status = "output_limit"
+                        _kill_process_group(process)
+                        break
+                    remaining = min(started + available, deadline_monotonic) - clock()
+                    if remaining <= 0:
+                        status = "timed_out"
+                        _kill_process_group(process)
+                        break
+                    try:
+                        process.wait(timeout=min(0.05, remaining))
+                    except subprocess.TimeoutExpired:
+                        continue
+                if status == "exited":
+                    try:
+                        os.killpg(process.pid, 0)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    else:
+                        _kill_process_group(process)
+                        raise RuntimeError(
+                            "controlled subprocess descendants survived their group leader"
+                        )
+            except BaseException:
+                _kill_process_group(process)
+                raise
         finished = clock()
         stdout_size = os.stat("stdout.bin", dir_fd=directory_fd, follow_symlinks=False).st_size
         stderr_size = os.stat("stderr.bin", dir_fd=directory_fd, follow_symlinks=False).st_size

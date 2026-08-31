@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
@@ -64,6 +65,17 @@ _PROXY_INPUTS = {
     "HTTPS_PROXY": ("CERNORA_HTTPS_PROXY", "https_proxy", "HTTPS_PROXY"),
     "ALL_PROXY": ("CERNORA_ALL_PROXY", "all_proxy", "ALL_PROXY"),
 }
+PROVIDER_PROXY_INPUT_NAMES = (
+    "CERNORA_HTTP_PROXY",
+    "CERNORA_HTTPS_PROXY",
+    "CERNORA_ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+)
 _SUPPORTED_PROXY_SCHEMES = frozenset({"http", "https", "socks5", "socks5h"})
 _LOOPBACK_PROXY_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -97,7 +109,17 @@ def _container_proxy_url(value: str, *, variable: str) -> str:
     return urlunsplit(SplitResult(parsed.scheme, f"{host}:{port}", "", "", ""))
 
 
-def resolve_provider_proxy_environment(environ: Mapping[str, str]) -> dict[str, str]:
+@dataclass(frozen=True)
+class ProviderProxyConfiguration:
+    """Container projection and exact host endpoints selected by policy."""
+
+    environment: dict[str, str]
+    source_endpoints: tuple[str, ...]
+
+
+def resolve_provider_proxy_configuration(
+    environ: Mapping[str, str],
+) -> ProviderProxyConfiguration:
     """Resolve explicit host proxy settings into the Agent container environment.
 
     Dedicated ``CERNORA_*`` values take precedence. Lowercase conventional proxy variables are
@@ -106,13 +128,24 @@ def resolve_provider_proxy_environment(environ: Mapping[str, str]) -> dict[str, 
     """
 
     resolved: dict[str, str] = {}
+    selected_endpoints: list[str] = []
     for output_name, input_names in _PROXY_INPUTS.items():
         selected = next((environ[name] for name in input_names if environ.get(name)), None)
         if selected is None:
             raise ContractError(f"live execution requires one of: {', '.join(input_names)}")
+        selected_endpoints.append(selected)
         resolved[output_name] = _container_proxy_url(selected, variable=input_names[0])
     resolved["NO_PROXY"] = "localhost,127.0.0.1"
-    return resolved
+    return ProviderProxyConfiguration(
+        environment=resolved,
+        source_endpoints=tuple(sorted(set(selected_endpoints))),
+    )
+
+
+def resolve_provider_proxy_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """Compatibility wrapper returning only projected container variables."""
+
+    return resolve_provider_proxy_configuration(environ).environment
 
 
 RUNTIME_CLEANUP_RECEIPT = {"codex_home_removed": True, "secrets_dir_removed": True}
@@ -138,10 +171,13 @@ class OperatorInterruptReceipt(StrictContract):
 __all__ = [
     "CODEX_RUNTIME_INSTALLATION",
     "PREINSTALLED_CODEX_CHECK_COMMAND",
+    "PROVIDER_PROXY_INPUT_NAMES",
     "RUNTIME_CLEANUP_RECEIPT",
     "RUNTIME_CONFIGURATION_SHA256",
     "RUNTIME_POLICY",
     "TELEMETRY_CONFIG_TOML",
     "OperatorInterruptReceipt",
+    "ProviderProxyConfiguration",
+    "resolve_provider_proxy_configuration",
     "resolve_provider_proxy_environment",
 ]

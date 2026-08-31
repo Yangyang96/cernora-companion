@@ -43,6 +43,9 @@ from cernora_reference_workflow.development_agent_pilot import (
     PILOT_SAFE_STOP_FREE_BYTES,
     DevelopmentAgentPilotPlan,
 )
+from cernora_reference_workflow.development_pilot_bundle import (
+    DevelopmentPilotAuthorizationRequest,
+)
 from cernora_reference_workflow.publication import atomic_publish_directory
 
 Clock = Callable[[], float]
@@ -69,23 +72,41 @@ class DevelopmentPilotStopped(ContractError):
 
 
 class DevelopmentPilotExecutionRecord(StrictV2Contract):
-    schema_version: Literal["cernora.reference.development-pilot-execution/v1"]
+    schema_version: Literal[
+        "cernora.reference.development-pilot-execution/v1",
+        "cernora.reference.development-pilot-execution/v2",
+    ]
     execution_id: Digest
     plan_id: Digest
     nonce: Digest
+    custody_path_sha256: Digest | None = None
+    authorization_request_id: Digest | None = None
     prepared_unix_milliseconds: NonNegativeInt
 
     @model_validator(mode="after")
     def canonical_identity(self) -> Self:
-        expected = canonical_content_id(
-            {"nonce": self.nonce, "plan_id": self.plan_id}, excluded=frozenset()
-        )
+        if self.schema_version.endswith("/v2"):
+            if self.custody_path_sha256 is None or self.authorization_request_id is None:
+                raise ValueError("current execution must bind its request and custody path")
+        elif self.custody_path_sha256 is not None or self.authorization_request_id is not None:
+            raise ValueError("legacy execution cannot bind a request or custody path")
+        identity: dict[str, object] = {"nonce": self.nonce, "plan_id": self.plan_id}
+        if self.custody_path_sha256 is not None:
+            identity["custody_path_sha256"] = self.custody_path_sha256
+        if self.authorization_request_id is not None:
+            identity["authorization_request_id"] = self.authorization_request_id
+        expected = canonical_content_id(identity, excluded=frozenset())
         if self.execution_id != expected:
             raise ValueError("development pilot execution identity mismatch")
         return self
 
     def canonical_bytes(self) -> bytes:
-        return canonical_json_bytes(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        if self.custody_path_sha256 is None:
+            payload.pop("custody_path_sha256")
+        if self.authorization_request_id is None:
+            payload.pop("authorization_request_id")
+        return canonical_json_bytes(payload)
 
 
 class DevelopmentPilotLedgerEntry(StrictV2Contract):
@@ -183,6 +204,35 @@ class DevelopmentPilotOutcome(StrictV2Contract):
         return canonical_json_bytes(self.model_dump(mode="json"))
 
 
+class DevelopmentPilotIncidentReceipt(StrictV2Contract):
+    """Value-free durable classification for a claimed Attempt that did not publish."""
+
+    schema_version: Literal["cernora.reference.development-pilot-incident/v1"]
+    incident_id: Digest
+    execution_id: Digest
+    plan_id: Digest
+    claim_entry_id: Digest
+    phase: Literal["executor", "attempt-validation", "artifact-publication"]
+    category: Literal[
+        "controlled-attempt-error",
+        "operator-interrupt",
+        "unexpected-executor-error",
+    ]
+    observed_unix_milliseconds: NonNegativeInt
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"incident_id"})
+        )
+        if self.incident_id != expected:
+            raise ValueError("development pilot incident identity mismatch")
+        return self
+
+    def canonical_bytes(self) -> bytes:
+        return canonical_json_bytes(self.model_dump(mode="json"))
+
+
 class DevelopmentPilotStepResult(StrictV2Contract):
     execution_id: Digest
     plan_id: Digest
@@ -195,12 +245,15 @@ class DevelopmentPilotStepResult(StrictV2Contract):
 @dataclass(frozen=True)
 class DevelopmentPilotExecutionState:
     plan: DevelopmentAgentPilotPlan
+    authorization_request: DevelopmentPilotAuthorizationRequest | None
     record: DevelopmentPilotExecutionRecord
     entries: tuple[DevelopmentPilotLedgerEntry, ...]
     attempts_by_slot: tuple[tuple[ControlledAttempt, ...], ...]
     artifacts: tuple[VerifiedControlledAttemptArtifact, ...]
     started_unix_milliseconds: int | None
     ambiguous_claim: DevelopmentPilotLedgerEntry | None
+    adoptable_artifact: tuple[str, VerifiedControlledAttemptArtifact] | None
+    incidents: tuple[DevelopmentPilotIncidentReceipt, ...]
     outcome: DevelopmentPilotOutcome | None
 
     @property
@@ -217,6 +270,17 @@ class DevelopmentPilotExecutionState:
 
 def _disk_free(path: Path) -> int:
     return shutil.disk_usage(path).free
+
+
+def _custody_path_sha256(path: Path, *, must_exist: bool) -> str:
+    lexical = Path(os.path.abspath(path))
+    if must_exist:
+        resolved = path.resolve(strict=True)
+    else:
+        resolved = path.parent.resolve(strict=True) / path.name
+    if path.is_symlink() or resolved != lexical:
+        raise ContractError("development pilot custody path must have real non-symlink ancestry")
+    return sha256_bytes(os.fsencode(resolved))
 
 
 def _exclusive_file(path: Path, data: bytes) -> None:
@@ -284,6 +348,41 @@ def _append_entry(root: Path, entry: DevelopmentPilotLedgerEntry) -> None:
     _exclusive_file(root / "ledger" / f"{entry.sequence:06d}.json", entry.canonical_bytes())
 
 
+def _publish_incident(
+    root: Path,
+    *,
+    record: DevelopmentPilotExecutionRecord,
+    claim: DevelopmentPilotLedgerEntry,
+    error: BaseException,
+    phase: Literal["executor", "attempt-validation", "artifact-publication"],
+    observed_unix_milliseconds: int,
+) -> None:
+    if isinstance(error, KeyboardInterrupt):
+        category = "operator-interrupt"
+    elif isinstance(error, ContractError):
+        category = "controlled-attempt-error"
+    else:
+        category = "unexpected-executor-error"
+    payload: dict[str, object] = {
+        "schema_version": "cernora.reference.development-pilot-incident/v1",
+        "execution_id": record.execution_id,
+        "plan_id": record.plan_id,
+        "claim_entry_id": claim.entry_id,
+        "phase": phase,
+        "category": category,
+        "observed_unix_milliseconds": observed_unix_milliseconds,
+    }
+    payload["incident_id"] = canonical_content_id(payload, excluded=frozenset())
+    receipt = DevelopmentPilotIncidentReceipt.model_validate(payload)
+    path = root / "diagnostics" / f"{claim.entry_id}.json"
+    if path.exists():
+        existing = _load_json_model(path, DevelopmentPilotIncidentReceipt)
+        if existing != receipt:
+            raise ContractError("development pilot incident receipt changed")
+        return
+    _exclusive_file(path, receipt.canonical_bytes())
+
+
 @contextmanager
 def _writer_lock(root: Path) -> Iterator[None]:
     descriptor = os.open(root / ".writer.lock", os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
@@ -302,16 +401,29 @@ def prepare_development_pilot_execution(
     plan: DevelopmentAgentPilotPlan,
     destination: Path,
     *,
+    authorization_request: DevelopmentPilotAuthorizationRequest,
     nonce: str | None = None,
     wall_clock: WallClock = time.time,
     disk_free: DiskProbe = _disk_free,
 ) -> DevelopmentPilotStepResult:
     """Prepare durable custody offline; this operation performs no external Attempt."""
 
-    if plan.implementation_candidates is None:
-        raise ContractError("development pilot prepare requires implementation-bound Plan v2")
+    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v3":
+        raise ContractError("development pilot prepare requires current Plan v3")
     if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
         raise ContractError("development pilot custody destination must be new")
+    custody_path_sha256 = _custody_path_sha256(destination, must_exist=False)
+    if (
+        authorization_request.schema_version
+        != "cernora.reference.development-pilot-authorization-request/v2"
+        or authorization_request.plan_id != plan.plan_id
+        or authorization_request.case_authority_sha256
+        != tuple(item.authority_sha256 for item in plan.corpus.tasks)
+        or authorization_request.attempt_envelope_timeout_seconds
+        != plan.attempt_envelope_timeout_seconds
+        or authorization_request.custody_path_sha256 != custody_path_sha256
+    ):
+        raise ContractError("development pilot request does not authorize this custody path")
     if disk_free(destination.parent) < PILOT_PREFLIGHT_FREE_BYTES:
         raise DevelopmentPilotStopped("disk_preflight_below_15_gib")
     selected_nonce = nonce or secrets.token_hex(32)
@@ -319,12 +431,20 @@ def prepare_development_pilot_execution(
         raise ContractError("development pilot nonce must be 32-byte lowercase hex")
     prepared_ms = int(wall_clock() * 1000)
     record = DevelopmentPilotExecutionRecord(
-        schema_version="cernora.reference.development-pilot-execution/v1",
+        schema_version="cernora.reference.development-pilot-execution/v2",
         execution_id=canonical_content_id(
-            {"nonce": selected_nonce, "plan_id": plan.plan_id}, excluded=frozenset()
+            {
+                "authorization_request_id": authorization_request.request_id,
+                "custody_path_sha256": custody_path_sha256,
+                "nonce": selected_nonce,
+                "plan_id": plan.plan_id,
+            },
+            excluded=frozenset(),
         ),
         plan_id=plan.plan_id,
         nonce=selected_nonce,
+        custody_path_sha256=custody_path_sha256,
+        authorization_request_id=authorization_request.request_id,
         prepared_unix_milliseconds=prepared_ms,
     )
     staging = Path(
@@ -336,8 +456,12 @@ def prepare_development_pilot_execution(
     published = False
     try:
         (staging / "artifacts").mkdir()
+        (staging / "diagnostics").mkdir()
         (staging / "ledger").mkdir()
         (staging / ".writer.lock").write_bytes(b"")
+        (staging / "authorization-request.json").write_bytes(
+            authorization_request.canonical_bytes()
+        )
         (staging / "plan.json").write_bytes(plan.canonical_bytes())
         (staging / "record.json").write_bytes(record.canonical_bytes())
         prepared = _entry(
@@ -369,9 +493,21 @@ def _load_json_model(path: Path, model: type[StrictV2Contract]) -> StrictV2Contr
     if not isinstance(payload, dict):
         raise ContractError("development pilot custody JSON must be one object")
     value = model.model_validate(payload)
-    if raw != canonical_json_bytes(value.model_dump(mode="json")):
+    canonical = getattr(value, "canonical_bytes", None)
+    expected = (
+        canonical() if callable(canonical) else canonical_json_bytes(value.model_dump(mode="json"))
+    )
+    if raw != expected:
         raise ContractError("development pilot custody JSON is not canonical")
     return value
+
+
+def _load_authorization_request(path: Path) -> DevelopmentPilotAuthorizationRequest:
+    raw = read_regular_file_bytes(path)
+    request = DevelopmentPilotAuthorizationRequest.model_validate(load_json_bytes(raw))
+    if raw != request.canonical_bytes():
+        raise ContractError("development pilot authorization request is not canonical")
+    return request
 
 
 def _derive_outcome(
@@ -439,7 +575,16 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
     """Strictly replay custody, artifacts, and the claim/publication ledger offline."""
 
     entries = {item.name: item for item in root.iterdir()}
-    allowed = {".writer.lock", "artifacts", "ledger", "plan.json", "record.json", "outcome.json"}
+    allowed = {
+        ".writer.lock",
+        "artifacts",
+        "diagnostics",
+        "ledger",
+        "authorization-request.json",
+        "plan.json",
+        "record.json",
+        "outcome.json",
+    }
     if (
         not {".writer.lock", "artifacts", "ledger", "plan.json", "record.json"}.issubset(entries)
         or set(entries) - allowed
@@ -453,11 +598,42 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
     ):
         raise ContractError("development pilot custody directories are ambiguous")
     plan = DevelopmentAgentPilotPlan.from_file(entries["plan.json"])
+    current = plan.schema_version.endswith("/v3")
+    if current and ({"diagnostics", "authorization-request.json"} - set(entries)):
+        raise ContractError("current development pilot custody omits current authorities")
+    if not current and "diagnostics" in entries:
+        raise ContractError("legacy development pilot custody cannot contain diagnostics")
+    if not current and "authorization-request.json" in entries:
+        raise ContractError("legacy development pilot custody cannot contain a current request")
+    if "diagnostics" in entries and (
+        not entries["diagnostics"].is_dir() or entries["diagnostics"].is_symlink()
+    ):
+        raise ContractError("development pilot diagnostics directory is ambiguous")
     record_value = _load_json_model(entries["record.json"], DevelopmentPilotExecutionRecord)
     assert isinstance(record_value, DevelopmentPilotExecutionRecord)
     record = record_value
     if record.plan_id != plan.plan_id:
         raise ContractError("development pilot record binds another Plan")
+    actual_custody_path_sha256 = _custody_path_sha256(root, must_exist=True)
+    if record.custody_path_sha256 is not None and (
+        record.custody_path_sha256 != actual_custody_path_sha256
+    ):
+        raise ContractError("development pilot record binds another custody path")
+    authorization_request = (
+        _load_authorization_request(entries["authorization-request.json"]) if current else None
+    )
+    if authorization_request is not None and (
+        authorization_request.schema_version
+        != "cernora.reference.development-pilot-authorization-request/v2"
+        or authorization_request.request_id != record.authorization_request_id
+        or authorization_request.plan_id != plan.plan_id
+        or authorization_request.case_authority_sha256
+        != tuple(item.authority_sha256 for item in plan.corpus.tasks)
+        or authorization_request.attempt_envelope_timeout_seconds
+        != plan.attempt_envelope_timeout_seconds
+        or authorization_request.custody_path_sha256 != actual_custody_path_sha256
+    ):
+        raise ContractError("development pilot authorization request contradicts custody")
     ledger_files = closed_regular_tree(entries["ledger"])
     expected_names = tuple(f"{index:06d}.json" for index in range(1, len(ledger_files) + 1))
     if tuple(ledger_files) != expected_names or not ledger_files:
@@ -473,6 +649,10 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
             or value.previous_entry_sha256 != expected_previous
             or value.plan_id != plan.plan_id
             or value.execution_id != record.execution_id
+            or (
+                previous is not None
+                and value.observed_unix_milliseconds < previous.observed_unix_milliseconds
+            )
         ):
             raise ContractError("development pilot ledger chain is invalid")
         ledger.append(value)
@@ -572,8 +752,32 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
         if not manifest.is_file() or manifest.is_symlink():
             raise ContractError("development pilot Attempt artifact omits a real manifest")
         actual_artifact_paths.add(path.relative_to(root).as_posix())
-    if actual_artifact_paths != expected_artifact_paths:
+    missing_artifacts = expected_artifact_paths - actual_artifact_paths
+    extra_artifacts = actual_artifact_paths - expected_artifact_paths
+    if missing_artifacts:
         raise ContractError("development pilot Attempt artifacts are orphaned or missing")
+    adoptable_artifact: tuple[str, VerifiedControlledAttemptArtifact] | None = None
+    if extra_artifacts:
+        expected_orphan = None
+        if pending_claim is not None:
+            assert pending_claim.slot_index is not None and pending_claim.ordinal is not None
+            expected_orphan = (
+                f"artifacts/{pending_claim.slot_index:04d}-{pending_claim.ordinal:02d}"
+            )
+        if extra_artifacts != ({expected_orphan} if expected_orphan is not None else set()):
+            raise ContractError("development pilot Attempt artifacts are orphaned or missing")
+        assert expected_orphan is not None and pending_claim is not None
+        orphan = verify_controlled_attempt_artifact(root / expected_orphan)
+        orphan_attempt = orphan.attempt
+        assert pending_claim.slot_index is not None
+        orphan_attempt.verify_authority(plan.experiment_specs[pending_claim.slot_index - 1])
+        if (
+            orphan_attempt.trial_id != pending_claim.trial_id
+            or orphan_attempt.ordinal != pending_claim.ordinal
+            or orphan_attempt.predecessor_attempt_id != pending_claim.predecessor_attempt_id
+        ):
+            raise ContractError("development pilot orphan artifact contradicts active claim")
+        adoptable_artifact = (expected_orphan, orphan)
     attempts_tuple = tuple(tuple(items) for items in attempts_by_slot)
     expected_outcome = None
     outcome_path = entries.get("outcome.json")
@@ -592,14 +796,36 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
             raise ContractError("development pilot completion omits its exact outcome")
     elif outcome_path is not None and not all_closed:
         raise ContractError("development pilot outcome appeared before all Trials closed")
+    incidents: list[DevelopmentPilotIncidentReceipt] = []
+    if "diagnostics" in entries:
+        claim_ids = {item.entry_id for item in ledger if item.event == "attempt-claimed"}
+        for name, path in closed_regular_tree(entries["diagnostics"]).items():
+            value = _load_json_model(path, DevelopmentPilotIncidentReceipt)
+            assert isinstance(value, DevelopmentPilotIncidentReceipt)
+            if (
+                name != f"{value.claim_entry_id}.json"
+                or value.claim_entry_id not in claim_ids
+                or value.execution_id != record.execution_id
+                or value.plan_id != plan.plan_id
+                or pending_claim is None
+                or value.claim_entry_id != pending_claim.entry_id
+                or value.observed_unix_milliseconds < pending_claim.observed_unix_milliseconds
+            ):
+                raise ContractError("development pilot incident contradicts custody")
+            incidents.append(value)
+    if incidents and adoptable_artifact is not None:
+        raise ContractError("development pilot incident contradicts an adoptable artifact")
     return DevelopmentPilotExecutionState(
         plan=plan,
+        authorization_request=authorization_request,
         record=record,
         entries=tuple(ledger),
         attempts_by_slot=attempts_tuple,
         artifacts=tuple(artifacts),
         started_unix_milliseconds=started_ms,
         ambiguous_claim=pending_claim,
+        adoptable_artifact=adoptable_artifact,
+        incidents=tuple(incidents),
         outcome=expected_outcome if completed else None,
     )
 
@@ -658,6 +884,7 @@ def step_development_pilot_execution(
     executor: ControlledAttemptExecutor,
     *,
     accepted_plan_id: str,
+    accepted_request_id: str,
     wall_clock: WallClock = time.time,
     clock: Clock = time.monotonic,
     sleeper: Sleeper = time.sleep,
@@ -667,11 +894,43 @@ def step_development_pilot_execution(
 
     with _writer_lock(root):
         state = inspect_development_pilot_execution(root)
-        if state.plan.implementation_candidates is None:
-            raise ContractError("development pilot step requires implementation-bound Plan v2")
+        if state.plan.schema_version != "cernora.reference.development-agent-pilot-plan/v3":
+            raise ContractError("development pilot step requires current Plan v3")
         if accepted_plan_id != state.plan.plan_id:
             raise ContractError("development pilot acceptance does not equal the exact Plan ID")
-        if state.ambiguous_claim is not None:
+        if accepted_request_id != state.record.authorization_request_id:
+            raise ContractError("development pilot acceptance does not equal the exact request ID")
+        if state.adoptable_artifact is not None:
+            claim = state.ambiguous_claim
+            assert claim is not None and state.started_unix_milliseconds is not None
+            artifact_path, artifact = state.adoptable_artifact
+            adopted_ms = max(claim.observed_unix_milliseconds, int(wall_clock() * 1000))
+            adopted = _entry(
+                record=state.record,
+                previous=state.entries[-1],
+                event="attempt-published",
+                observed_unix_milliseconds=adopted_ms,
+                elapsed_milliseconds=adopted_ms - state.started_unix_milliseconds,
+                slot_index=claim.slot_index,
+                trial_id=claim.trial_id,
+                ordinal=claim.ordinal,
+                predecessor_attempt_id=claim.predecessor_attempt_id,
+                attempt_id=artifact.attempt.attempt_id,
+                attempt_artifact_id=artifact.manifest.artifact_id,
+                attempt_artifact_path=artifact_path,
+            )
+            _append_entry(root, adopted)
+            state = inspect_development_pilot_execution(root)
+            outcome = _finish_if_complete(root, state, observed_ms=adopted_ms)
+            return DevelopmentPilotStepResult(
+                execution_id=state.record.execution_id,
+                plan_id=state.plan.plan_id,
+                status="completed" if outcome is not None else "running",
+                completed_trial_count=state.completed_trial_count,
+                attempt_count=state.attempt_count,
+                outcome_id=None if outcome is None else outcome.outcome_id,
+            )
+        elif state.ambiguous_claim is not None:
             raise AmbiguousDevelopmentPilotAttempt(
                 "development pilot has an active claim without a terminal publication"
             )
@@ -699,6 +958,8 @@ def step_development_pilot_execution(
         elapsed_ms = now_ms - state.started_unix_milliseconds
         if elapsed_ms < 0:
             raise DevelopmentPilotStopped("wall_clock_moved_backward")
+        now_ms = max(now_ms, state.entries[-1].observed_unix_milliseconds)
+        elapsed_ms = now_ms - state.started_unix_milliseconds
         if elapsed_ms >= PILOT_MAX_WALL_SECONDS * 1000:
             raise DevelopmentPilotStopped("hard_wall_deadline_elapsed")
         if disk_free(root) < PILOT_SAFE_STOP_FREE_BYTES:
@@ -736,6 +997,9 @@ def step_development_pilot_execution(
             if remaining_delay > 0:
                 sleeper(remaining_delay / 1000)
                 now_ms = int(wall_clock() * 1000)
+                if now_ms < state.started_unix_milliseconds:
+                    raise DevelopmentPilotStopped("wall_clock_moved_backward")
+                now_ms = max(now_ms, state.entries[-1].observed_unix_milliseconds)
                 if now_ms - state.started_unix_milliseconds >= PILOT_MAX_WALL_SECONDS * 1000:
                     raise DevelopmentPilotStopped("retry_delay_reached_hard_wall_deadline")
         trial_id = canonical_content_id(
@@ -768,23 +1032,66 @@ def step_development_pilot_execution(
             predecessor_attempt_id=predecessor,
             global_deadline_monotonic=deadline,
         )
-        attempt = executor(request)
-        if clock() > deadline:
-            raise DevelopmentPilotStopped("attempt_returned_after_hard_deadline")
-        if (
-            attempt.trial_id != trial_id
-            or attempt.ordinal != ordinal
-            or attempt.predecessor_attempt_id != predecessor
-        ):
-            raise ContractError("development pilot executor returned another Attempt request")
-        attempt.verify_authority(spec)
+        try:
+            attempt = executor(request)
+        except BaseException as error:
+            _publish_incident(
+                root,
+                record=state.record,
+                claim=claim,
+                error=error,
+                phase="executor",
+                observed_unix_milliseconds=max(
+                    claim.observed_unix_milliseconds,
+                    int(wall_clock() * 1000),
+                ),
+            )
+            raise
+        try:
+            if clock() > deadline:
+                raise DevelopmentPilotStopped("attempt_returned_after_hard_deadline")
+            if (
+                attempt.trial_id != trial_id
+                or attempt.ordinal != ordinal
+                or attempt.predecessor_attempt_id != predecessor
+            ):
+                raise ContractError("development pilot executor returned another Attempt request")
+            attempt.verify_authority(spec)
+        except BaseException as error:
+            _publish_incident(
+                root,
+                record=state.record,
+                claim=claim,
+                error=error,
+                phase="attempt-validation",
+                observed_unix_milliseconds=max(
+                    claim.observed_unix_milliseconds,
+                    int(wall_clock() * 1000),
+                ),
+            )
+            raise
         artifact_path = f"artifacts/{slot_index:04d}-{ordinal:02d}"
-        artifact = publish_controlled_attempt_artifact(
-            root / artifact_path,
-            attempt=attempt,
-            specification=spec,
-        )
-        published_ms = int(wall_clock() * 1000)
+        try:
+            artifact = publish_controlled_attempt_artifact(
+                root / artifact_path,
+                attempt=attempt,
+                specification=spec,
+            )
+        except BaseException as error:
+            if not (root / artifact_path).exists():
+                _publish_incident(
+                    root,
+                    record=state.record,
+                    claim=claim,
+                    error=error,
+                    phase="artifact-publication",
+                    observed_unix_milliseconds=max(
+                        claim.observed_unix_milliseconds,
+                        int(wall_clock() * 1000),
+                    ),
+                )
+            raise
+        published_ms = max(claim.observed_unix_milliseconds, int(wall_clock() * 1000))
         published = _entry(
             record=state.record,
             previous=claim,
@@ -825,6 +1132,7 @@ __all__ = [
     "AmbiguousDevelopmentPilotAttempt",
     "DevelopmentPilotExecutionRecord",
     "DevelopmentPilotExecutionState",
+    "DevelopmentPilotIncidentReceipt",
     "DevelopmentPilotLedgerEntry",
     "DevelopmentPilotOutcome",
     "DevelopmentPilotStepResult",

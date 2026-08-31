@@ -624,6 +624,76 @@ class ResultDriftProcess(FakeProcess):
         return process
 
 
+def test_runner_interrupt_rediscovers_trial_before_container_cleanup(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+
+    class InterruptAfterTrial(FakeProcess):
+        def __call__(self, *args: object, **kwargs: object) -> SubprocessResult:
+            super().__call__(*args, **kwargs)  # type: ignore[arg-type]
+            raise KeyboardInterrupt
+
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    evaluation = tmp_path / "evaluations"
+    evaluation.mkdir()
+    containers = FakeContainers()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository,
+        tasks=(task,),
+        evaluation_root=evaluation,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=InterruptAfterTrial(task, spec),
+        container_controller=containers,
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        executor(_request(spec, trial="interrupt-cleanup"))
+
+    assert len(containers.cleaned) == 1
+    assert containers.cleaned[0][1] == "trial-1"
+
+
+def test_ambiguous_trial_hint_still_attempts_cleanup_for_each_trial(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+
+    def ambiguous_runner(
+        command: tuple[str, ...],
+        **_kwargs: object,
+    ) -> SubprocessResult:
+        job_root = Path(command[command.index("-o") + 1])
+        job_name = command[command.index("--job-name") + 1]
+        (job_root / job_name / "trial-a").mkdir(parents=True)
+        (job_root / job_name / "trial-b").mkdir()
+        raise KeyboardInterrupt
+
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    evaluation = tmp_path / "evaluations"
+    evaluation.mkdir()
+    containers = FakeContainers()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository,
+        tasks=(task,),
+        evaluation_root=evaluation,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=ambiguous_runner,
+        container_controller=containers,
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    with pytest.raises(LiveAttemptError, match="more than one Trial"):
+        executor(_request(spec, trial="ambiguous-cleanup"))
+
+    assert {trial_name for _, trial_name in containers.cleaned} == {"trial-a", "trial-b"}
+
+
 class TransientResultProcess(FakeProcess):
     def __call__(
         self,
@@ -925,6 +995,7 @@ def test_unverified_start_failure_does_not_receive_retry(
     spec = _spec(task)
     evaluation_root = tmp_path / "evaluations"
     evaluation_root.mkdir()
+    observed_timeouts: list[int] = []
 
     def start_failure(
         command: tuple[str, ...],
@@ -936,12 +1007,12 @@ def test_unverified_start_failure_does_not_receive_retry(
         disk_free: object = None,
         safe_stop_free_bytes: int | None = None,
     ) -> SubprocessResult:
+        observed_timeouts.append(timeout_seconds)
         del (
             command,
             cwd,
             environment,
             deadline_monotonic,
-            timeout_seconds,
             disk_free,
             safe_stop_free_bytes,
         )
@@ -967,12 +1038,14 @@ def test_unverified_start_failure_does_not_receive_retry(
         container_controller=FakeContainers(),
         cli_validator=lambda _: None,
         image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+        attempt_envelope_grace_seconds=60,
     )
 
     attempt = executor(_request(spec, trial="eligible-retry"))
 
     assert attempt.retry_eligible is False
     assert attempt.lifecycle is not None
+    assert observed_timeouts == [360]
     assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
 
 
@@ -1400,6 +1473,36 @@ def test_auth_hardlink_is_rejected_even_when_external_name_is_outside_repo(
         live_attempt_module._stable_auth_markers(external, repository)
 
 
+def test_executor_private_scan_uses_only_selected_proxy_endpoints(tmp_path: Path) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    evaluation = tmp_path / "evaluation"
+    evaluation.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository,
+        tasks=(task,),
+        evaluation_root=evaluation,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment={
+            "http_proxy": "http://127.0.0.1:7890",
+            "https_proxy": "http://127.0.0.1:7890",
+            "all_proxy": "socks5://127.0.0.1:7890",
+            "NO_COLOR": "1",
+            "SHLVL": "2",
+            "TERM": "dumb",
+        },
+        cli_validator=lambda _: None,
+        attempt_envelope_grace_seconds=60,
+    )
+
+    assert executor._explicit_proxy_endpoints == (
+        "http://127.0.0.1:7890",
+        "socks5://127.0.0.1:7890",
+    )
+    assert executor._attempt_envelope_grace_seconds == 60
+
+
 @pytest.mark.parametrize("location", ("stdout", "stderr", "artifact"))
 def test_private_proxy_endpoint_detection_is_fail_closed_and_value_free(
     tmp_path: Path,
@@ -1441,6 +1544,30 @@ def test_private_proxy_endpoint_detection_is_fail_closed_and_value_free(
 
     assert "18080" not in str(raised.value)
     assert "11080" not in str(raised.value)
+
+
+def test_nonsecret_no_proxy_value_does_not_trigger_private_scan(tmp_path: Path) -> None:
+    root = tmp_path / "job"
+    root.mkdir()
+    (root / "result.json").write_text('{"bypass":"localhost,127.0.0.1"}', encoding="utf-8")
+    process = SubprocessResult(
+        status="exited",
+        exit_code=0,
+        stdout=b"localhost,127.0.0.1",
+        stderr=b"",
+        started_monotonic=0.0,
+        finished_monotonic=1.0,
+        receipt_sha256=digest("nonsecret-no-proxy"),
+    )
+
+    live_attempt_module._assert_private_values_absent(
+        root,
+        auth_path=_auth_file(tmp_path),
+        markers=(),
+        proxy_environment={"NO_PROXY": "localhost,127.0.0.1"},
+        explicit_proxy_endpoints=(),
+        process=process,
+    )
 
 
 @pytest.mark.parametrize("path_kind", ("symlink", "canonicalized"))

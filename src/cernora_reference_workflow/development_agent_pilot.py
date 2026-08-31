@@ -52,6 +52,7 @@ PILOT_BASELINE_PROMPT_TEXT = (
     "Repair the task from its declared behavior and the available workspace evidence."
 )
 PILOT_TIMEOUT_SECONDS = 300
+PILOT_ATTEMPT_ENVELOPE_SECONDS = 360
 PILOT_SETUP_TIMEOUT_SECONDS = 1440
 PILOT_MAX_ATTEMPTS = 12
 PILOT_MAX_WALL_SECONDS = 7200
@@ -229,6 +230,7 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
     schema_version: Literal[
         "cernora.reference.development-agent-pilot-plan/v1",
         "cernora.reference.development-agent-pilot-plan/v2",
+        "cernora.reference.development-agent-pilot-plan/v3",
     ]
     plan_id: Digest
     selected_study_mode: Literal["confirmatory-effect"]
@@ -246,6 +248,7 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
     repetitions: Literal[1]
     planned_trial_count: Literal[6]
     worst_case_attempt_count: Literal[12]
+    attempt_envelope_timeout_seconds: Literal[360] | None = None
     execution: RunExecutionPolicy
     preflight_free_bytes: Literal[16106127360]
     safe_stop_free_bytes: Literal[8589934592]
@@ -290,6 +293,11 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
             item.name for item in self.implementation_candidates
         ) != ("cernora", "cernora-reference-workflow"):
             raise ValueError("development pilot implementation authority is incomplete")
+        if self.schema_version == "cernora.reference.development-agent-pilot-plan/v3":
+            if self.attempt_envelope_timeout_seconds != PILOT_ATTEMPT_ENVELOPE_SECONDS:
+                raise ValueError("development pilot Attempt envelope authority drifted")
+        elif self.attempt_envelope_timeout_seconds is not None:
+            raise ValueError("legacy development pilot Plan cannot bind an Attempt envelope")
         if spec_ids != case_ids or self.prohibited_actions != expected_prohibitions:
             raise ValueError("development pilot matrix or prohibitions are not exact")
         if self.baseline_prompt.source_id != "p4-confirmatory-baseline-prompt-v1":
@@ -319,6 +327,8 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
         identity = self.model_dump(mode="json")
         if self.implementation_candidates is None:
             identity.pop("implementation_candidates")
+        if self.attempt_envelope_timeout_seconds is None:
+            identity.pop("attempt_envelope_timeout_seconds")
         expected = canonical_content_id(identity, excluded=frozenset({"plan_id"}))
         if self.plan_id != expected:
             raise ValueError("development Agent pilot Plan identity mismatch")
@@ -342,6 +352,8 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
         payload = self.model_dump(mode="json")
         if self.implementation_candidates is None:
             payload.pop("implementation_candidates")
+        if self.attempt_envelope_timeout_seconds is None:
+            payload.pop("attempt_envelope_timeout_seconds")
         return canonical_json_bytes(payload)
 
     def expand_trial_slots(self) -> tuple[ControlledTrialSlotV2, ...]:
@@ -491,7 +503,7 @@ def build_development_agent_pilot_plan(
         pass_k=None,
     )
     payload: dict[str, object] = {
-        "schema_version": "cernora.reference.development-agent-pilot-plan/v2",
+        "schema_version": "cernora.reference.development-agent-pilot-plan/v3",
         "selected_study_mode": "confirmatory-effect",
         "authority_scope": "development-only-agent-pilot",
         "execution_authorized": False,
@@ -511,6 +523,7 @@ def build_development_agent_pilot_plan(
         "repetitions": 1,
         "planned_trial_count": 6,
         "worst_case_attempt_count": 12,
+        "attempt_envelope_timeout_seconds": PILOT_ATTEMPT_ENVELOPE_SECONDS,
         "execution": {
             "concurrency": 1,
             "max_attempt_count": PILOT_MAX_ATTEMPTS,
@@ -547,6 +560,7 @@ def build_development_agent_pilot_plan(
 
 
 __all__ = [
+    "PILOT_ATTEMPT_ENVELOPE_SECONDS",
     "PILOT_BASELINE_PROMPT_TEXT",
     "PILOT_CASE_IDS",
     "PILOT_MAX_ATTEMPTS",

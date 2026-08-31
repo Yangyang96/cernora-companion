@@ -163,9 +163,10 @@ ID `0ae0c5a7f65a0444decdb32d25ac99a1851f710dd87c08cf3e2898a058cea1ad`.
 Its six fresh visible Cases are three `development` and three `regression` Cases; it contains no
 held-out material. After authorization, custody execution
 `46004fc1f812cbef2edfc5534a5a6e133a35ef85b05c9c4e5420722c5b8cd2a8` recorded
-`execution-started` and one `attempt-claimed` event but no terminal Attempt artifact. The Runtime
-and attributable container disappeared. This custody is permanently ambiguous: it cannot be
-retried, resumed, or used as Agent evidence.
+`execution-started` and one `attempt-claimed` event but no terminal Attempt artifact. Its outer
+command returned exit code 1 after 304.913924 seconds; the observer-handle loss did not establish
+host-process disappearance. The claim remains permanently ambiguous and cannot be retried,
+resumed, or used as Agent evidence.
 
 This historical boundary permits no further action. It authorizes neither a retry nor held-out
 access or reveal, smoke execution, `start-execution`, `step-execution`, or any Trial in the future
@@ -183,22 +184,43 @@ ID `df60c04812b9e1755848fe0c61face5d45bfa1294dd3b874023e1caa12f585fd`. Plan v2 b
 Core and Companion wheel candidates. The new custody execution
 `c655a8db6dc3fa5014049f5fcafd57d3db0f7f4546e077234fc649925e67be96` was exactly authorized for
 the complete development-only pilot. It recorded `execution-started` and one `attempt-claimed`
-event for ordinal 1, slot 1, but the host control process disappeared before publishing a terminal
-Attempt artifact. The already-started container Agent exec ended, and the attributable container
-and temporary Runtime tree disappeared without a verifiable terminal artifact. Offline custody
-replay reports `status=running`, zero published Attempts, zero completed Trials, and no outcome.
+event for ordinal 1, slot 1. The outer command returned exit code 1 after 302.364721 seconds.
+Offline reproduction identified a deterministic false-positive private-value scan: the CLI passed
+the full ambient environment, and the executor treated every value as a proxy endpoint, so normal
+output containing values such as `1` failed before terminal lifecycle publication. The equal
+300-second Agent and outer Attempt timeout was a second boundary defect. Offline custody replay
+reports `status=running`, zero published Attempts, zero completed Trials, and no outcome.
 
 The recovery pilot therefore stops as `inconclusive`. Its outstanding claim is permanently
 ambiguous and cannot be retried, resumed, converted into lifecycle evidence, or used as an Agent
 observation. No later Trial was started. The authorization covered no held-out access or reveal,
 smoke execution, or Trial in the future 54-Trial matrix.
 
-Independent read-only Standards and Spec review tasks examined the implementation from `d3109df`
-through `072ce59`. Two strict-tree findings were fixed and adversarially re-reviewed; both axes
-report no unresolved P0-P3. The exact post-fix implementation passed 533 offline tests, Ruff,
-format checking, strict Mypy, reproducible wheel/sdist builds, and repository/archive secret scans.
-This review satisfies only the development-pilot authorization boundary; it is not Candidate,
-held-out, reveal, smoke, or live-study review.
+Independent read-only and adversarial reviews examined the implementation from `d3109df` through
+the final working-tree snapshot. Strict-tree, orphan-artifact, process cleanup, duplicate-custody,
+self-consistent rewrite, and contradictory-request findings were fixed and re-reviewed; no
+unresolved P0-P3 remains. The exact post-fix implementation passed 572 offline tests, Ruff, format
+checking, strict Mypy, byte-identical dual wheel builds, reproducible wheel/sdist builds, license
+inventory, and repository/archive secret scans. This review satisfies only the development-pilot
+authorization boundary; it is not Candidate, held-out, reveal, smoke, or live-study review.
+
+### Repaired development-only pilot boundary
+
+The repaired bundle is
+[`preparations/next-priority4-development-pilot-repair`](../preparations/next-priority4-development-pilot-repair),
+with bundle ID `197d4bf9cf25b902a0706d978f242c5d5f325e9659ff5934ad1fbcd9abcd77d4`,
+Plan ID `33544aa6d8ec292daf8b69390c4731ee67ee70184f2e7cd788c3baeeb4824099`, and
+authorization-request ID `d34dfab521aeadb749d06f8d37b3df27a6eca4d0977374f88e27f39d65ed1c26`.
+Its prepared execution is `bb5e9c7b87650a788c0eca899329110fd25c2ef6421ec4865c894cb5e9945ebf`;
+the request binds physical custody path digest
+`7ee5eb85c6c136af2169805efdb5166a1d07816d2336da54d90078c0446430fb`.
+Plan v3 freezes a 300-second Agent timeout inside a 360-second Attempt envelope, scans only the
+selected proxy endpoints, cleans the process group on operator signals, records value-free
+incidents, and can ledger-adopt only the exact artifact for an active claim without rerunning it.
+Custody stores the canonical request and replays its Plan, ordered Case authorities, envelope,
+request ID, and physical path before any claim.
+The custody contains zero Attempts and zero completed Trials. It awaits explicit authorization;
+no provider call, smoke, held-out reveal, or 54-Trial work has started.
 
 ## 6. Offline freeze sequence
 
