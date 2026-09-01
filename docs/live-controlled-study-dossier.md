@@ -325,6 +325,24 @@ recorded here. Before any follow-up proposal, the timeout and wall budget must b
 600-second Attempts at the 108-Attempt bound exceed the frozen 43,200-second study budget
 arithmetic.
 
+### Provider transport root cause and repair (2026-09-02)
+
+An out-of-band probe retained the complete Harbor trial tree for the same Case at 300 seconds.
+The trial closed with `AgentTimeoutError`, a zero reward, and an unmodified candidate; the Agent
+rollout contains only system prompt events, and the Codex log records five failed reconnects, a
+WebSocket-to-HTTPS fallback that also failed, and two failed model-list refreshes: zero model
+responses in 300 seconds. Layer isolation proved the operator host and the agent container can
+both reach the provider through the selected proxy when its variables are set, while the
+preinstalled Codex stalls without them. Harbor 0.16.1 forwards the host process environment only
+to the docker-compose CLI for template interpolation and never places the projected proxy
+variables into the agent container, so every frozen Attempt stalled on a direct connection.
+
+The repair overrides `TelemetryDisabledCodex.exec_as_agent` to merge the projected operator proxy
+variables from the host process environment into every agent-side container exec; caller-provided
+variables win and no endpoint value is recorded in any artifact. Focused tests, Ruff, and strict
+mypy pass. Live confirmation requires new wheel bytes and fresh exact Plan/request authorization;
+no Candidate, held-out, smoke, or Study action is authorized by this repair.
+
 ## 6. Offline freeze sequence
 
 This sequence performs no live Attempt:

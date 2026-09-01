@@ -1,8 +1,8 @@
 # Priority 4 Runtime Pre-terminal Diagnosis
 
-Status: **underlying Agent timeout confirmed at 300 s and again at 600 s; timeout-classification
-repair live-confirmed; one 300-second proxy run completed provider-side but failed controlled
-serialization before publication**
+Status: **root cause located and repaired offline — the operator proxy environment never reached
+the agent container, so every frozen Attempt stalled on a direct connection; live confirmation
+requires fresh authorization**
 
 This record begins with the offline diagnosis of six `runtime_pre_terminal_failure` Attempts from
 repaired development pilot Plan
@@ -305,3 +305,31 @@ source tree; the runs are recorded from their custody artifacts. No proxy endpoi
 Runtime home is recorded here. Any follow-up requires new wheel bytes and fresh exact Plan/request
 authorization, and the timeout/budget freeze must be re-derived first: 600-second Attempts at the
 108-Attempt bound exceed the frozen 43,200-second study budget.
+
+## Root cause: operator proxy never reaches the agent container
+
+An out-of-band probe retained the complete Harbor trial tree for the same Case at 300 seconds.
+The trial closed with `AgentTimeoutError`, a zero reward, and a complete but unmodified
+candidate; the agent rollout contains only system prompt events and the Codex log records five
+failed reconnects, a WebSocket-to-HTTPS fallback that also failed, and two failed model-list
+refreshes. The Agent therefore received zero model responses in 300 seconds.
+
+Layer isolation proved where the chain breaks:
+
+- the operator host reaches the provider through the selected proxy (HTTP 401 expected);
+- the agent container reaches the selected proxy (TCP open) and reaches the provider through it
+  when the proxy variables are set explicitly (HTTP 401 expected);
+- the preinstalled Codex inside the container completes an exchange immediately when the proxy
+  variables are set in its environment, and stalls without them.
+
+Harbor 0.16.1 forwards the host process environment only to the docker-compose CLI for template
+interpolation; it never places the projected proxy variables into the agent container, and its
+Codex integration passes only the Codex home and auth variables to the agent exec. The runtime
+policy requires the operator proxy, so every frozen Attempt stalled on a direct connection and
+closed as an Agent timeout regardless of the frozen limit.
+
+The repair overrides `TelemetryDisabledCodex.exec_as_agent` to merge the projected operator proxy
+variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) from the host process environment
+into every agent-side container exec. Caller-provided variables win, and no endpoint value is
+recorded in any artifact. Focused tests, Ruff, and strict mypy pass; live confirmation requires
+new wheel bytes and fresh exact Plan/request authorization.
