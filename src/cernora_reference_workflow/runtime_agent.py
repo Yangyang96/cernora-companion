@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import shlex
-from typing import ClassVar, override
+from typing import Any, ClassVar, override
 
 from harbor.agents.installed.base import CliFlag
 from harbor.agents.installed.codex import Codex
@@ -20,6 +21,20 @@ from cernora_reference_workflow.runtime_policy import (
     RUNTIME_POLICY,
     TELEMETRY_CONFIG_TOML,
 )
+
+_PROVIDER_PROXY_ENV_NAMES = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+
+
+def _projected_provider_proxy_environment() -> dict[str, str]:
+    """Return the operator proxy variables projected into the host process env.
+
+    The controlled executor already maps the operator proxy endpoints into
+    exactly these names before spawning Harbor. Values are read only at run
+    time; no proxy endpoint is ever written into this module, the Runtime
+    policy, or any tracked artifact.
+    """
+
+    return {name: value for name in _PROVIDER_PROXY_ENV_NAMES if (value := os.environ.get(name))}
 
 
 class _PrivateAuthLogFilter(logging.Filter):
@@ -52,6 +67,30 @@ class TelemetryDisabledCodex(Codex):  # type: ignore[misc]
         await self.exec_as_agent(
             environment,
             command=PREINSTALLED_CODEX_CHECK_COMMAND,
+        )
+
+    @override
+    async def exec_as_agent(
+        self,
+        environment: BaseEnvironment,
+        command: str,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+        timeout_sec: int | None = None,
+    ) -> Any:
+        """Execute as the agent user with operator proxy variables injected.
+
+        Harbor forwards the host process environment only to the docker-compose
+        CLI for template interpolation; it never reaches the agent container.
+        Without explicit projection the preinstalled Codex CLI connects
+        directly and stalls, so the projected proxy variables are merged here.
+        Caller-provided variables always win.
+        """
+
+        merged = _projected_provider_proxy_environment()
+        merged.update(env or {})
+        return await super().exec_as_agent(
+            environment, command, env=merged, cwd=cwd, timeout_sec=timeout_sec
         )
 
     @override

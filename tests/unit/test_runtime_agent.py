@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
+from pathlib import Path
+from typing import cast
 
 import pytest
+from harbor.environments.base import BaseEnvironment, ExecResult
 
 import cernora_reference_workflow.runtime_agent as runtime_agent_module
 from cernora_reference_workflow.common import ContractError, canonical_json_bytes, sha256_bytes
@@ -155,3 +159,63 @@ def test_provider_proxy_rejects_unsafe_or_ambiguous_urls(value: str) -> None:
                 "CERNORA_ALL_PROXY": value,
             }
         )
+
+
+def test_provider_proxy_projection_reads_only_projected_operator_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:18080")
+    monkeypatch.setenv("ALL_PROXY", "socks5://proxy.example:11080")
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+    monkeypatch.setenv("UNRELATED", "value")
+    projected = runtime_agent_module._projected_provider_proxy_environment()
+    assert projected == {
+        "HTTP_PROXY": "http://proxy.example:18080",
+        "ALL_PROXY": "socks5://proxy.example:11080",
+        "NO_PROXY": "localhost,127.0.0.1",
+    }
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    assert runtime_agent_module._projected_provider_proxy_environment() == {}
+
+
+class _RecordingEnvironment:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    async def exec(
+        self,
+        command: str,
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: int | None = None,
+        user: str | int | None = None,
+    ) -> ExecResult:
+        self.calls.append((command, dict(env or {})))
+        return ExecResult(return_code=0, stdout="", stderr="")
+
+
+def test_exec_as_agent_injects_projected_proxy_into_container_exec(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:18080")
+    monkeypatch.setenv("ALL_PROXY", "socks5://proxy.example:11080")
+    recording = _RecordingEnvironment()
+    agent = TelemetryDisabledCodex(logs_dir=tmp_path)
+    asyncio.run(
+        agent.exec_as_agent(
+            cast(BaseEnvironment, recording),
+            "codex exec true",
+            env={"CODEX_HOME": "/workspace/.codex"},
+        )
+    )
+    assert len(recording.calls) == 1
+    command, env = recording.calls[0]
+    assert command == "set -o pipefail; codex exec true"
+    assert env["CODEX_HOME"] == "/workspace/.codex"
+    assert env["HTTP_PROXY"] == "http://proxy.example:18080"
+    assert env["ALL_PROXY"] == "socks5://proxy.example:11080"
+    assert "HTTPS_PROXY" not in env
+    assert "NO_PROXY" not in env
