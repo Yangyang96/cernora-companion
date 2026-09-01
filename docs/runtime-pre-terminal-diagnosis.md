@@ -310,9 +310,9 @@ authorization, and the timeout/budget freeze must be re-derived first: 600-secon
 
 An out-of-band probe retained the complete Harbor trial tree for the same Case at 300 seconds.
 The trial closed with `AgentTimeoutError`, a zero reward, and a complete but unmodified
-candidate; the agent rollout contains only system prompt events and the Codex log records five
-failed reconnects, a WebSocket-to-HTTPS fallback that also failed, and two failed model-list
-refreshes. The Agent therefore received zero model responses in 300 seconds.
+candidate; the agent rollout contains only system prompt events and the Codex log records
+repeated reconnects up to 5/5, a WebSocket-to-HTTPS fallback that also failed, and two failed
+model-list refreshes. The Agent therefore received zero model responses in 300 seconds.
 
 Layer isolation proved where the chain breaks:
 

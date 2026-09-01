@@ -329,10 +329,10 @@ arithmetic.
 
 An out-of-band probe retained the complete Harbor trial tree for the same Case at 300 seconds.
 The trial closed with `AgentTimeoutError`, a zero reward, and an unmodified candidate; the Agent
-rollout contains only system prompt events, and the Codex log records five failed reconnects, a
-WebSocket-to-HTTPS fallback that also failed, and two failed model-list refreshes: zero model
-responses in 300 seconds. Layer isolation proved the operator host and the agent container can
-both reach the provider through the selected proxy when its variables are set, while the
+rollout contains only system prompt events, and the Codex log records repeated reconnects up to
+5/5, a WebSocket-to-HTTPS fallback that also failed, and two failed model-list refreshes: zero
+model responses in 300 seconds. Layer isolation proved the operator host and the agent container
+can both reach the provider through the selected proxy when its variables are set, while the
 preinstalled Codex stalls without them. Harbor 0.16.1 forwards the host process environment only
 to the docker-compose CLI for template interpolation and never places the projected proxy
 variables into the agent container, so every frozen Attempt stalled on a direct connection.
