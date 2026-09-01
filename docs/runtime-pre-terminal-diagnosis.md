@@ -1,8 +1,8 @@
 # Priority 4 Runtime Pre-terminal Diagnosis
 
-Status: **root cause located and repaired offline — the operator proxy environment never reached
-the agent container, so every frozen Attempt stalled on a direct connection; live confirmation
-requires fresh authorization**
+Status: **root cause located and repaired — the operator proxy environment never reached the
+agent container; the repaired chain produced the first live Agent behavioral failure in an
+out-of-band probe; the fresh one-shot confirmation awaits exact user authorization**
 
 This record begins with the offline diagnosis of six `runtime_pre_terminal_failure` Attempts from
 repaired development pilot Plan
@@ -333,3 +333,20 @@ variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) from the host p
 into every agent-side container exec. Caller-provided variables win, and no endpoint value is
 recorded in any artifact. Focused tests, Ruff, and strict mypy pass; live confirmation requires
 new wheel bytes and fresh exact Plan/request authorization.
+
+## Live end-to-end validation of the repair (out-of-band probe)
+
+After the repair, the same out-of-band probe ran the same Case at 300 seconds. The trial closed
+with no exception: the Agent completed within the frozen limit and produced a real evaluated
+result with verifier reward `0.0` — a behavioral failure. The retained trajectory shows the Agent
+inspecting the task, running its own decode-token checks, and rewriting the module with the
+correct RFC 6901 escape order, while the frozen verifier rejects the result because the
+`~2`-style invalid-escape validation was not added. This is the first live Agent behavioral
+failure and the first live evaluated result on this chain; it remains engineering-only evidence
+because the probe stands outside every Candidate, pilot, smoke, held-out, and Study boundary.
+
+The fresh closed confirmation proposal binds Companion wheel
+`b2dad2dea3de9227fb7b16a5bf6109c9f03a49e29f8258c3385a784e76f37d30`, Plan
+`675e6ec549a8610a2fca8400ffc33d10a457c75f4fcca7877e77732738827c67`, and request
+`8090fc26c8320108f82bea5e9cde188928199c18e2d5790989a9528a5aeb0c4c`. It awaits exact user
+authorization; its existence grants no execution authority.
