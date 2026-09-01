@@ -1,6 +1,7 @@
 # Next Priority 4 Study Decision Proposal
 
-Status: **`confirmatory-effect` selected; repaired development pilot awaiting authorization**
+Status: **`confirmatory-effect` selected; systemic runtime publication root cause repaired
+offline; live confirmation requires fresh authorization**
 
 This document records the next decision boundary after the offline preparation bundle. The user
 selected the recommended `confirmatory-effect` design on 2026-08-31. This file is not a
@@ -232,3 +233,92 @@ and custody secret scans, and an exact credential-value absence scan all passed.
 read-only review recomputed the ledger, artifact, request, Plan, execution, outcome, and physical
 path bindings and found no unresolved P0-P3. The reviewed custody-tree snapshot digest is
 `8caac73411d024dde246914b2654c7cddd7785044c89f982a95477702efe2ff9`.
+
+## Runtime pre-terminal root-cause diagnosis
+
+Offline analysis identified a classifier-order defect that can collapse a normal Harbor
+`AgentTimeoutError` into `runtime_pre_terminal_failure`: Harbor initializes `agent_result` before
+the Agent phase, while the companion previously treated any present Agent result as generic
+pre-terminal failure before examining the exception type. An exact closed-result replay went red
+on that behavior. The implementation now accepts `timed_out` only when the strict Harbor result
+contains `AgentTimeoutError`, a strictly typed Codex AgentContext (empty or populated from partial
+session metrics), complete ordered Agent/exception timing, and the enabled Verifier's exact reward
+result and ordered timing; contradictory timeout evidence fails closed.
+
+The six retained Attempts remain `inconclusive` because their safe published artifacts do not
+contain the raw exception discriminator. Their 316,149–319,974 millisecond durations make the
+timeout mechanism consistent with all six Cases but cannot retroactively establish it as their
+explanation.
+The evidence, qualification, fix, and proposed one-Case/one-Attempt confirmation boundary are
+recorded in
+[`runtime-pre-terminal-diagnosis.md`](runtime-pre-terminal-diagnosis.md).
+
+The exact one-shot diagnostic control plane is separate from the closed six-Case authority. The
+user authorized Plan `6a342640911cade0ed3bd381e3ff80e0327d5230817a72ef6bac5d46e8d8bd4a` and
+request `5b6bb9b88e8923cac40a5924597dbe5d9f9faa879731d307edfb8013034fba42`; its sole Attempt
+published complete non-retry terminal evidence but remained `runtime-pre-terminal-failure`, so
+the Agent-timeout hypothesis was not confirmed. That authority is consumed and cannot be retried.
+
+Three later one-shot discriminators successively proved and repaired the JobConfig gate, the
+TrialConfig gate, and the final post-timeout evidence defect. The latest consumed Attempt passed
+both configuration gates and recorded `agent-timeout-verifier-result`, thereby confirming the
+live `AgentTimeoutError` path. The classifier had incorrectly required the post-timeout Verifier
+to produce a reward before retaining that terminal timeout. The offline repair now accepts a
+missing Verifier result only as non-evaluated `timed_out` evidence when the independent exception,
+Agent timing, Verifier timing, message, traceback, and duration constraints all agree. No
+Candidate, smoke, held-out, or Study evidence results from this repair; one fresh development-only
+confirmation remains the next authorization boundary. Its closed proposal binds Companion wheel
+`ea0f48a6a0db3e539b7b2b55942c72d677aabc8f9984cf57068750958b4dee5e`, Plan
+`a31414dfcaef392ffe33a648f715aff9d2ce55812ee066064fcbe646759adcfe`, and request
+`e368f68cecceb854d2947149ab6c7ad4e230c45549d9aef00fa92b42981b742a`;
+at materialization it was not prepared, claimed, or authorized. The user subsequently authorized
+it. Its sole Attempt closed as non-retry `timed_out` after 315,506 milliseconds with diagnostic
+code `agent-timeout-evidence-accepted`, live-confirming the pre-terminal publication repair. It
+produced no behavioral or Candidate evidence, and the authority is fully consumed.
+
+Offline repair now persists only a fixed value-free discriminator before artifact publication and
+binds it into the diagnostic outcome. It never retains raw Harbor output, exception text,
+credentials, proxies, or transcripts. A fresh one-Case/one-Attempt proposal requires new wheel,
+Plan, and request identities after full gates and independent review.
+
+The follow-up closed proposal was
+[`preparations/next-priority4-runtime-diagnostic-followup`](../preparations/next-priority4-runtime-diagnostic-followup),
+with Companion wheel SHA-256
+`56db15a084ffd2132f083a000cc0cf882661c5f85e6ed155a9e48af59475557e`, Plan
+`b039fa42eafc1a85be6e79bbbb4952639f64d8b4b89d3f62184b68838058ff76`, and request
+`8f9243aef0b8d03cc2733a9a57ab7195699469d806e3d3d0cf9a046c47016149`. The user exactly
+authorized it, and its sole Attempt durably emitted `job-config-authority-rejected` before closing
+inconclusively. That authority is now fully consumed.
+
+Running the executor's exact argv through Harbor 0.16.1's real parser offline proved the systemic
+publication root cause: the validator confused unresolved Job-level task/agent configuration with
+normalized Trial-level configuration and fixed-order compared a set-backed retry field. The
+validator repair now passes the real parser while preserving all other exact field/type checks.
+A fresh one-Case/one-Attempt proposal bound to the repaired wheel is the next stop point. It is not
+a retry or resume of any closed request, cannot produce Candidate Development evidence by itself,
+and authorizes no smoke, held-out, reveal, Study, or 54-Trial action.
+
+The closed confirmation proposal is
+[`preparations/next-priority4-runtime-fix-confirmation`](../preparations/next-priority4-runtime-fix-confirmation),
+with Companion wheel SHA-256
+`9bfe8711049241a368e6259c9b68fa2759e94b297fa140f2e11edc98d28081c7`, Plan
+`45fc67a38cb662fea6bab5a5deead3049b93005c18215e0e8c5dec725e991e0b`, and request
+`6ce143b2774fd21ece87c4144a12db81b0147f2de5d4b1ce16d6c32366f27f75`.
+At materialization it was unprepared, unclaimed, and explicitly unauthorized; work stopped before
+accepting those identities.
+
+The user subsequently authorized and consumed that exact one-shot authority. It advanced beyond
+the repaired JobConfig gate, then durably closed with `preterminal-structure-rejected` after
+318,513 milliseconds. Offline construction of Harbor's real TrialConfig proved a second layer of
+the same harness defect: Harbor preserves the unresolved custom Agent representation from Job to
+Trial, while the validator and fake fixture expected a normalized representation. This necessarily
+rejected the valid Trial result before timeout classification. The Trial validator and fixture are
+now repaired and the mismatch has its own fixed value-free code.
+
+The replacement closed proposal is
+[`preparations/next-priority4-runtime-trial-config-confirmation`](../preparations/next-priority4-runtime-trial-config-confirmation),
+with Companion wheel SHA-256
+`6587da0fd9841a7e9815ec136db3a60e6329c375f6f12645dea7812faa0132c8`, Plan
+`af27b05cbc54b6649856bac996106c21794de3f769bb75f9b98d50dfed87f2bd`, and request
+`18ecdf5e3778dbef994fa9733e17cf012bcc82e71c0bd5fef0681dfb07e3763a`.
+At materialization it was unprepared, unclaimed, and unauthorized.

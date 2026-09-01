@@ -237,6 +237,94 @@ artifact, request, Plan, execution, outcome, and physical path binding, found no
 and recorded custody-tree snapshot digest
 `8caac73411d024dde246914b2654c7cddd7785044c89f982a95477702efe2ff9`.
 
+Subsequent offline diagnosis found that the live classifier could read Harbor's initialized
+`agent_result` before reading an exact `AgentTimeoutError`, which can collapse a valid timeout into
+the generic lifecycle observed in the six Attempts. The strict classifier fix, the inconclusive
+one-shot confirmation, and the limits of the historical evidence are recorded in
+[`runtime-pre-terminal-diagnosis.md`](runtime-pre-terminal-diagnosis.md). At that point, the
+proposed one-Trial development-only follow-up was not yet authorized and could not supply Candidate
+Development or Study evidence.
+
+Its dedicated one-shot control plane is implemented offline and does not reuse the six-Case pilot
+Plan or authorization. It requires fresh exact Plan/request acceptance, publishes at most one
+diagnostic-only terminal artifact, and permanently stops after the first claimed Attempt. Plan
+`6a342640911cade0ed3bd381e3ff80e0327d5230817a72ef6bac5d46e8d8bd4a` and request
+`5b6bb9b88e8923cac40a5924597dbe5d9f9faa879731d307edfb8013034fba42` were exactly authorized
+and fully consumed by one Attempt. It published a complete non-retry terminal artifact but stayed
+`runtime-pre-terminal-failure`, leaving the timeout hypothesis unconfirmed. Offline repair now
+durably retains only a fixed value-free mismatch code; any follow-up requires a new independently
+reviewed wheel and fresh exact Plan/request authorization.
+
+That follow-up was subsequently authorized exactly as Plan
+`b039fa42eafc1a85be6e79bbbb4952639f64d8b4b89d3f62184b68838058ff76` and request
+`8f9243aef0b8d03cc2733a9a57ab7195699469d806e3d3d0cf9a046c47016149`.
+Its sole non-retry Attempt completed and durably recorded diagnostic code
+`job-config-authority-rejected`. Offline execution of the exact argv through Harbor 0.16.1's real
+configuration parser then proved that the companion validator mixed Job-level and normalized
+Trial-level agent/task representations and imposed ordering on a set-backed retry field. That
+systemic publication root cause is repaired offline. The authorization is fully consumed and
+remains outside every Candidate, held-out, smoke, and Study boundary; live confirmation of the new
+wheel requires a fresh exact one-shot authority.
+
+The new closed confirmation proposal binds Companion wheel
+`9bfe8711049241a368e6259c9b68fa2759e94b297fa140f2e11edc98d28081c7`, Plan
+`45fc67a38cb662fea6bab5a5deead3049b93005c18215e0e8c5dec725e991e0b`, and request
+`6ce143b2774fd21ece87c4144a12db81b0147f2de5d4b1ce16d6c32366f27f75`.
+At materialization it was unprepared and unclaimed; its existence granted no execution authority.
+
+That exact authority was subsequently consumed by one 318,513-millisecond Attempt. The repaired
+JobConfig gate passed live, after which the value-free discriminator advanced to
+`preterminal-structure-rejected`. Offline construction through Harbor's real TrialConfig boundary
+proved the remaining deterministic mismatch: the validator expected a normalized custom Agent,
+but Harbor preserves its unresolved Job-level `name`, `import_path`, and `n_concurrent` values in
+the Trial. The Trial validator is repaired offline and now has a dedicated fixed mismatch code.
+
+The new closed confirmation proposal binds Companion wheel
+`6587da0fd9841a7e9815ec136db3a60e6329c375f6f12645dea7812faa0132c8`, Plan
+`af27b05cbc54b6649856bac996106c21794de3f769bb75f9b98d50dfed87f2bd`, and request
+`18ecdf5e3778dbef994fa9733e17cf012bcc82e71c0bd5fef0681dfb07e3763a`.
+That authority was subsequently consumed by exactly one 318,294-millisecond Attempt. Both
+configuration gates passed and the value-free discriminator reached
+`agent-timeout-verifier-result`, confirming the live `AgentTimeoutError` path while leaving the
+diagnostic outcome `inconclusive`. Offline Harbor reproduction proved the remaining classifier
+defect: successful post-timeout evaluation was incorrectly required to retain an already proven
+timeout. Missing Verifier results now remain non-evaluated but classify as `timed_out` only when
+all independent timeout and timing evidence agrees. A fresh confirmation requires new wheel bytes
+and new exact Plan/request authority. The closed proposal at
+`preparations/next-priority4-runtime-timeout-classification-confirmation` binds Companion wheel
+`ea0f48a6a0db3e539b7b2b55942c72d677aabc8f9984cf57068750958b4dee5e`, Plan
+`a31414dfcaef392ffe33a648f715aff9d2ce55812ee066064fcbe646759adcfe`, and request
+`e368f68cecceb854d2947149ab6c7ad4e230c45549d9aef00fa92b42981b742a`.
+At materialization it was unprepared and unclaimed; its existence authorized no execution. The
+user subsequently authorized it, and its sole 315,506-millisecond Attempt closed as non-retry
+`timed_out` with `agent-timeout-evidence-accepted`. The authorization is consumed, the terminal
+evidence is usable for lifecycle diagnosis only, and no Runtime observation, RepairResult,
+evaluation, Candidate, smoke, held-out, or Study evidence was produced.
+
+### Proxy-diagnostic follow-up boundary (2026-09-02)
+
+Two further one-shot diagnostics ran on the same `p4-dev-json-pointer` Case through a locally
+selected HTTP/SOCKS proxy. Both remain outside every Candidate, smoke, held-out, and Study
+boundary, and neither supplied an Agent observation:
+
+- 300-second Agent timeout inside a 360-second envelope: the provider attempt completed, but the
+  closed result failed controlled serialization (`ControlledAttemptSerializationError`,
+  classification-recoverable=false) before any Attempt artifact could be published. The claim
+  closed as an incident with no terminal Attempt; the run is `inconclusive` and its authority is
+  consumed.
+- 600-second Agent timeout inside a 660-second envelope: the sole non-retry Attempt closed as
+  `timed_out` (`agent-timeout-evidence-accepted`) after 617,761 milliseconds, with no Runtime
+  observation, RepairResult, or evaluation. The classifier repair remains live-confirmed, and the
+  Agent still does not complete within 600 seconds.
+
+The first result is the only retained diagnostic record in which the provider attempt is marked
+completed; the serialization boundary it exposed is not yet diagnosed. The driving command used a
+`proxy-diagnostic` schema family that is not preserved in the checked-out source tree, so these
+runs are recorded from their custody artifacts. No proxy endpoint, credential, or Runtime home is
+recorded here. Before any follow-up proposal, the timeout and wall budget must be re-derived:
+600-second Attempts at the 108-Attempt bound exceed the frozen 43,200-second study budget
+arithmetic.
+
 ## 6. Offline freeze sequence
 
 This sequence performs no live Attempt:
