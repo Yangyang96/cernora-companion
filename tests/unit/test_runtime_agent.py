@@ -121,9 +121,9 @@ def test_provider_proxy_is_external_and_loopback_is_mapped_into_docker() -> None
 def test_proxy_private_scan_inputs_exclude_unrelated_ambient_values() -> None:
     configuration = resolve_provider_proxy_configuration(
         {
-            "http_proxy": "http://127.0.0.1:7890",
-            "https_proxy": "http://127.0.0.1:7890",
-            "all_proxy": "socks5://127.0.0.1:7890",
+            "http_proxy": "http://127.0.0.1:18080",
+            "https_proxy": "http://127.0.0.1:18080",
+            "all_proxy": "socks5://127.0.0.1:11080",
             "NO_COLOR": "1",
             "SHLVL": "2",
             "TERM": "dumb",
@@ -131,8 +131,8 @@ def test_proxy_private_scan_inputs_exclude_unrelated_ambient_values() -> None:
     )
 
     assert configuration.source_endpoints == (
-        "http://127.0.0.1:7890",
-        "socks5://127.0.0.1:7890",
+        "http://127.0.0.1:18080",
+        "socks5://127.0.0.1:11080",
     )
     assert not {"1", "2", "dumb"}.intersection(configuration.source_endpoints)
 
