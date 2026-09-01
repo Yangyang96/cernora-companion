@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Never, Protocol, cast
 from uuid import UUID
 
 from cernora import BatchAttemptResources, BatchLifecycleRecord
@@ -63,6 +63,16 @@ from cernora_reference_workflow.runtime_policy import (
 AGENT_IMPORT = "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex"
 _AUTH_MAX_BYTES = 4 * 1024 * 1024
 _TRANSIENT_PROVIDER_EXCEPTIONS = frozenset({"NonZeroAgentExitCodeError"})
+_EXPECTED_RETRY_EXCEPTIONS = frozenset(
+    {
+        "AgentTimeoutError",
+        "ApiUsageLimitError",
+        "RewardFileEmptyError",
+        "RewardFileNotFoundError",
+        "VerifierOutputParseError",
+        "VerifierTimeoutError",
+    }
+)
 _INFRASTRUCTURE_START_EXCEPTIONS = frozenset(
     {
         "DockerComposeError",
@@ -136,6 +146,10 @@ _REQUIRED_HARBOR_OPTIONS = (
 
 class LiveAttemptError(ContractError):
     """The live Runtime could not produce one closed controlled Attempt."""
+
+    def __init__(self, message: str, *, diagnostic_code: str | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic_code = diagnostic_code
 
 
 class _ProcessRunner(Protocol):
@@ -765,10 +779,10 @@ def _validate_actual_argv(
 
 def _expected_agent_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
     return {
-        "name": None,
-        "import_path": AGENT_IMPORT,
+        "name": AGENT_IMPORT,
+        "import_path": None,
         "model_name": spec.runtime.model,
-        "n_concurrent": 1,
+        "n_concurrent": None,
         "concurrency_group": None,
         "skills": [],
         "override_timeout_sec": None,
@@ -853,6 +867,32 @@ def _json_type_strict_equal(actual: object, expected: object) -> bool:
     return False
 
 
+def _valid_codex_timeout_agent_result(value: object) -> bool:
+    """Validate the two AgentContext shapes Codex can close after cancellation."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "cost_usd",
+        "metadata",
+        "n_cache_tokens",
+        "n_input_tokens",
+        "n_output_tokens",
+        "rollout_details",
+    }:
+        return False
+    counts = tuple(
+        value[field] for field in ("n_cache_tokens", "n_input_tokens", "n_output_tokens")
+    )
+    counts_are_empty = all(count is None for count in counts)
+    counts_are_populated = all(type(count) is int and count >= 0 for count in counts)
+    cost = value["cost_usd"]
+    valid_cost = cost is None or (type(cost) is float and isfinite(cost) and cost >= 0.0)
+    return (
+        ((counts_are_empty and cost is None) or (counts_are_populated and valid_cost))
+        and value["metadata"] is None
+        and value["rollout_details"] is None
+    )
+
+
 def _validate_job_config(
     config: Mapping[str, object],
     request: ControlledAttemptRequest,
@@ -863,6 +903,21 @@ def _validate_job_config(
     proxy_environment: Mapping[str, str],
 ) -> None:
     spec = request.specification
+    if type(config) is not dict:
+        raise LiveAttemptError("resolved Harbor job config is not one strict JSON object")
+    retry = config.get("retry")
+    if type(retry) is not dict:
+        raise LiveAttemptError("resolved Harbor retry config is not one strict JSON object")
+    retry_mapping = cast(dict[str, object], retry)
+    exclusions = retry_mapping.get("exclude_exceptions")
+    if (
+        type(exclusions) is not list
+        or len(exclusions) != len(_EXPECTED_RETRY_EXCEPTIONS)
+        or any(type(item) is not str for item in exclusions)
+        or len(set(exclusions)) != len(exclusions)
+        or frozenset(exclusions) != _EXPECTED_RETRY_EXCEPTIONS
+    ):
+        raise LiveAttemptError("resolved Harbor retry exclusions drift from argv authority")
     expected = {
         "job_name": job_name,
         "jobs_dir": str(job_root),
@@ -882,40 +937,33 @@ def _validate_job_config(
             "max_wait_sec": 60.0,
             "wait_multiplier": 1.0,
             "include_exceptions": None,
-            "exclude_exceptions": [
-                "AgentTimeoutError",
-                "ApiUsageLimitError",
-                "VerifierOutputParseError",
-                "RewardFileEmptyError",
-                "RewardFileNotFoundError",
-                "VerifierTimeoutError",
-            ],
+            "exclude_exceptions": sorted(_EXPECTED_RETRY_EXCEPTIONS),
         },
         "environment": _expected_environment_config(spec),
         "verifier": _expected_verifier_config(),
         "metrics": [],
         "agents": [_expected_agent_config(spec)],
-        "datasets": [
+        "datasets": [],
+        "tasks": [
             {
                 "path": str(task_root),
+                "git_url": None,
+                "git_commit_id": None,
                 "name": None,
-                "version": None,
-                "overwrite": False,
-                "registry_url": None,
-                "registry_path": None,
-                "download_dir": None,
-                "task_names": None,
-                "exclude_task_names": None,
-                "n_tasks": None,
                 "ref": None,
-                "repo": None,
+                "overwrite": False,
+                "download_dir": None,
+                "source": None,
             }
         ],
-        "tasks": [],
         "artifacts": [],
         "extra_instruction_paths": [],
     }
-    if not _json_type_strict_equal(config, expected):
+    normalized = dict(config)
+    normalized_retry = dict(retry_mapping)
+    normalized_retry["exclude_exceptions"] = sorted(_EXPECTED_RETRY_EXCEPTIONS)
+    normalized["retry"] = normalized_retry
+    if not _json_type_strict_equal(normalized, expected):
         raise LiveAttemptError("resolved Harbor job config drifts from actual argv authority")
 
 
@@ -994,9 +1042,13 @@ def _validate_trial_result(
         "extra_instruction_paths": [],
         "job_id": job_id,
     }
+    if not _json_type_strict_equal(config, expected_config):
+        raise LiveAttemptError(
+            "actual Harbor Trial config drifts from Runtime/task authority",
+            diagnostic_code="trial-config-authority-rejected",
+        )
     if (
-        not _json_type_strict_equal(config, expected_config)
-        or set(agent_info) != {"name", "version", "model_info"}
+        set(agent_info) != {"name", "version", "model_info"}
         or set(model) != {"name", "provider"}
         or not _json_type_strict_equal(result.get("task_name"), task.case.case_id)
         or not _json_type_strict_equal(result.get("source"), None)
@@ -1129,11 +1181,16 @@ def _classify_preterminal(
     job_root: Path,
     job_name: str,
     task_checksum: str,
-) -> tuple[str, bool] | None:
+    attempt_envelope_timeout_seconds: int,
+) -> tuple[str, bool, str] | None:
     if process.status in {"timed_out", "output_limit"}:
-        return "runtime_pre_terminal_failure", False
+        return "runtime_pre_terminal_failure", False, "process-envelope-failure"
     if result is None:
-        return None if process.exit_code == 0 else ("runtime_pre_terminal_failure", False)
+        return (
+            None
+            if process.exit_code == 0
+            else ("runtime_pre_terminal_failure", False, "missing-trial-result")
+        )
     _validate_trial_result(
         result,
         request,
@@ -1148,8 +1205,6 @@ def _classify_preterminal(
     verifier_result = result.get("verifier_result")
     if process.exit_code == 0 and exception is None:
         return None
-    if agent_result is not None or verifier_result is not None:
-        return "runtime_pre_terminal_failure", False
     if not isinstance(exception, dict) or set(exception) != {
         "exception_type",
         "exception_message",
@@ -1168,7 +1223,7 @@ def _classify_preterminal(
         raise LiveAttemptError("pre-terminal Harbor result has incomplete exception evidence")
     assert isinstance(occurred_at, str)
     try:
-        datetime.fromisoformat(occurred_at)
+        exception_at = datetime.fromisoformat(occurred_at)
     except ValueError as exc:
         raise LiveAttemptError("pre-terminal Harbor result has invalid exception timing") from exc
     agent_execution = result.get("agent_execution")
@@ -1189,8 +1244,106 @@ def _classify_preterminal(
             ) from exc
     assert isinstance(exception_type, str)
     assert isinstance(message, str)
+    assert isinstance(traceback_value, str)
+    if exception_type == "AgentTimeoutError":
+        rewards = verifier_result.get("rewards") if isinstance(verifier_result, dict) else None
+        verifier_timing = result.get("verifier")
+
+        def reject_timeout(code: str) -> Never:
+            raise LiveAttemptError(
+                "Agent timeout result contradicts Harbor phase evidence",
+                diagnostic_code=code,
+            )
+
+        if not _valid_codex_timeout_agent_result(agent_result):
+            reject_timeout("agent-timeout-agent-result")
+        if not isinstance(agent_execution, dict) or not all(
+            isinstance(agent_execution[field], str) and agent_execution[field]
+            for field in ("started_at", "finished_at")
+        ):
+            reject_timeout("agent-timeout-agent-timing-shape")
+        # Harbor records the AgentTimeoutError before it attempts verification. A
+        # post-timeout verifier failure therefore leaves verifier_result unset while
+        # preserving complete timeout evidence. That missing evaluation evidence can
+        # never produce a RepairResult, but it must not erase the terminal timeout.
+        if verifier_result is not None and (
+            not isinstance(verifier_result, dict)
+            or set(verifier_result) != {"rewards"}
+            or not isinstance(rewards, dict)
+            or set(rewards) != {"reward"}
+            or type(rewards["reward"]) is not float
+            or rewards["reward"] not in {0.0, 1.0}
+        ):
+            reject_timeout("agent-timeout-verifier-result")
+        if (
+            not isinstance(verifier_timing, dict)
+            or set(verifier_timing) != {"started_at", "finished_at"}
+            or not all(
+                isinstance(verifier_timing[field], str) and verifier_timing[field]
+                for field in ("started_at", "finished_at")
+            )
+        ):
+            reject_timeout("agent-timeout-verifier-timing-shape")
+        if message != (
+            "Agent execution timed out after "
+            f"{float(request.specification.limits.timeout_seconds)} seconds"
+        ):
+            reject_timeout("agent-timeout-message")
+        if not traceback_value.rstrip().endswith(f"AgentTimeoutError: {message}"):
+            reject_timeout("agent-timeout-traceback")
+        assert isinstance(agent_execution["started_at"], str)
+        assert isinstance(agent_execution["finished_at"], str)
+        assert isinstance(verifier_timing["started_at"], str)
+        assert isinstance(verifier_timing["finished_at"], str)
+        try:
+            agent_started = datetime.fromisoformat(agent_execution["started_at"])
+            agent_finished = datetime.fromisoformat(agent_execution["finished_at"])
+            verifier_started = datetime.fromisoformat(verifier_timing["started_at"])
+            verifier_finished = datetime.fromisoformat(verifier_timing["finished_at"])
+        except ValueError as exc:
+            raise LiveAttemptError(
+                "Agent timeout result contradicts Harbor phase evidence",
+                diagnostic_code="agent-timeout-timestamp-parse",
+            ) from exc
+        try:
+            exception_at_local = exception_at.astimezone()
+        except (ValueError, OverflowError, OSError) as exc:
+            raise LiveAttemptError(
+                "Agent timeout result contradicts Harbor phase evidence",
+                diagnostic_code="agent-timeout-exception-timezone",
+            ) from exc
+        if (
+            agent_started.utcoffset() is None
+            or agent_finished.utcoffset() is None
+            or exception_at.utcoffset() is not None
+            or verifier_started.utcoffset() is None
+            or verifier_finished.utcoffset() is None
+            or exception_at_local < agent_finished
+            or exception_at_local > verifier_started
+            or verifier_finished < verifier_started
+            or verifier_started < agent_finished
+        ):
+            reject_timeout("agent-timeout-timezone-order")
+        agent_elapsed = (agent_finished - agent_started).total_seconds()
+        phase_elapsed = (verifier_finished - agent_started).total_seconds()
+        process_elapsed = process.finished_monotonic - process.started_monotonic
+        if (
+            agent_elapsed < request.specification.limits.timeout_seconds
+            or agent_elapsed > attempt_envelope_timeout_seconds
+            or phase_elapsed > attempt_envelope_timeout_seconds
+            or process_elapsed < phase_elapsed
+            or process_elapsed > attempt_envelope_timeout_seconds
+        ):
+            reject_timeout("agent-timeout-duration-bound")
+        return "timed_out", False, "agent-timeout-evidence-accepted"
+    if agent_result is not None or verifier_result is not None:
+        return (
+            "runtime_pre_terminal_failure",
+            False,
+            "non-timeout-exception-with-phase-evidence",
+        )
     if agent_execution is None and exception_type in _INFRASTRUCTURE_START_EXCEPTIONS:
-        return "infrastructure_start_failure", True
+        return "infrastructure_start_failure", True, "infrastructure-start-exception"
     normalized = message.lower()
     transient = (
         exception_type in _TRANSIENT_PROVIDER_EXCEPTIONS
@@ -1198,9 +1351,9 @@ def _classify_preterminal(
         and any(marker in normalized for marker in _TRANSIENT_MARKERS)
     )
     return (
-        ("transient_provider_pre_terminal", True)
+        ("transient_provider_pre_terminal", True, "transient-provider-exception")
         if transient
-        else ("runtime_pre_terminal_failure", False)
+        else ("runtime_pre_terminal_failure", False, "unclassified-runtime-exception")
     )
 
 
@@ -1381,11 +1534,18 @@ class ControlledHarborAttemptExecutor:
         self._image_verifier = image_verifier
         self._disk_free = disk_free
         self._close_unusable_runtime_evidence = close_unusable_runtime_evidence
+        self._diagnostic_code: str | None = None
         cli_validator(repository_root / ".venv/bin/harbor")
 
     @property
     def enforces_hard_deadline(self) -> bool:
         return True
+
+    @property
+    def diagnostic_code(self) -> str | None:
+        """Return only the fixed, value-free code for the latest closed Attempt."""
+
+        return self._diagnostic_code
 
     def _command(
         self,
@@ -1450,6 +1610,7 @@ class ControlledHarborAttemptExecutor:
         return tuple(command)
 
     def __call__(self, request: ControlledAttemptRequest) -> ControlledAttempt:
+        self._diagnostic_code = None
         task = self._tasks.get(request.slot.case_id)
         if task is None:
             raise LiveAttemptError("selected Case has no controlled task authority")
@@ -1548,33 +1709,51 @@ class ControlledHarborAttemptExecutor:
             ):
                 raise ControlledActiveSafeStop("hard_wall_deadline_elapsed")
             try:
-                trial_result = _trial_result(job_root, job_name)
+                try:
+                    trial_result = _trial_result(job_root, job_name)
+                except LiveAttemptError as exc:
+                    raise LiveAttemptError(str(exc), diagnostic_code="trial-tree-rejected") from exc
                 trial = trial_result[0] if trial_result is not None else None
                 result = trial_result[1] if trial_result is not None else None
                 if result is not None:
-                    job_config = _object(
-                        job_root / job_name / "config.json", label="Harbor job config"
-                    )
-                    _validate_job_config(
-                        job_config,
+                    try:
+                        job_config = _object(
+                            job_root / job_name / "config.json", label="Harbor job config"
+                        )
+                        _validate_job_config(
+                            job_config,
+                            request,
+                            task_root=task_root,
+                            job_root=job_root,
+                            job_name=job_name,
+                            proxy_environment=self._proxy_environment,
+                        )
+                    except LiveAttemptError as exc:
+                        raise LiveAttemptError(
+                            str(exc), diagnostic_code="job-config-authority-rejected"
+                        ) from exc
+                try:
+                    classification = _classify_preterminal(
+                        process,
+                        result,
                         request,
+                        task,
                         task_root=task_root,
                         job_root=job_root,
                         job_name=job_name,
-                        proxy_environment=self._proxy_environment,
+                        task_checksum=task_checksum,
+                        attempt_envelope_timeout_seconds=(
+                            request.specification.limits.timeout_seconds
+                            + self._attempt_envelope_grace_seconds
+                        ),
                     )
-                classification = _classify_preterminal(
-                    process,
-                    result,
-                    request,
-                    task,
-                    task_root=task_root,
-                    job_root=job_root,
-                    job_name=job_name,
-                    task_checksum=task_checksum,
-                )
+                except LiveAttemptError as exc:
+                    raise LiveAttemptError(
+                        str(exc),
+                        diagnostic_code=(exc.diagnostic_code or "preterminal-structure-rejected"),
+                    ) from exc
                 if classification is not None:
-                    category, retry = classification
+                    category, retry, self._diagnostic_code = classification
                     return _lifecycle_attempt(
                         request, process, category=category, retry_eligible=retry
                     )
@@ -1598,9 +1777,10 @@ class ControlledHarborAttemptExecutor:
                     result=result,
                     task_checksum=task_checksum,
                 )
-            except LiveAttemptError:
+            except LiveAttemptError as exc:
                 if not self._close_unusable_runtime_evidence:
                     raise
+                self._diagnostic_code = exc.diagnostic_code or "strict-runtime-evidence-rejected"
                 # A closed process whose outputs passed the private-value scan but cannot
                 # satisfy the exact Harbor/result authority is terminal, unusable evidence.
                 # Publishing a non-retry lifecycle Attempt closes the durable claim without

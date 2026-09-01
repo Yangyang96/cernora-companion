@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -277,10 +278,10 @@ def _request(spec: ControlledExperimentSpecV2, *, trial: str = "live") -> Contro
 
 def _harbor_agent_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
     return {
-        "name": None,
-        "import_path": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
+        "name": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
+        "import_path": None,
         "model_name": spec.runtime.model,
-        "n_concurrent": 1,
+        "n_concurrent": None,
         "concurrency_group": None,
         "skills": [],
         "override_timeout_sec": None,
@@ -333,6 +334,106 @@ def _harbor_verifier_config() -> dict[str, object]:
         "max_timeout_sec": None,
         "override_timeout_sec": None,
     }
+
+
+def test_actual_harbor_cli_job_config_matches_argv_authority(tmp_path: Path) -> None:
+    """Exercise Harbor's real parser without starting a job or provider call."""
+
+    from uuid import UUID
+
+    import typer
+    from click import Group
+    from harbor.cli.jobs import jobs_app
+    from harbor.models.trial.config import TrialConfig
+
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    request = _request(spec)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    task_root = tmp_path / task.case.case_id
+    task_root.mkdir()
+    job_root = tmp_path / "jobs"
+    job_root.mkdir()
+    job_name = "offline-config-authority"
+    live_attempt_module._materialize_task(request, task, task_root)
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=tmp_path,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        cli_validator=lambda _: None,
+    )
+    command = executor._command(
+        request,
+        task_root,
+        job_root,
+        job_name,
+        {
+            "HTTP_PROXY": _proxy_environment()["CERNORA_HTTP_PROXY"],
+            "HTTPS_PROXY": _proxy_environment()["CERNORA_HTTPS_PROXY"],
+            "ALL_PROXY": _proxy_environment()["CERNORA_ALL_PROXY"],
+            "NO_PROXY": "localhost,127.0.0.1",
+        },
+    )
+    group = cast(Group, typer.main.get_command(jobs_app))
+    config = group.commands["start"].main([*command[2:], "--init"], standalone_mode=False)
+
+    assert config is not None
+    actual = config.model_dump(mode="json")
+    trial = TrialConfig(
+        task=config.tasks[0],
+        trials_dir=config.jobs_dir / config.job_name,
+        install_only=config.install_only,
+        timeout_multiplier=config.timeout_multiplier,
+        agent_timeout_multiplier=config.agent_timeout_multiplier,
+        verifier_timeout_multiplier=config.verifier_timeout_multiplier,
+        agent_setup_timeout_multiplier=config.agent_setup_timeout_multiplier,
+        environment_build_timeout_multiplier=config.environment_build_timeout_multiplier,
+        agent=config.agents[0],
+        environment=config.environment,
+        verifier=config.verifier,
+        artifacts=config.artifacts,
+        extra_instruction_paths=config.extra_instruction_paths,
+        job_id=UUID(int=2),
+    ).model_dump(mode="json")
+    assert trial["agent"] == actual["agents"][0]
+    assert trial["task"] == actual["tasks"][0]
+    proxy_environment = {
+        "HTTP_PROXY": _proxy_environment()["CERNORA_HTTP_PROXY"],
+        "HTTPS_PROXY": _proxy_environment()["CERNORA_HTTPS_PROXY"],
+        "ALL_PROXY": _proxy_environment()["CERNORA_ALL_PROXY"],
+        "NO_PROXY": "localhost,127.0.0.1",
+    }
+    live_attempt_module._validate_job_config(
+        actual,
+        request,
+        task_root=task_root,
+        job_root=job_root,
+        job_name=job_name,
+        proxy_environment=proxy_environment,
+    )
+    exclusions = actual["retry"]["exclude_exceptions"]
+    exclusions.reverse()
+    live_attempt_module._validate_job_config(
+        actual,
+        request,
+        task_root=task_root,
+        job_root=job_root,
+        job_name=job_name,
+        proxy_environment=proxy_environment,
+    )
+    exclusions[-1] = exclusions[0]
+    with pytest.raises(LiveAttemptError, match="retry exclusions drift"):
+        live_attempt_module._validate_job_config(
+            actual,
+            request,
+            task_root=task_root,
+            job_root=job_root,
+            job_name=job_name,
+            proxy_environment=proxy_environment,
+        )
 
 
 class FakeProcess:
@@ -401,8 +502,9 @@ class FakeProcess:
         )
         kwargs["strict_config"] = True
         environment_config = _harbor_environment_config(self.spec)
-        agent_config = _harbor_agent_config(self.spec)
-        assert agent_config["kwargs"] == kwargs
+        job_agent_config = _harbor_agent_config(self.spec)
+        trial_agent_config = _harbor_agent_config(self.spec)
+        assert job_agent_config["kwargs"] == kwargs
         config: dict[str, object] = {
             "job_name": job_name,
             "jobs_dir": str(job_root),
@@ -434,24 +536,20 @@ class FakeProcess:
             "environment": environment_config,
             "verifier": _harbor_verifier_config(),
             "metrics": [],
-            "agents": [agent_config],
-            "datasets": [
+            "agents": [job_agent_config],
+            "datasets": [],
+            "tasks": [
                 {
                     "path": str(task_root),
+                    "git_url": None,
+                    "git_commit_id": None,
                     "name": None,
-                    "version": None,
-                    "overwrite": False,
-                    "registry_url": None,
-                    "registry_path": None,
-                    "download_dir": None,
-                    "task_names": None,
-                    "exclude_task_names": None,
-                    "n_tasks": None,
                     "ref": None,
-                    "repo": None,
+                    "overwrite": False,
+                    "download_dir": None,
+                    "source": None,
                 }
             ],
-            "tasks": [],
             "artifacts": [],
             "extra_instruction_paths": [],
         }
@@ -515,7 +613,7 @@ class FakeProcess:
             "verifier_timeout_multiplier": None,
             "agent_setup_timeout_multiplier": 4.0,
             "environment_build_timeout_multiplier": None,
-            "agent": agent_config,
+            "agent": trial_agent_config,
             "environment": environment_config,
             "verifier": _harbor_verifier_config(),
             "artifacts": [],
@@ -731,6 +829,311 @@ class TransientResultProcess(FakeProcess):
         return replace(process, exit_code=1, stderr=b"ordinary stderr")
 
 
+class AgentTimeoutResultProcess(FakeProcess):
+    """Replay Harbor's closed result shape after its Agent phase times out."""
+
+    def __init__(
+        self,
+        task: ControlledTaskAuthority,
+        spec: ControlledExperimentSpecV2,
+        mutation: str | None = None,
+    ) -> None:
+        super().__init__(task, spec)
+        self.mutation = mutation
+
+    def __call__(
+        self,
+        command: tuple[str, ...],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        deadline_monotonic: float,
+        timeout_seconds: int,
+        disk_free: object = None,
+        safe_stop_free_bytes: int | None = None,
+    ) -> SubprocessResult:
+        process = super().__call__(
+            command,
+            cwd=cwd,
+            environment=environment,
+            deadline_monotonic=deadline_monotonic,
+            timeout_seconds=timeout_seconds,
+            disk_free=disk_free,
+            safe_stop_free_bytes=safe_stop_free_bytes,
+        )
+        job_root = Path(command[command.index("-o") + 1])
+        job_name = command[command.index("--job-name") + 1]
+        result_path = job_root / job_name / "trial-1" / "result.json"
+        payload = json.loads(result_path.read_bytes())
+        payload["agent_result"] = {
+            "cost_usd": None,
+            "metadata": None,
+            "n_cache_tokens": None,
+            "n_input_tokens": None,
+            "n_output_tokens": None,
+            "rollout_details": None,
+        }
+        payload["verifier_result"] = {"rewards": {"reward": 0.0}}
+        exception_at = (
+            datetime.fromisoformat("2026-08-27T00:05:15Z")
+            .astimezone()
+            .replace(tzinfo=None)
+            .isoformat()
+        )
+        payload["exception_info"] = {
+            "exception_message": "Agent execution timed out after 300.0 seconds",
+            "exception_traceback": (
+                "Traceback (most recent call last):\n"
+                "AgentTimeoutError: Agent execution timed out after 300.0 seconds\n"
+            ),
+            "exception_type": "AgentTimeoutError",
+            "occurred_at": exception_at,
+        }
+        payload["agent_execution"] = {
+            "started_at": "2026-08-27T00:00:00Z",
+            "finished_at": "2026-08-27T00:05:15Z",
+        }
+        payload["verifier"] = {
+            "started_at": "2026-08-27T00:05:15Z",
+            "finished_at": "2026-08-27T00:05:16Z",
+        }
+        if self.mutation == "partial-agent-metrics":
+            payload["agent_result"].update(
+                {
+                    "cost_usd": 0.25,
+                    "n_cache_tokens": 12,
+                    "n_input_tokens": 34,
+                    "n_output_tokens": 56,
+                }
+            )
+        elif self.mutation == "missing-agent-result":
+            payload["agent_result"] = None
+        elif self.mutation == "invalid-agent-result":
+            payload["agent_result"] = "not-an-AgentContext"
+        elif self.mutation == "extra-agent-result-field":
+            payload["agent_result"]["unexpected"] = None
+        elif self.mutation == "partial-agent-token-counts":
+            payload["agent_result"]["n_input_tokens"] = 34
+        elif self.mutation == "negative-agent-cost":
+            payload["agent_result"].update(
+                {
+                    "cost_usd": -0.25,
+                    "n_cache_tokens": 12,
+                    "n_input_tokens": 34,
+                    "n_output_tokens": 56,
+                }
+            )
+        elif self.mutation == "cost-only-agent-result":
+            payload["agent_result"]["cost_usd"] = 0.25
+        elif self.mutation == "verifier-result":
+            payload["verifier_result"] = {}
+        elif self.mutation == "missing-verifier-result":
+            payload["verifier_result"] = None
+        elif self.mutation == "missing-agent-execution":
+            payload["agent_execution"] = None
+        elif self.mutation == "incomplete-agent-execution":
+            payload["agent_execution"]["finished_at"] = None
+        elif self.mutation == "reversed-agent-execution":
+            payload["agent_execution"]["finished_at"] = "2026-08-26T23:59:59Z"
+        elif self.mutation == "missing-verifier-timing":
+            payload["verifier"] = None
+        elif self.mutation == "reversed-verifier-timing":
+            payload["verifier"]["finished_at"] = "2026-08-27T00:05:14Z"
+        elif self.mutation == "malformed-verifier-timing":
+            payload["verifier"]["finished_at"] = "not-a-timestamp"
+        elif self.mutation == "naive-agent-timing":
+            payload["agent_execution"]["started_at"] = "2026-08-27T00:00:00"
+        elif self.mutation == "exception-before-agent-finished":
+            payload["exception_info"]["occurred_at"] = (
+                datetime.fromisoformat("2026-08-27T00:05:14Z")
+                .astimezone()
+                .replace(tzinfo=None)
+                .isoformat()
+            )
+        elif self.mutation == "exception-after-verifier-started":
+            payload["exception_info"]["occurred_at"] = (
+                datetime.fromisoformat("2026-08-27T00:05:16Z")
+                .astimezone()
+                .replace(tzinfo=None)
+                .isoformat()
+            )
+        elif self.mutation == "aware-exception-timing":
+            payload["exception_info"]["occurred_at"] = "2026-08-27T00:05:15Z"
+        elif self.mutation == "extreme-naive-exception-timing":
+            payload["exception_info"]["occurred_at"] = "0001-01-01T00:00:00"
+        elif self.mutation == "wrong-timeout-message":
+            payload["exception_info"]["exception_message"] = (
+                "Agent execution timed out after 299.0 seconds"
+            )
+        elif self.mutation == "wrong-timeout-traceback":
+            payload["exception_info"]["exception_traceback"] = (
+                "AgentTimeoutError: unrelated timeout"
+            )
+        elif self.mutation == "agent-exceeds-envelope":
+            payload["agent_execution"]["finished_at"] = "2026-08-27T00:06:01Z"
+            payload["exception_info"]["occurred_at"] = (
+                datetime.fromisoformat("2026-08-27T00:06:01Z")
+                .astimezone()
+                .replace(tzinfo=None)
+                .isoformat()
+            )
+            payload["verifier"]["started_at"] = "2026-08-27T00:06:01Z"
+            payload["verifier"]["finished_at"] = "2026-08-27T00:06:02Z"
+        result_path.write_bytes(canonical_json_bytes(payload))
+        finished_monotonic = 316.0
+        if self.mutation == "process-exceeds-envelope":
+            finished_monotonic = 361.0
+        elif self.mutation == "process-shorter-than-phases":
+            finished_monotonic = 315.0
+        return replace(
+            process,
+            started_monotonic=0.0,
+            finished_monotonic=finished_monotonic,
+            stderr=b"ordinary Harbor timeout diagnostics",
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (None, "partial-agent-metrics", "missing-verifier-result"),
+)
+def test_closed_harbor_agent_timeout_remains_a_timeout_lifecycle(
+    tmp_path: Path,
+    mutation: str | None,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=AgentTimeoutResultProcess(task, spec, mutation),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+        close_unusable_runtime_evidence=True,
+        attempt_envelope_grace_seconds=60,
+    )
+
+    suffix = mutation or "empty-agent-context"
+    attempt = executor(_request(spec, trial=f"closed-agent-timeout-{suffix}"))
+
+    assert attempt.retry_eligible is False
+    assert attempt.lifecycle is not None
+    assert attempt.lifecycle.category == "timed_out", executor.diagnostic_code
+    assert attempt.lifecycle.source_state == "timed-out"
+    assert attempt.resources.duration_milliseconds == 316_000
+    assert attempt.runtime_observation is None
+    assert attempt.repair_result is None
+    assert executor.diagnostic_code == "agent-timeout-evidence-accepted"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "diagnostic_code"),
+    (
+        ("missing-agent-result", "agent-timeout-agent-result"),
+        ("missing-agent-execution", "agent-timeout-agent-timing-shape"),
+        ("verifier-result", "agent-timeout-verifier-result"),
+        ("missing-verifier-timing", "agent-timeout-verifier-timing-shape"),
+        ("wrong-timeout-message", "agent-timeout-message"),
+        ("wrong-timeout-traceback", "agent-timeout-traceback"),
+        ("exception-before-agent-finished", "agent-timeout-timezone-order"),
+        ("agent-exceeds-envelope", "agent-timeout-duration-bound"),
+    ),
+)
+def test_closed_timeout_rejection_retains_only_a_fixed_diagnostic_code(
+    tmp_path: Path,
+    mutation: str,
+    diagnostic_code: str,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=AgentTimeoutResultProcess(task, spec, mutation),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+        close_unusable_runtime_evidence=True,
+        attempt_envelope_grace_seconds=60,
+    )
+
+    attempt = executor(_request(spec, trial=f"diagnostic-code-{mutation}"))
+
+    assert attempt.lifecycle is not None
+    assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
+    assert executor.diagnostic_code == diagnostic_code
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-agent-result",
+        "invalid-agent-result",
+        "extra-agent-result-field",
+        "partial-agent-token-counts",
+        "negative-agent-cost",
+        "cost-only-agent-result",
+        "verifier-result",
+        "missing-verifier-result",
+        "missing-agent-execution",
+        "incomplete-agent-execution",
+        "reversed-agent-execution",
+        "missing-verifier-timing",
+        "reversed-verifier-timing",
+        "malformed-verifier-timing",
+        "naive-agent-timing",
+        "exception-before-agent-finished",
+        "exception-after-verifier-started",
+        "aware-exception-timing",
+        "extreme-naive-exception-timing",
+        "wrong-timeout-message",
+        "wrong-timeout-traceback",
+        "agent-exceeds-envelope",
+        "process-exceeds-envelope",
+        "process-shorter-than-phases",
+    ),
+)
+def test_agent_timeout_requires_exact_harbor_phase_evidence(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=_auth_file(tmp_path),
+        proxy_environment=_proxy_environment(),
+        process_runner=AgentTimeoutResultProcess(task, spec, mutation),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+    )
+
+    with pytest.raises(LiveAttemptError, match="Agent timeout result contradicts"):
+        executor(_request(spec, trial=f"malformed-agent-timeout-{mutation}"))
+
+
 def test_container_selection_removes_only_exact_new_goal_containers() -> None:
     captured = 1_000.0
     image = "a" * 64
@@ -904,7 +1307,10 @@ def test_live_executor_rejects_actual_harbor_result_drift(
         image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
     )
 
-    with pytest.raises(LiveAttemptError, match="actual Harbor result"):
+    expected_message = (
+        "actual Harbor result" if mutation == "agent" else "actual Harbor Trial config"
+    )
+    with pytest.raises(LiveAttemptError, match=expected_message):
         executor(_request(spec, trial=f"result-{mutation}-drift"))
 
 
@@ -937,6 +1343,7 @@ def test_pilot_policy_closes_unusable_runtime_evidence_without_observation(
     assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
     assert attempt.runtime_observation is None
     assert attempt.repair_result is None
+    assert executor.diagnostic_code == "preterminal-structure-rejected"
 
 
 def test_live_executor_keeps_private_output_failure_fail_closed(tmp_path: Path) -> None:
@@ -1191,6 +1598,26 @@ def test_unverified_preterminal_result_never_receives_retry(
     assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
     assert attempt.runtime_observation is None
     assert attempt.repair_result is None
+    trial_config_mutations = {
+        "extra-nested-config",
+        "task-git-url",
+        "trial-bool-int",
+        "trial-int-float",
+        "wrong-config",
+    }
+    assert executor.diagnostic_code == (
+        "trial-tree-rejected"
+        if mutation == "reidentified"
+        else (
+            "job-config-authority-rejected"
+            if mutation.startswith("job-")
+            else (
+                "trial-config-authority-rejected"
+                if mutation in trial_config_mutations
+                else "preterminal-structure-rejected"
+            )
+        )
+    )
 
 
 def test_loose_transient_token_match_is_not_retry_eligible(tmp_path: Path) -> None:
@@ -1485,9 +1912,9 @@ def test_executor_private_scan_uses_only_selected_proxy_endpoints(tmp_path: Path
         evaluation_root=evaluation,
         auth_file=_auth_file(tmp_path),
         proxy_environment={
-            "http_proxy": "http://127.0.0.1:7890",
-            "https_proxy": "http://127.0.0.1:7890",
-            "all_proxy": "socks5://127.0.0.1:7890",
+            "http_proxy": "http://proxy.example:18080",
+            "https_proxy": "http://proxy.example:18080",
+            "all_proxy": "socks5://proxy.example:11080",
             "NO_COLOR": "1",
             "SHLVL": "2",
             "TERM": "dumb",
@@ -1497,8 +1924,8 @@ def test_executor_private_scan_uses_only_selected_proxy_endpoints(tmp_path: Path
     )
 
     assert executor._explicit_proxy_endpoints == (
-        "http://127.0.0.1:7890",
-        "socks5://127.0.0.1:7890",
+        "http://proxy.example:18080",
+        "socks5://proxy.example:11080",
     )
     assert executor._attempt_envelope_grace_seconds == 60
 
