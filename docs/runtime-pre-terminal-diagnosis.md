@@ -350,3 +350,16 @@ The fresh closed confirmation proposal binds Companion wheel
 `675e6ec549a8610a2fca8400ffc33d10a457c75f4fcca7877e77732738827c67`, and request
 `8090fc26c8320108f82bea5e9cde188928199c18e2d5790989a9528a5aeb0c4c`. It awaits exact user
 authorization; its existence grants no execution authority.
+
+## First controlled live attempt after the repair (2026-09-02)
+
+The user authorized that exact one-shot authority and its sole Attempt closed as non-retry
+`timed_out` (`agent-timeout-evidence-accepted`) after 318,389 milliseconds. The classifier repair
+therefore also holds on the controlled path, but this run produced no evaluated result. The
+out-of-band probe had completed the same Case in roughly 68 monotonic seconds with a real
+behavioral failure, so the divergence is environmental rather than a transport regression:
+`pmset` records 131 sleep/wake cycles and system sleep is not prevented, and the host load
+average was above 5 during the run, both of which can stall the Docker VM past the frozen
+300-second Agent limit. Live execution therefore requires a non-sleeping host and low load before
+the development pilot or 54-Trial Study. No Candidate, held-out, smoke, or Study evidence was
+produced by this Attempt.
