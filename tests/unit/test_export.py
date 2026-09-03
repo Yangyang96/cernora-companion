@@ -18,9 +18,10 @@ from cernora_reference_workflow.runtime_observation import (
     inspect_runtime_artifacts,
 )
 from cernora_reference_workflow.runtime_policy import (
+    PI_RUNTIME_ENVIRONMENT,
+    PI_VERSION,
     RUNTIME_CLEANUP_RECEIPT,
     RUNTIME_POLICY,
-    TELEMETRY_CONFIG_TOML,
 )
 from cernora_reference_workflow.test_runner import TEST_IDS
 from cernora_reference_workflow.test_runner import TestPlan as FrozenTestPlan
@@ -170,14 +171,8 @@ def test_export_publication_is_closed_verified_and_no_replace(tmp_path: Path) ->
 def _write_runtime_policy_receipts(root: Path) -> None:
     runtime = root / "runtime"
     runtime.mkdir()
-    (runtime / "codex-effective-config.toml").write_text(
-        TELEMETRY_CONFIG_TOML,
-        encoding="utf-8",
-    )
-    (runtime / "codex-effective-features.txt").write_text(
-        "plugins stable false\nunified_exec stable true\n",
-        encoding="utf-8",
-    )
+    (runtime / "pi-environment.json").write_bytes(canonical_json_bytes(PI_RUNTIME_ENVIRONMENT))
+    (runtime / "pi-version.txt").write_text(f"{PI_VERSION}\n", encoding="utf-8")
     write_json(runtime / "runtime-policy.json", RUNTIME_POLICY)
     write_json(runtime / "runtime-cleanup.json", RUNTIME_CLEANUP_RECEIPT)
     write_json(runtime / "container-cleanup.json", CONTAINER_CLEANUP_RECEIPT)
@@ -192,8 +187,8 @@ def _write_runtime_policy_receipts(root: Path) -> None:
     )
     observation = inspect_runtime_artifacts(
         (),
-        effective_config_sha256=sha256_file(runtime / "codex-effective-config.toml"),
-        effective_features_sha256=sha256_file(runtime / "codex-effective-features.txt"),
+        effective_config_sha256=sha256_file(runtime / "pi-environment.json"),
+        effective_features_sha256=sha256_file(runtime / "pi-version.txt"),
         runtime_policy_sha256=sha256_file(runtime / "runtime-policy.json"),
         runtime_cleanup_sha256=sha256_file(runtime / "runtime-cleanup.json"),
         container_cleanup_sha256=sha256_file(runtime / "container-cleanup.json"),
@@ -210,16 +205,29 @@ def test_complete_observed_runtime_receipt_set_is_verified(tmp_path: Path) -> No
     assert verify_completed_export(destination) == manifest
 
 
-def test_observed_runtime_feature_state_mismatch_is_rejected(tmp_path: Path) -> None:
+def test_observed_runtime_version_mismatch_is_rejected(tmp_path: Path) -> None:
     staging = tmp_path / "staging"
     destination = tmp_path / "completed"
     fields = materialize_staging(staging)
     _write_runtime_policy_receipts(staging)
-    (staging / "runtime/codex-effective-features.txt").write_text(
-        "plugins stable true\nunified_exec stable true\n",
+    (staging / "runtime/pi-version.txt").write_text(
+        f"{PI_VERSION}-tampered\n",
         encoding="utf-8",
     )
-    with pytest.raises(ExportError, match="plugin feature state mismatch"):
+    with pytest.raises(ExportError, match="effective pi runtime version mismatch"):
+        publish_completed_export(staging, destination, manifest_fields=fields)
+
+
+def test_observed_runtime_environment_mismatch_is_rejected(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    destination = tmp_path / "completed"
+    fields = materialize_staging(staging)
+    _write_runtime_policy_receipts(staging)
+    (staging / "runtime/pi-environment.json").write_text(
+        '{"PI_OFFLINE":"0"}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ExportError, match="environment receipt mismatch"):
         publish_completed_export(staging, destination, manifest_fields=fields)
 
 
@@ -229,10 +237,7 @@ def test_partial_runtime_receipt_set_is_rejected(tmp_path: Path) -> None:
     fields = materialize_staging(staging)
     runtime = staging / "runtime"
     runtime.mkdir()
-    (runtime / "codex-effective-config.toml").write_text(
-        TELEMETRY_CONFIG_TOML,
-        encoding="utf-8",
-    )
+    (runtime / "pi-environment.json").write_bytes(canonical_json_bytes(PI_RUNTIME_ENVIRONMENT))
     with pytest.raises(ExportError, match="one complete set"):
         publish_completed_export(staging, destination, manifest_fields=fields)
 
@@ -261,7 +266,7 @@ def test_interrupted_export_requires_strict_operator_receipt(
             {
                 "schema_version": "cernora.reference.operator-interrupt/v1",
                 "operator_signal": "SIGTERM",
-                "target": "active-codex-process",
+                "target": "active-pi-process",
                 "verified_signal_count": 1,
             },
         )

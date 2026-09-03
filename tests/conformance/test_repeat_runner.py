@@ -61,8 +61,8 @@ def _plan_payload() -> dict[str, object]:
         "companion_version": "0.2.0",
         "cernora_version": "0.1.2",
         "connector": {
-            "connector_id": "cernora-reference-harbor-codex",
-            "connector_version": "1",
+            "connector_id": "cernora-reference-harbor-pi",
+            "connector_version": "2",
             "platform_qualification": "macos-arm64",
         },
         "experiment_specs": [item.model_dump(mode="json") for item in specs],

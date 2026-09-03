@@ -68,12 +68,12 @@ def valid_payload() -> dict[str, object]:
                 "configuration_sha256": DIGEST,
             },
             "runtime": {
-                "name": "codex",
-                "version": "0.148.0",
+                "name": "pi",
+                "version": "0.84.4",
                 "configuration_sha256": DIGEST,
             },
             "model": {
-                "name": "gpt-5.6-terra",
+                "name": "deepseek/deepseek-v4-flash",
                 "reasoning_effort": "medium",
                 "web_search": False,
                 "provider_egress": "required-allowed",
@@ -217,7 +217,7 @@ def test_report_rejects_nonportable_or_unbound_content(mutation: str) -> None:
         elif mutation == "secret":
             argv.append("sk-proj-" + "ThisIsProvablyFakeButLooksLikeASecret123")
         elif mutation == "env":
-            argv.append("CODEX_AUTH_JSON_PATH=auth.json")
+            argv.append("PI_AUTH_JSON_PATH=auth.json")
         else:
             argv.append("`\n## Forged conclusion")
     with pytest.raises(ReportError):

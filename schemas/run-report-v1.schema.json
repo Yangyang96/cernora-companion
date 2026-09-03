@@ -554,7 +554,7 @@
       "additionalProperties": false,
       "properties": {
         "name": {
-          "const": "gpt-5.6-terra",
+          "const": "deepseek/deepseek-v4-flash",
           "title": "Name",
           "type": "string"
         },
@@ -837,12 +837,12 @@
           "type": "string"
         },
         "name": {
-          "const": "codex",
+          "const": "pi",
           "title": "Name",
           "type": "string"
         },
         "version": {
-          "const": "0.148.0",
+          "const": "0.84.4",
           "title": "Version",
           "type": "string"
         }

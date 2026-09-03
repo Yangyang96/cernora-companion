@@ -2,7 +2,7 @@
 
 The Companion Repeat Runner is the frozen `cernora-reference-workflow==0.2.0` Milestone 1
 orchestration boundary. It is not Cernora Core, a generic Runtime connector, or a native batch
-service. Its only live adapter is the source-tree-only qualified Harbor `0.16.1` / Codex `0.148.0`
+service. Its only live adapter is the source-tree-only qualified Harbor `0.16.1` / pi `0.84.4`
 connector already used by this repository. Milestone 2 is an additive offline consumer; it does
 not reinterpret or rewrite the M1 contracts described below.
 
@@ -32,9 +32,10 @@ uv run experiment run /absolute/path/to/run-plan.json \
 ```
 
 Both the execution directory and its `<execution>.pack` sidecar must be new. Live execution also
-requires the external `CODEX_AUTH_JSON_PATH`, explicit credential-free provider proxy variables,
-and the same qualified macOS Apple Silicon environment as the Priority 3 tracer. Proxy endpoints
-are operational inputs and are redacted from portable evidence.
+requires the external `PI_AUTH_JSON_PATH`, the same qualified macOS Apple Silicon environment as
+the Priority 3 tracer, and — only when an operator routes the Agent through an intermediate
+provider — explicit credential-free proxy variables, which are then validated as an all-or-nothing
+set. Proxy endpoints are operational inputs and are redacted from portable evidence.
 
 ## Sequential execution, resume, and budgets
 

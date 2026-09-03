@@ -9,7 +9,7 @@ Runtime, Harness, credential, orchestration, or publication responsibilities.
 
 ```text
 ExperimentSpec v1
-  -> Harbor 0.16.1 and Codex CLI 0.148.0 (live, local, manual)
+  -> Harbor 0.16.1 and pi 0.84.4 (live, local, manual)
   -> immutable attempt and task-owned Test Runner receipt
   -> completed-export/v1 (closed, hashed, secret-scanned)
   -> offline companion Adapter
@@ -18,7 +18,7 @@ ExperimentSpec v1
   -> run-report/v1 JSON plus derived Markdown
 ```
 
-Harbor owns the task container and Runtime lifecycle. Codex owns Agent behavior. The task-owned
+Harbor owns the task container and Runtime lifecycle. pi owns Agent behavior. The task-owned
 Test Runner is the only behavioral verdict authority. The companion exporter owns the closed
 export boundary, while the Adapter performs a pure translation after export verification.
 Cernora owns import, Profile evaluation, canonical result publication, and strict reload.
@@ -79,7 +79,8 @@ identity, retry relationships, conclusion consistency, units, and portability.
 Live authentication is supplied from outside the repository and is not an experiment identity.
 Authentication files, their paths and digests, Runtime homes, environment dumps, account data,
 raw transcripts, and host paths are prohibited from exports and reports. Provider egress is
-allowed for Codex, web search is disabled, and no network-isolation claim is made.
+allowed for the pinned direct provider, web search is disabled, and no network-isolation claim
+is made.
 
 Frozen adaptation, evaluation, strict reload, and report rendering perform no Runtime, Docker,
 shell, Git, test, or network action. Commands in a report are data for reproducibility, not

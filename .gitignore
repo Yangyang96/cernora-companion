@@ -25,6 +25,11 @@ build/
 dist/
 *.egg-info/
 
+# Vendored pi runtime build context (prepared per images/pi-runtime/README.md).
+images/pi-runtime/node_modules/
+images/pi-runtime/node-v22.23.2-linux-arm64.tar.gz
+
 # Local editor and OS state.
 .DS_Store
 *.swp
+.omc/

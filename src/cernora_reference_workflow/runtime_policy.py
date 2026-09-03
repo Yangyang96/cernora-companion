@@ -9,53 +9,86 @@ from urllib.parse import SplitResult, urlsplit, urlunsplit
 from cernora_reference_workflow.common import ContractError, canonical_json_bytes, sha256_bytes
 from cernora_reference_workflow.experiment_spec import StrictContract
 
-TELEMETRY_CONFIG_TOML = """[analytics]
-enabled = false
+PI_VERSION = "0.84.4"
+PI_NODE_VERSION = "22.23.2"
+PI_NPM_PACKAGE = "@earendil-works/pi-coding-agent"
+PI_INSTALL_ROOT = "/opt/pi"
+PI_CLI_PATH = "/usr/local/bin/pi"
+PI_CLI_ENTRYPOINT = "/opt/pi/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
+PI_NODE_PATH = "/usr/local/bin/node"
+PI_CONFIG_DIR = "/tmp/pi-home"
+PI_SECRETS_DIR = "/tmp/pi-secrets"
+PI_PACKAGE_LOCK_SHA256 = "3831b9425e6e5c74b2ec63dd3255e8435076693aed04e5eb575d12e203a485f1"
+PI_PACKAGE_JSON_SHA256 = "e7d9eb868d163fd96c53fffb05799bbfdb0af20b87f1ac8ea6e0559014caa568"
+PI_NODE_TARBALL_SHA256 = "013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30"
+PI_NODE_NATIVE_SHA256 = "1a638b0fe2b68da0489276aca95526c5122fc61ba54d6a2d0d00c1c92ab7b876"
+PI_CLI_ENTRYPOINT_SHA256 = "840d1e8e689ed9e4937bcb00b9a810e02a8567d9afb10a47097f11ca93ea1521"
+PI_RUNTIME_TARGET: Literal["active-pi-process"] = "active-pi-process"
+RUNTIME_INTERRUPT_TARGET: Literal["active-pi-process"] = PI_RUNTIME_TARGET
 
-[feedback]
-enabled = false
-
-[otel]
-exporter = "none"
-
-[features]
-plugins = false
-unified_exec = true
-"""
-CODEX_RUNTIME_INSTALLATION = {
-    "codex_native_sha256": "7515d0b61e723374c68d4acdcb8815e378f84d088b0c50638f27d1094bffe536",
-    "codex_platform": "aarch64-unknown-linux-musl",
-    "codex_platform_tarball_sha256": (
-        "feba463f31f8cda589192d5d3339359c5b35bc1366e36909a62d4e488a6822e5"
-    ),
-    "codex_version": "0.148.0",
-    "installation_mode": "preinstalled-runtime-base",
-    "rg_sha256": "e36d0eb52e70696bdf1781392722e05a21bb91d3b7b762ef5ec20e5df2ec687b",
+PI_RUNTIME_ENVIRONMENT = {
+    "PI_CODING_AGENT_DIR": PI_CONFIG_DIR,
+    "PI_OFFLINE": "1",
+    "PI_SKIP_VERSION_CHECK": "1",
+    "PI_TELEMETRY": "0",
 }
-PREINSTALLED_CODEX_CHECK_COMMAND = (
-    "set -euo pipefail; "
-    "test \"$(codex --version)\" = 'codex-cli 0.148.0'; "
-    "printf '%s  %s\\n' "
-    "'7515d0b61e723374c68d4acdcb8815e378f84d088b0c50638f27d1094bffe536' "
-    "'/opt/codex/bin/codex' "
-    "'e36d0eb52e70696bdf1781392722e05a21bb91d3b7b762ef5ec20e5df2ec687b' "
-    "'/opt/codex/codex-path/rg' | sha256sum --check --strict >/dev/null"
-)
-RUNTIME_POLICY = {
-    "analytics_enabled": False,
-    "approval_and_agent_sandbox_bypassed_inside_container": True,
-    "ephemeral_auth_cleanup_required": True,
-    "feedback_enabled": False,
+
+PI_RUNTIME_INSTALLATION = {
     "installation_mode": "preinstalled-runtime-base",
-    "otel_exporter": "none",
-    "plugins_enabled": False,
+    "node_native_sha256": PI_NODE_NATIVE_SHA256,
+    "node_platform": "linux-arm64",
+    "node_tarball_sha256": PI_NODE_TARBALL_SHA256,
+    "node_version": PI_NODE_VERSION,
+    "package_json_sha256": PI_PACKAGE_JSON_SHA256,
+    "package_lock_sha256": PI_PACKAGE_LOCK_SHA256,
+    "pi_cli_entrypoint_sha256": PI_CLI_ENTRYPOINT_SHA256,
+    "pi_cli_path": PI_CLI_PATH,
+    "pi_install_root": PI_INSTALL_ROOT,
+    "pi_npm_package": PI_NPM_PACKAGE,
+    "pi_version": PI_VERSION,
+    "python_base_image": (
+        "python:3.12.13-slim-bookworm@sha256:"
+        "4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2"
+    ),
+}
+
+PREINSTALLED_PI_CHECK_COMMAND = (
+    "set -euo pipefail; "
+    f"test \"$(pi --version)\" = '{PI_VERSION}'; "
+    f"test \"$(node --version)\" = 'v{PI_NODE_VERSION}'; "
+    "printf '%s  %s\\n' "
+    f"'{PI_PACKAGE_LOCK_SHA256}' "
+    f"'{PI_INSTALL_ROOT}/package-lock.json' "
+    f"'{PI_PACKAGE_JSON_SHA256}' "
+    f"'{PI_INSTALL_ROOT}/package.json' "
+    f"'{PI_CLI_ENTRYPOINT_SHA256}' "
+    f"'{PI_CLI_ENTRYPOINT}' "
+    f"'{PI_NODE_NATIVE_SHA256}' "
+    "'/usr/local/bin/node' | sha256sum --check --strict >/dev/null"
+)
+
+RUNTIME_POLICY = {
+    "agent_process_isolated_in_container": True,
+    "context_file_discovery": "disabled",
+    "ephemeral_auth_cleanup_required": True,
+    "extensions_discovery": "disabled",
+    "install_telemetry_enabled": False,
+    "installation_mode": "preinstalled-runtime-base",
+    "offline_environment": {
+        "PI_OFFLINE": "1",
+        "PI_SKIP_VERSION_CHECK": "1",
+        "PI_TELEMETRY": "0",
+    },
+    "prompt_template_discovery": "disabled",
     "provider_proxy": {
-        "configuration": "operator-environment",
-        "required": True,
+        "configuration": "direct-provider-egress",
+        "required": False,
         "value_recording": "redacted",
     },
-    "reasoning_summary": "none",
-    "unified_exec_enabled": True,
+    "session_persistence_required": True,
+    "skill_discovery": "disabled",
+    "startup_network_operations": "disabled",
+    "theme_discovery": "disabled",
     "web_search": "disabled",
 }
 
@@ -98,10 +131,11 @@ def _container_proxy_url(value: str, *, variable: str) -> str:
 
 
 def resolve_provider_proxy_environment(environ: Mapping[str, str]) -> dict[str, str]:
-    """Resolve explicit host proxy settings into the Agent container environment.
+    """Resolve optional explicit host proxy settings into the Agent container environment.
 
-    Dedicated ``CERNORA_*`` values take precedence. Lowercase conventional proxy variables are
-    next so an operator's explicit shell exports override unrelated inherited uppercase values.
+    The supported direct provider egress does not require a proxy, so no proxy variable is
+    mandatory. When an operator does provide one, ``CERNORA_*`` values take precedence and
+    lowercase conventional proxy variables are next, mirroring the historical precedence.
     Raw proxy endpoints are never placed in the frozen Runtime policy or public report.
     """
 
@@ -109,20 +143,29 @@ def resolve_provider_proxy_environment(environ: Mapping[str, str]) -> dict[str, 
     for output_name, input_names in _PROXY_INPUTS.items():
         selected = next((environ[name] for name in input_names if environ.get(name)), None)
         if selected is None:
-            raise ContractError(f"live execution requires one of: {', '.join(input_names)}")
+            continue
         resolved[output_name] = _container_proxy_url(selected, variable=input_names[0])
-    resolved["NO_PROXY"] = "localhost,127.0.0.1"
+    if resolved:
+        for name in _PROXY_INPUTS:
+            if name not in resolved:
+                raise ContractError(
+                    f"provider proxy configuration is all-or-nothing; missing {name}"
+                )
+        resolved["NO_PROXY"] = "localhost,127.0.0.1"
     return resolved
 
 
-RUNTIME_CLEANUP_RECEIPT = {"codex_home_removed": True, "secrets_dir_removed": True}
+RUNTIME_CLEANUP_RECEIPT = {
+    "pi_config_dir_removed": True,
+    "pi_secrets_dir_removed": True,
+}
+
 RUNTIME_CONFIGURATION_SHA256 = sha256_bytes(
     canonical_json_bytes(
         {
-            "codex_config_toml_sha256": sha256_bytes(TELEMETRY_CONFIG_TOML.encode("utf-8")),
-            "codex_runtime_installation": CODEX_RUNTIME_INSTALLATION,
+            "pi_environment_sha256": sha256_bytes(canonical_json_bytes(PI_RUNTIME_ENVIRONMENT)),
+            "pi_runtime_installation": PI_RUNTIME_INSTALLATION,
             "policy": RUNTIME_POLICY,
-            "strict_config": True,
         }
     )
 )
@@ -131,17 +174,27 @@ RUNTIME_CONFIGURATION_SHA256 = sha256_bytes(
 class OperatorInterruptReceipt(StrictContract):
     schema_version: Literal["cernora.reference.operator-interrupt/v1"]
     operator_signal: Literal["SIGINT"]
-    target: Literal["active-codex-process"]
+    target: Literal["active-pi-process"]
     verified_signal_count: Literal[1]
 
 
 __all__ = [
-    "CODEX_RUNTIME_INSTALLATION",
-    "PREINSTALLED_CODEX_CHECK_COMMAND",
+    "PI_CLI_ENTRYPOINT",
+    "PI_CLI_PATH",
+    "PI_CONFIG_DIR",
+    "PI_INSTALL_ROOT",
+    "PI_NPM_PACKAGE",
+    "PI_PACKAGE_LOCK_SHA256",
+    "PI_RUNTIME_ENVIRONMENT",
+    "PI_RUNTIME_INSTALLATION",
+    "PI_RUNTIME_TARGET",
+    "PI_SECRETS_DIR",
+    "PI_VERSION",
+    "PREINSTALLED_PI_CHECK_COMMAND",
     "RUNTIME_CLEANUP_RECEIPT",
     "RUNTIME_CONFIGURATION_SHA256",
+    "RUNTIME_INTERRUPT_TARGET",
     "RUNTIME_POLICY",
-    "TELEMETRY_CONFIG_TOML",
     "OperatorInterruptReceipt",
     "resolve_provider_proxy_environment",
 ]

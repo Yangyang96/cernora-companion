@@ -66,8 +66,8 @@ def valid_payload() -> dict[str, object]:
         "companion_version": "0.3.0",
         "cernora_version": "0.1.4",
         "connector": {
-            "connector_id": "cernora-reference-harbor-codex",
-            "connector_version": "1",
+            "connector_id": "cernora-reference-harbor-pi",
+            "connector_version": "2",
             "platform_qualification": "macos-arm64",
         },
         "experiment_specs": [spec.model_dump(mode="json") for spec in specs],

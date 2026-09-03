@@ -1,4 +1,4 @@
-"""Private adapter for the repository's one qualified Harbor/Codex tracer."""
+"""Private adapter for the repository's one qualified Harbor/pi tracer."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _tracer_script() -> Path:
     candidate = Path(__file__).resolve().parents[2] / "scripts" / "run_tracer.py"
     if not candidate.is_file() or candidate.is_symlink():
         raise ContractError(
-            "the qualified Harbor/Codex tracer is unavailable; run from the companion source tree"
+            "the qualified Harbor/pi tracer is unavailable; run from the companion source tree"
         )
     return candidate
 
@@ -58,7 +58,7 @@ def execute_qualified_live_attempt(request: _AttemptRequest) -> None:
     if result.returncode != 0:
         diagnostic = result.stderr.strip().splitlines()
         detail = diagnostic[-1] if diagnostic else "qualified tracer failed without diagnostics"
-        raise ContractError(f"qualified Harbor/Codex attempt failed: {detail}")
+        raise ContractError(f"qualified Harbor/pi attempt failed: {detail}")
     # The adapter only proves publication happened. The Runner's mandatory
     # strict reload owns contract verification and binding to ActiveAttempt.
     if not request.destination.is_dir() or request.destination.is_symlink():

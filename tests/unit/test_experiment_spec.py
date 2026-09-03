@@ -29,10 +29,10 @@ def valid_payload() -> dict[str, object]:
         },
         "harness": {"name": "harbor", "version": "0.16.1", "configuration_sha256": DIGEST},
         "runtime": {
-            "name": "codex",
-            "version": "0.148.0",
+            "name": "pi",
+            "version": "0.84.4",
             "configuration_sha256": DIGEST,
-            "model": "gpt-5.6-terra",
+            "model": "deepseek/deepseek-v4-flash",
             "reasoning_effort": "medium",
         },
         "prompt_sha256": DIGEST,

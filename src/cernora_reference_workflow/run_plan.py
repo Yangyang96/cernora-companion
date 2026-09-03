@@ -36,8 +36,8 @@ class RunPlanCell(StrictContract):
 
 
 class ConnectorIdentity(StrictContract):
-    connector_id: Literal["cernora-reference-harbor-codex"]
-    connector_version: Literal["1"]
+    connector_id: Literal["cernora-reference-harbor-pi"]
+    connector_version: Literal["2"]
     platform_qualification: Literal["macos-arm64"]
 
 

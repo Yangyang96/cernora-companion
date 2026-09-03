@@ -76,9 +76,9 @@ class ComponentPin(StrictContract):
 
 
 class RuntimeContract(ComponentPin):
-    name: Literal["codex"]
-    version: Literal["0.148.0"]
-    model: Literal["gpt-5.6-terra"]
+    name: Literal["pi"]
+    version: Literal["0.84.4"]
+    model: Literal["deepseek/deepseek-v4-flash"]
     reasoning_effort: Literal["medium"]
 
 

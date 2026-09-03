@@ -25,9 +25,10 @@ from cernora_reference_workflow.runtime_observation import (
     inspect_runtime_artifacts,
 )
 from cernora_reference_workflow.runtime_policy import (
+    PI_RUNTIME_ENVIRONMENT,
+    PI_VERSION,
     RUNTIME_CLEANUP_RECEIPT,
     RUNTIME_POLICY,
-    TELEMETRY_CONFIG_TOML,
     OperatorInterruptReceipt,
 )
 from cernora_reference_workflow.secrets import require_secret_free
@@ -56,9 +57,9 @@ OPTIONAL_RUNTIME_PATHS = frozenset(
         "runtime/harbor-trial-config.json",
         "runtime/harbor-trial-result.json",
         "runtime/trajectory.json",
-        "runtime/codex-events.jsonl",
-        "runtime/codex-effective-config.toml",
-        "runtime/codex-effective-features.txt",
+        "runtime/pi-events.jsonl",
+        "runtime/pi-environment.json",
+        "runtime/pi-version.txt",
         "runtime/runtime-policy.json",
         "runtime/runtime-cleanup.json",
         "runtime/operator-interrupt.json",
@@ -169,7 +170,7 @@ def validate_allowlist(paths: set[str]) -> None:
             or path in OPTIONAL_RUNTIME_PATHS
             or path.startswith("candidate/files/")
             or (
-                path.startswith("runtime/codex-session/")
+                path.startswith("runtime/pi-session/")
                 and path.endswith(".jsonl")
                 and path.count("/") == 2
             )
@@ -216,8 +217,8 @@ def verify_completed_export(root: Path) -> CompletedExportManifest:
             raise ExportError(f"media type mismatch for {entry.path}")
 
     runtime_receipts = {
-        "runtime/codex-effective-config.toml",
-        "runtime/codex-effective-features.txt",
+        "runtime/pi-environment.json",
+        "runtime/pi-version.txt",
         "runtime/runtime-policy.json",
         "runtime/runtime-cleanup.json",
         "runtime/container-cleanup.json",
@@ -228,20 +229,12 @@ def verify_completed_export(root: Path) -> CompletedExportManifest:
     if present_runtime_receipts and present_runtime_receipts != runtime_receipts:
         raise ExportError("Runtime policy receipts must be present as one complete set")
     if present_runtime_receipts:
-        if files["runtime/codex-effective-config.toml"].read_text(encoding="utf-8") != (
-            TELEMETRY_CONFIG_TOML
+        if files["runtime/pi-environment.json"].read_bytes() != canonical_json_bytes(
+            PI_RUNTIME_ENVIRONMENT
         ):
-            raise ExportError("effective Codex telemetry configuration mismatch")
-        features = files["runtime/codex-effective-features.txt"].read_text(encoding="utf-8")
-        feature_states = {
-            fields[0]: fields[-1]
-            for line in features.splitlines()
-            if len(fields := line.split()) >= 3
-        }
-        if feature_states.get("plugins") != "false":
-            raise ExportError("effective Codex plugin feature state mismatch")
-        if feature_states.get("unified_exec") != "true":
-            raise ExportError("effective Codex unified-exec feature state mismatch")
+            raise ExportError("effective pi runtime environment receipt mismatch")
+        if files["runtime/pi-version.txt"].read_text(encoding="utf-8").strip() != PI_VERSION:
+            raise ExportError("effective pi runtime version mismatch")
         if files["runtime/runtime-policy.json"].read_bytes() != canonical_json_bytes(
             RUNTIME_POLICY
         ):
@@ -260,18 +253,18 @@ def verify_completed_export(root: Path) -> CompletedExportManifest:
             RuntimeBoundaryObservation,
         )
         assert isinstance(observation, RuntimeBoundaryObservation)
-        codex_artifact_paths = tuple(
+        pi_artifact_paths = tuple(
             sorted(
                 path
                 for path in observed_paths
-                if path in {"runtime/trajectory.json", "runtime/codex-events.jsonl"}
-                or path.startswith("runtime/codex-session/")
+                if path in {"runtime/trajectory.json", "runtime/pi-events.jsonl"}
+                or path.startswith("runtime/pi-session/")
             )
         )
         regenerated = inspect_runtime_artifacts(
-            tuple((path, files[path]) for path in codex_artifact_paths),
-            effective_config_sha256=sha256_file(files["runtime/codex-effective-config.toml"]),
-            effective_features_sha256=sha256_file(files["runtime/codex-effective-features.txt"]),
+            tuple((path, files[path]) for path in pi_artifact_paths),
+            effective_config_sha256=sha256_file(files["runtime/pi-environment.json"]),
+            effective_features_sha256=sha256_file(files["runtime/pi-version.txt"]),
             runtime_policy_sha256=sha256_file(files["runtime/runtime-policy.json"]),
             runtime_cleanup_sha256=sha256_file(files["runtime/runtime-cleanup.json"]),
             container_cleanup_sha256=sha256_file(files["runtime/container-cleanup.json"]),
