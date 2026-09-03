@@ -40,9 +40,14 @@ reviewable evidence. Running a subset is not publication approval.
 
 ## Real and derived cases
 
-- [ ] A real pi attempt supplies the successful repair export. The historical Codex evidence
-      remains recorded and frozen; the switched live adapter needs a fresh authorized attempt.
-- [ ] A different real completed pi attempt supplies the behavioral failure export.
+- [x] A real pi attempt supplies the successful repair export: the pi-era native acceptance
+      execution (2026-09-03, `reports/private/m1-native-acceptance-pi-20260903-r2`, DeepSeek
+      `deepseek-v4-flash`) closed 3/3 v1 repair Trials as `pass` with strict-reload evaluations,
+      and the standalone v1 and v2 tracer runs both passed end-to-end.
+- [ ] A different real completed pi attempt supplies the behavioral failure export. In the
+      pi-era runs so far the v2 task was solved or timed out instead of failing behaviorally;
+      the behavioral-failure class is currently covered only by deterministic derived
+      mutations from the successful export.
 - [x] Real timeout and interruption attempts are frozen without automatic retry.
 - [x] Missing-artifact, digest-mismatch, authority-mismatch, and planted-secret cases are labeled as
       deterministic derived mutations with source digest and recipe identity.
@@ -52,8 +57,9 @@ reviewable evidence. Running a subset is not publication approval.
 ## Native acceptance
 
 - [x] The complete tracer passes on macOS Apple Silicon with the pinned image.
-- [x] Subscription auth is injected from the explicit external auth-file path into only the
-      ephemeral Runtime home and is removed during cleanup.
+- [x] External provider auth is injected from the explicit `PI_AUTH_JSON_PATH` file into only
+      the ephemeral Runtime home and is removed during cleanup; the cleaned receipt is
+      verified under agent timeouts (shielded cleanup) and redaction scans stay clean.
 - [x] Effective telemetry settings and exported artifacts confirm telemetry is disabled.
 - [x] Observed provider egress and disabled web search are documented without claiming network
       isolation.
@@ -73,17 +79,20 @@ reviewable evidence. Running a subset is not publication approval.
       reproduces verified bytes without credentials, network, Runtime, Docker, Git, or shell.
 - [x] Diagnostics state lifecycle and completeness only; M1 publishes no aggregate quality rate,
       ranking, winner, or comparative conclusion.
-- [ ] A native 12-Trial live run has been observed with the one qualified source-tree Harbor/pi
-      connector on macOS Apple Silicon. This is a manual acceptance item, not a CI claim; the
-      historical Codex run remains recorded but is no longer connector evidence.
+- [x] A native 12-Trial live run has been observed with the one qualified source-tree Harbor/pi
+      connector on macOS Apple Silicon (`reports/private/m1-native-acceptance-pi-20260903-r2`:
+      2026-09-03, 12/12 Trials, 12 Attempts, zero retries; 3 `pass` and 9 timeout-derived
+      evaluation-invalid Trials, `M1-native-acceptance` identity accepted before execution).
+      This is a manual acceptance item, not a CI claim; the historical Codex run remains
+      recorded but is no longer connector evidence.
 - [ ] A pi-era offline fixture trio replaces `examples/m3-offline` for the current release
       verifiers. The committed Codex-era trio is frozen in place as historical evidence
       (pinned by `tests/unit/test_runtime_era_boundary.py`) and is verified with the
       Codex-era revision of this repository, not by the current contracts.
-- [x] The accepted Execution retained a graceful `stopped` checkpoint and resumed the same identity
-      to `completed`; it contains 11 strictly rebuildable Evaluations and one naturally occurring
-      non-retryable `runtime-pre-terminal-failure` with unavailable evaluation status.
-      (Historical observation, Codex-era evidence.)
+- [x] The accepted Execution retained a graceful `stopped` checkpoint (after Trial 7, at the
+      operator SIGINT boundary request) and resumed the same identity to `completed`
+      (2026-09-03, pi/DeepSeek run): strictly rebuildable pass Evaluations for the v1 repair
+      cell and genuine unavailable lifecycle evidence from the timeout cells.
 - [x] The completed Pack strictly reloaded, rebuilt the Execution byte-for-byte, and all three
       portable trees passed credential, personal-path, Runtime-home, proxy-endpoint and undeclared
       file checks.
