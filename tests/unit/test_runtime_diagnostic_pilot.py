@@ -21,7 +21,13 @@ from cernora_reference_workflow.controlled_execution import (
     ControlledAttemptRequest,
 )
 from cernora_reference_workflow.controlled_live_attempt import ControlledHarborAttemptExecutor
-from cernora_reference_workflow.development_agent_pilot import DevelopmentAgentPilotPlan
+from cernora_reference_workflow.development_agent_pilot import (
+    PILOT_CASE_IDS,
+    DevelopmentAgentPilotPlan,
+    build_development_agent_pilot_plan,
+    load_development_pilot_corpus,
+    materialize_development_pilot_image_set,
+)
 from cernora_reference_workflow.runtime_diagnostic_pilot import (
     AmbiguousRuntimeDiagnosticAttempt,
     RuntimeDiagnosticPilotPlan,
@@ -36,6 +42,7 @@ from cernora_reference_workflow.runtime_diagnostic_pilot import (
 from cernora_reference_workflow.runtime_diagnostic_pilot import (
     _step_runtime_diagnostic_pilot as step_runtime_diagnostic_pilot,
 )
+from cernora_reference_workflow.study_preparation import ImplementationCandidate
 from tests.unit.test_controlled_execution import lifecycle_attempt
 from tests.unit.test_controlled_live_attempt import (
     AgentTimeoutResultProcess,
@@ -46,14 +53,46 @@ from tests.unit.test_controlled_live_attempt import (
 from tests.unit.test_study_preparation import _candidate_wheels
 
 FREE = 20 * 1024**3
-REPAIRED_PLAN_ID = "33544aa6d8ec292daf8b69390c4731ee67ee70184f2e7cd788c3baeeb4824099"
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE_PLAN = ROOT / "preparations" / "next-priority4-development-pilot-repair" / "plan.json"
+CORPUS = ROOT / "examples" / "priority4-development-pilot"
+SOURCE_PI_PLAN_ID = "e490d58fb7500d77019a5ca566809e0d7f0834a46597ca0989540e6d4cca9458"
 
 
 def _source_plan() -> DevelopmentAgentPilotPlan:
-    plan = DevelopmentAgentPilotPlan.from_file(SOURCE_PLAN)
-    assert plan.plan_id == REPAIRED_PLAN_ID
+    """Build the deterministically reproducible pi-era source development pilot Plan.
+
+    The historical ``preparations/next-priority4-development-pilot-repair`` bundle is
+    Codex-era evidence frozen by the era boundary; its identity cannot be regenerated
+    offline because it binds the original published wheels and Docker-built image
+    digests. The diagnostic authority instead pins this reproducible pi-era Plan built
+    from the same fresh corpus with an exact baseline shape.
+    """
+
+    corpus = load_development_pilot_corpus(CORPUS)
+    images = materialize_development_pilot_image_set(
+        build_base_image="cernora-reference/pi-runtime@sha256:" + "a" * 64,
+        images={
+            case_id: f"cernora-reference/p4-pilot-{case_id}@sha256:{index:064x}"
+            for index, case_id in enumerate(PILOT_CASE_IDS, start=1)
+        },
+    )
+    plan = build_development_agent_pilot_plan(
+        corpus=corpus,
+        images=images,
+        implementation_candidates=(
+            ImplementationCandidate(
+                name="cernora", version="0.1.4", kind="wheel", size=1, sha256="b" * 64
+            ),
+            ImplementationCandidate(
+                name="cernora-reference-workflow",
+                version="0.4.0",
+                kind="wheel",
+                size=1,
+                sha256="c" * 64,
+            ),
+        ),
+    )
+    assert plan.plan_id == SOURCE_PI_PLAN_ID
     return plan
 
 

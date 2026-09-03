@@ -9,8 +9,8 @@ identity; changing one requires a new frozen experiment and compatibility record
 | Cernora | exact public wheel `0.1.2` |
 | Cernora input | `agent.evaluator.evidence-bundle/v2` only |
 | Harbor | `0.16.1` |
-| Codex CLI | `0.148.0` |
-| Model | `gpt-5.6-terra`, reasoning effort `medium` |
+| pi coding agent | `0.84.4` on Node.js `22.23.2` |
+| Model | `deepseek/deepseek-v4-flash` via direct provider egress, thinking level `medium` |
 | Primary task | `tiny-calculator-v1`, version `1` |
 | Behavioral-failure task | `tiny-calculator-v2`, version `2`; separately versioned harder task |
 | Profile | `cernora-reference-coding-v1`, version `1.0.0` |
@@ -64,6 +64,19 @@ studies. One Companion ledger now owns preparation, reveal/acceptance, Repeat Ru
 pause/termination, completed Core publication, and offline rebuild. This changes orchestration,
 not the canonical bytes or meaning of historical M1–M3 artifacts.
 
+## Runtime switch boundary
+
+The live Runtime connector switched from Codex `0.148.0` to pi `0.84.4` as a new frozen identity,
+not an in-place mutation: current strict reloaders (ExperimentSpec, RunPlan, ControlledRunPlan,
+completed-export verification) accept only pi-era vocabulary, and RunPlan connector identity is
+`cernora-reference-harbor-pi` version `2`. Codex-era artifacts — the private local exports,
+attempts, and M1 acceptance Packs, and the checked-in `examples/m3-offline` fixture trio —
+remain on disk and in Git history as frozen historical evidence, but they are no longer
+loadable by the current contracts and must be verified with the codex-era revision of this
+repository (the `images/codex-runtime` revision recorded in `docs/compatibility-record.md`).
+A false promise of cross-era reload would be a weaker contract than this explicit break; the
+pi-era equivalents of the M3 offline fixture and the native acceptance evidence are new
+identities that must be frozen after the authorized pi live run.
 ## Report evolution
 
 `run-report/v1` is a companion artifact, not a Cernora import format. Readers must reject unknown
@@ -84,12 +97,12 @@ Lifecycle, evidence validity, and behavioral decision are different dimensions:
 | Missing, corrupt, mismatched, or unverifiable authority | `invalid` or `unavailable` | `inconclusive` |
 | Secret detected before export publication | no completed export | no evaluation claim |
 
-A Harness reward, Codex message, or trajectory prose cannot upgrade any row.
+A Harness reward, pi message, or trajectory prose cannot upgrade any row.
 
 The timeout variant keeps the v1 task authority but binds an explicit Harbor Agent timeout
 multiplier of `0.01` and effective limit of 3 seconds into a distinct ExperimentSpec. Operator
 interruption binds `operator_interrupt=true` into its own v1 Harness configuration and records a
-real `SIGINT` receipt against the active Codex process. Neither lifecycle is automatically
+real `SIGINT` receipt against the active pi process. Neither lifecycle is automatically
 retryable.
 
 ## Unsupported scope

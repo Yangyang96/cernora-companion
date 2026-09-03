@@ -23,15 +23,13 @@ from cernora_reference_workflow.common import (
 )
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority, load_visible_task
 from cernora_reference_workflow.m4_final_plan import materialize_m4_image_authority_set
+from cernora_reference_workflow.spec_builder import BASE_IMAGE
 
 _PLATFORM = "linux/arm64"
 _PRIMARY_TAG = "priority4-sanitized"
 _REPRO_TAG = "priority4-sanitized-repro-check"
 _SYSTEM_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-ACCEPTED_M4_RUNTIME_BASE = (
-    "cernora-reference/codex-runtime@sha256:"
-    "0e9ac928b97a83c54663f1086576039175b9bd4513b7d8d97f8173af62416788"
-)
+ACCEPTED_M4_RUNTIME_BASE = BASE_IMAGE
 ACCEPTED_BUILDX_SHA256 = "04f8b9356a9275de46e86d2f5848c7698467e39a71394323fedd4e22eb045c1e"
 
 

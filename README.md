@@ -2,7 +2,7 @@
 
 This private-by-default companion repository implements the Cernora Priority 3 reference
 coding-Agent workflow and the Priority 4 Companion Repeat Runner. Version `0.2.0` runs the exact
-approved Harbor and Codex versions locally, freezes closed Attempt exports, and performs its
+approved Harbor and pi versions locally, freezes closed Attempt exports, and performs its
 adaptation, evaluation, packing, and rebuild work through the public `cernora==0.1.2` wheel. The
 additive `0.2.1` Milestone 2 local release candidate consumes those frozen Packs with the matching
 Cernora Core `0.1.3` local release candidate. Additive `0.3.0` assembles authority-bound controlled
@@ -15,7 +15,7 @@ contracts rather than introducing another execution engine.
 
 The project is not part of Cernora Core. It owns orchestration, export validation, the
 `cernora-reference-coding-v1` Profile, and portable reports. It does not provide a generic
-Runtime connector or claim network isolation while Codex provider egress is enabled.
+Runtime connector or claim network isolation while pi provider egress is enabled.
 
 Companion `0.4.0` and Cernora Core `0.1.4` have not been publicly released. Their M3/M4 artifacts
 and acceptance evidence remain local.
@@ -133,7 +133,7 @@ Trials, at most 24 Attempts, and a 7,200-second wall budget. Verify and explicit
 exact identity before the authenticated run; request one graceful stop after at least one Trial,
 then resume the same Execution to completion.
 
-`run` and `resume` use the repository's single source-tree-only qualified Harbor/Codex connector;
+`run` and `resume` use the repository's single source-tree-only qualified Harbor/pi connector;
 M1 does not expose a generic connector SDK or native batch Runtime. Attempts and checkpoints are
 append-only, concurrency is fixed at one, and a crash with an active record but no atomically
 published terminal artifact fails closed as ambiguous. Attempt and total wall-time budgets are
@@ -174,12 +174,13 @@ gates contain no credentials and never invoke the live tracer. Live authenticate
 separate manual command:
 
 ```sh
-export http_proxy="http://127.0.0.1:${PROXY_PORT}"
-export https_proxy="http://127.0.0.1:${PROXY_PORT}"
-export all_proxy="socks5://127.0.0.1:${PROXY_PORT}"
-CODEX_AUTH_JSON_PATH=/absolute/path/to/auth.json \
+PI_AUTH_JSON_PATH=/absolute/path/to/pi-auth.json \
   uv run python scripts/run_tracer.py --spec examples/tiny-calculator-v1.json
 ```
+
+The external auth file uses pi's `auth.json` shape; for the pinned direct provider it contains
+exactly the provider-keyed entry, for example
+`{"deepseek": {"type": "api_key", "key": "<DeepSeek API key>"}}`.
 
 The real lifecycle matrix uses separately identity-bound inputs:
 
@@ -190,27 +191,31 @@ uv run python scripts/run_tracer.py --spec examples/tiny-calculator-v2.json
 # Three-second effective Agent timeout bound into its own ExperimentSpec.
 uv run python scripts/run_tracer.py --spec examples/tiny-calculator-v1-timeout.json
 
-# Real SIGINT sent to the active in-container Codex process.
+# Real SIGINT sent to the active in-container pi agent process.
 uv run python scripts/run_tracer.py --spec examples/tiny-calculator-v1-interruption.json \
   --operator-interrupt
 ```
 
-Every live command requires the external `CODEX_AUTH_JSON_PATH` and explicit provider proxy
-variables. Dedicated `CERNORA_HTTP_PROXY`, `CERNORA_HTTPS_PROXY`, and `CERNORA_ALL_PROXY` values
-take precedence; lowercase conventional variables are also accepted. Loopback hosts are mapped to
-`host.docker.internal` only for the Agent container, while schemes and ports remain operator-owned.
-Proxy URLs containing credentials are rejected, and raw endpoints are not retained in the frozen
-Runtime policy or public report. The v2 task is the separately versioned harder task permitted by
+Every live command requires the external `PI_AUTH_JSON_PATH`; the pinned provider (DeepSeek,
+direct egress at api.deepseek.com) needs no proxy. Optional explicit provider proxy variables
+remain honored for operators routing through international providers: dedicated `CERNORA_HTTP_PROXY`,
+`CERNORA_HTTPS_PROXY`, and `CERNORA_ALL_PROXY` values take precedence, lowercase conventional
+variables are also accepted, and the three entries must be provided all-or-nothing. Loopback hosts
+are mapped to `host.docker.internal` only for the Agent container, while schemes and ports remain
+operator-owned. Proxy URLs containing credentials are rejected, and raw endpoints are not retained
+in the frozen Runtime policy or public report. The v2 task is the separately versioned harder task permitted by
 the Priority 3 baseline; it never mutates or relabels the successful v1 export.
 
 ## Pinned image acquisition and offline task rebuild
 
-Acquire the exact Codex Runtime archive and build its verified Runtime image from the repository
-root. The Dockerfile checks the archive and native binary hashes before creating the tag:
+Acquire the exact pi Runtime context and build its verified Runtime image from the repository
+root. The build is fully offline: the Dockerfile verifies the official Node.js tarball, the
+vendored dependency tree, and the pi CLI bytes before creating the tag. Prepare the local build
+context first (node tarball plus `npm ci` tree) exactly as documented in `images/pi-runtime/README.md`:
 
 ```sh
 docker build --platform linux/arm64 \
-  --tag cernora-reference/codex-runtime:0.148.0 images/codex-runtime
+  --tag cernora-reference/pi-runtime:0.84.4 images/pi-runtime
 ```
 
 Once that exact Runtime image is local, the two task layers rebuild without network or image pulls:

@@ -58,7 +58,7 @@ def _isolated_environment() -> dict[str, str]:
     environment = os.environ.copy()
     for name in tuple(environment):
         if name.upper().endswith("_PROXY") or name in {
-            "CODEX_AUTH_JSON_PATH",
+            "PI_AUTH_JSON_PATH",
             "CERNORA_HTTP_PROXY",
             "CERNORA_HTTPS_PROXY",
             "CERNORA_ALL_PROXY",

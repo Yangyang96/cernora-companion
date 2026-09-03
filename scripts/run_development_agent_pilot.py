@@ -28,7 +28,6 @@ from cernora_reference_workflow.development_pilot_execution import (
     step_development_pilot_execution,
     summarize_development_pilot_execution,
 )
-from cernora_reference_workflow.runtime_policy import PROVIDER_PROXY_INPUT_NAMES
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -115,9 +114,9 @@ def _step(
         companion_wheel=companion_wheel,
         cernora_wheel=cernora_wheel,
     )
-    auth_value = os.environ.get("CODEX_AUTH_JSON_PATH")
+    auth_value = os.environ.get("PI_AUTH_JSON_PATH")
     if not auth_value:
-        raise ContractError("development pilot requires explicit CODEX_AUTH_JSON_PATH")
+        raise ContractError("development pilot requires explicit PI_AUTH_JSON_PATH")
     auth_file = Path(auth_value)
     assert state.plan.attempt_envelope_timeout_seconds is not None
     with tempfile.TemporaryDirectory(prefix="cernora-development-pilot-evaluation-") as temporary:
@@ -126,9 +125,7 @@ def _step(
             tasks=state.plan.corpus.tasks,
             evaluation_root=Path(temporary),
             auth_file=auth_file,
-            proxy_environment={
-                name: os.environ[name] for name in PROVIDER_PROXY_INPUT_NAMES if name in os.environ
-            },
+            proxy_environment=os.environ,
             close_unusable_runtime_evidence=True,
             attempt_envelope_grace_seconds=(
                 state.plan.attempt_envelope_timeout_seconds

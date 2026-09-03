@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from cernora_reference_workflow.common import (
     ContractError,
@@ -40,7 +41,7 @@ def _image_authorities(tmp_path: Path) -> Path:
         for index, case_id in enumerate(PILOT_CASE_IDS, start=1)
     }
     authority = materialize_development_pilot_image_set(
-        build_base_image="cernora-reference/codex-runtime@sha256:" + "a" * 64,
+        build_base_image="cernora-reference/pi-runtime@sha256:" + "a" * 64,
         images=images,
     )
     path = tmp_path / "images.json"
@@ -246,26 +247,24 @@ def test_bundle_rejects_self_consistent_review_or_corpus_rewrite(
         inspect_development_pilot_bundle(destination)
 
 
-def test_historical_unbound_bundle_remains_inspectable_but_not_current() -> None:
+def test_historical_unbound_bundle_is_frozen_codex_era_evidence() -> None:
+    """The era boundary freezes the historical v1 bundle; current contracts reject it."""
+
     historical = ROOT / "preparations" / "next-priority4-development-pilot"
+    assert (historical / "plan.json").is_file(), "historical evidence removed"
 
-    manifest = inspect_development_pilot_bundle(historical)
-    plan = DevelopmentAgentPilotPlan.from_file(historical / "plan.json")
-
-    assert manifest.plan_id == plan.plan_id
-    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v1"
-    assert plan.implementation_candidates is None
+    with pytest.raises(ValidationError, match="cernora-reference-harbor-pi"):
+        inspect_development_pilot_bundle(historical)
 
 
-def test_historical_v2_recovery_remains_inspectable_but_not_executable() -> None:
+def test_historical_v2_recovery_is_frozen_codex_era_evidence() -> None:
+    """The era boundary freezes the historical v2 bundle; current contracts reject it."""
+
     historical = ROOT / "preparations" / "next-priority4-development-pilot-recovery"
+    assert (historical / "plan.json").is_file(), "historical evidence removed"
 
-    manifest = inspect_development_pilot_bundle(historical)
-    plan = DevelopmentAgentPilotPlan.from_file(historical / "plan.json")
-
-    assert manifest.plan_id == plan.plan_id
-    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v2"
-    assert plan.attempt_envelope_timeout_seconds is None
+    with pytest.raises(ValidationError, match="cernora-reference-harbor-pi"):
+        inspect_development_pilot_bundle(historical)
 
 
 def test_runtime_attestation_binds_active_venv_to_exact_wheels(

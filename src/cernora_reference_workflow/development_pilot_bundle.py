@@ -73,7 +73,7 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
     maximum_wall_seconds: Literal[7200]
     concurrency: Literal[1]
     external_provider_scope: Literal["openai-codex-authenticated-generation-only"]
-    credential_source: Literal["CODEX_AUTH_JSON_PATH"]
+    credential_source: Literal["PI_AUTH_JSON_PATH"]
     proxy_sources: tuple[
         Literal[
             "CERNORA_HTTP_PROXY",
@@ -240,7 +240,7 @@ def _authorization_request(
         "maximum_wall_seconds": plan.execution.max_total_wall_time_seconds,
         "concurrency": plan.execution.concurrency,
         "external_provider_scope": plan.external_provider_scope,
-        "credential_source": "CODEX_AUTH_JSON_PATH",
+        "credential_source": "PI_AUTH_JSON_PATH",
         "proxy_sources": [
             "CERNORA_HTTP_PROXY",
             "CERNORA_HTTPS_PROXY",

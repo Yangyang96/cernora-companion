@@ -1,4 +1,4 @@
-"""Portable observations derived from actual Codex Runtime artifacts."""
+"""Portable observations derived from actual pi Runtime artifacts."""
 
 from __future__ import annotations
 
@@ -18,11 +18,13 @@ _PROHIBITED_TELEMETRY_MARKERS = (
     b'"type": "telemetry"',
     b"api.segment.io",
     b"api.honeycomb.io",
+    b"pi.dev/api/",
     b"opentelemetry",
     b"sentry.io",
 )
-_ITEM_COMPLETED = re.compile(rb'"type"\s*:\s*"item\.completed"')
-_AGENT_MESSAGE = re.compile(rb'"type"\s*:\s*"agent_message"')
+_PI_MESSAGE_END = re.compile(rb'"type"\s*:\s*"message_end"')
+_PI_ASSISTANT_ROLE = re.compile(rb'"role"\s*:\s*"assistant"')
+_PI_USAGE = re.compile(rb'"usage"\s*:\s*\{')
 
 CONTAINER_CLEANUP_RECEIPT = {"trial_container_absent": True}
 
@@ -53,10 +55,10 @@ class RuntimeArtifactObservation(StrictContract):
     def validate_path(self) -> RuntimeArtifactObservation:
         validate_relative_path(self.path)
         if not (
-            self.path in {"runtime/trajectory.json", "runtime/codex-events.jsonl"}
-            or self.path.startswith("runtime/codex-session/")
+            self.path in {"runtime/trajectory.json", "runtime/pi-events.jsonl"}
+            or self.path.startswith("runtime/pi-session/")
         ):
-            raise ValueError("Runtime observation path is not an approved Codex artifact")
+            raise ValueError("Runtime observation path is not an approved pi artifact")
         return self
 
 
@@ -80,7 +82,7 @@ class RuntimeBoundaryObservation(StrictContract):
         evidence = {item.sha256 for item in self.inspected_artifacts}
         if self.provider_egress == "observed":
             if self.provider_evidence_sha256 not in evidence:
-                raise ValueError("provider egress must bind an inspected Codex artifact")
+                raise ValueError("provider egress must bind an inspected pi artifact")
         elif self.provider_evidence_sha256 is not None:
             raise ValueError("unobserved provider egress cannot bind invented evidence")
         return self
@@ -95,6 +97,12 @@ def inspect_runtime_artifacts(
     runtime_cleanup_sha256: str,
     container_cleanup_sha256: str,
 ) -> RuntimeBoundaryObservation:
+    """Regenerate the boundary observation strictly from frozen pi Runtime artifacts.
+
+    ``effective_config_sha256`` and ``effective_features_sha256`` bind the pi
+    environment receipt and the pi version receipt of the same export.
+    """
+
     observations: list[RuntimeArtifactObservation] = []
     provider_evidence_sha256: str | None = None
     for relative, path in sorted(artifacts):
@@ -111,10 +119,14 @@ def inspect_runtime_artifacts(
                 sha256=digest,
             )
         )
+        # Provider evidence is event-type-level, not substring-level: an authoritative
+        # streamed ``message_end`` record from a real provider call. Prompt text alone
+        # containing ``"role":"assistant"`` and ``"usage":{`` cannot forge it.
         if (
             provider_evidence_sha256 is None
-            and _ITEM_COMPLETED.search(data)
-            and _AGENT_MESSAGE.search(data)
+            and _PI_MESSAGE_END.search(data)
+            and _PI_ASSISTANT_ROLE.search(data)
+            and _PI_USAGE.search(data)
         ):
             provider_evidence_sha256 = digest
     return RuntimeBoundaryObservation(

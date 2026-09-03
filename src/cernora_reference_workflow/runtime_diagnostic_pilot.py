@@ -57,7 +57,7 @@ DIAGNOSTIC_ATTEMPT_ENVELOPE_SECONDS = 360
 DIAGNOSTIC_MAX_WALL_SECONDS = 900
 DIAGNOSTIC_PREFLIGHT_FREE_BYTES = 15 * 1024**3
 DIAGNOSTIC_SAFE_STOP_FREE_BYTES = 8 * 1024**3
-REPAIRED_DEVELOPMENT_PLAN_ID = "33544aa6d8ec292daf8b69390c4731ee67ee70184f2e7cd788c3baeeb4824099"
+SOURCE_PI_DEVELOPMENT_PLAN_ID = "e490d58fb7500d77019a5ca566809e0d7f0834a46597ca0989540e6d4cca9458"
 CONSUMED_DIAGNOSTIC_PLAN_ID = "6a342640911cade0ed3bd381e3ff80e0327d5230817a72ef6bac5d46e8d8bd4a"
 CONSUMED_VALUE_FREE_DIAGNOSTIC_PLAN_ID = (
     "b039fa42eafc1a85be6e79bbbb4952639f64d8b4b89d3f62184b68838058ff76"
@@ -101,7 +101,7 @@ class RuntimeDiagnosticPilotPlan(StrictV2Contract):
     execution_authorized: Literal[False]
     authority_scope: Literal["development-only-runtime-diagnostic"]
     source_development_plan_id: Literal[
-        "33544aa6d8ec292daf8b69390c4731ee67ee70184f2e7cd788c3baeeb4824099"
+        "e490d58fb7500d77019a5ca566809e0d7f0834a46597ca0989540e6d4cca9458"
     ]
     task: ControlledTaskAuthority
     specification: ControlledExperimentSpecV2
@@ -442,8 +442,8 @@ def build_runtime_diagnostic_pilot_plan(
     implementation_candidates: tuple[ImplementationCandidate, ...],
 ) -> RuntimeDiagnosticPilotPlan:
     source = DevelopmentAgentPilotPlan.from_bytes(source.canonical_bytes())
-    if source.plan_id != REPAIRED_DEVELOPMENT_PLAN_ID:
-        raise ContractError("Runtime diagnostic source is not the repaired development Plan")
+    if source.plan_id != SOURCE_PI_DEVELOPMENT_PLAN_ID:
+        raise ContractError("Runtime diagnostic source is not the pinned development Plan")
     indexed_tasks = {item.case.case_id: item for item in source.corpus.tasks}
     indexed_specs = {item.task.task_id: item for item in source.experiment_specs}
     payload: dict[str, object] = {
@@ -1160,7 +1160,7 @@ def step_runtime_diagnostic_pilot(
     auth_file: Path | None = None,
     proxy_environment: Mapping[str, str] | None = None,
 ) -> RuntimeDiagnosticState:
-    """Run the exact Codex/Harbor diagnostic path or adopt its terminal artifact."""
+    """Run the exact pi/Harbor diagnostic path or adopt its terminal artifact."""
 
     started = time.monotonic()
     deadline = started + DIAGNOSTIC_MAX_WALL_SECONDS

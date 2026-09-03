@@ -57,7 +57,7 @@ FREE = 20 * 1024**3
 def _plan() -> DevelopmentAgentPilotPlan:
     corpus = load_development_pilot_corpus(CORPUS)
     images = materialize_development_pilot_image_set(
-        build_base_image="cernora-reference/codex-runtime@sha256:" + "a" * 64,
+        build_base_image="cernora-reference/pi-runtime@sha256:" + "a" * 64,
         images={
             case_id: f"cernora-reference/p4-pilot-{case_id}@sha256:{index:064x}"
             for index, case_id in enumerate(PILOT_CASE_IDS, start=1)

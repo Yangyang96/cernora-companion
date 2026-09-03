@@ -25,7 +25,6 @@ from cernora_reference_workflow.runtime_diagnostic_pilot import (
     runtime_diagnostic_custody_path,
     step_runtime_diagnostic_pilot,
 )
-from cernora_reference_workflow.runtime_policy import PROVIDER_PROXY_INPUT_NAMES
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -117,18 +116,16 @@ def _step(arguments: argparse.Namespace) -> RuntimeDiagnosticState:
     repository = arguments.repository_root.resolve(strict=True)
     if arguments.custody.resolve(strict=True) != _custody(repository, state.plan.plan_id):
         raise ContractError("Runtime diagnostic step uses another custody path")
-    auth_value = os.environ.get("CODEX_AUTH_JSON_PATH")
+    auth_value = os.environ.get("PI_AUTH_JSON_PATH")
     if state.status == "prepared" and not auth_value:
-        raise ContractError("Runtime diagnostic requires explicit CODEX_AUTH_JSON_PATH")
+        raise ContractError("Runtime diagnostic requires explicit PI_AUTH_JSON_PATH")
     return step_runtime_diagnostic_pilot(
         arguments.custody,
         repository_root=repository,
         cernora_wheel=arguments.cernora_wheel,
         companion_wheel=arguments.companion_wheel,
         auth_file=None if auth_value is None else Path(auth_value),
-        proxy_environment={
-            name: os.environ[name] for name in PROVIDER_PROXY_INPUT_NAMES if name in os.environ
-        },
+        proxy_environment=os.environ,
         accepted_plan_id=arguments.accept_plan_id,
         accepted_request_id=arguments.accept_request_id,
     )

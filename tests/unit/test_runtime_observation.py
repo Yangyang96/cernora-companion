@@ -25,7 +25,7 @@ def test_container_image_observation_rejects_mismatched_image_id() -> None:
 
 def _inspect(path: Path):  # type: ignore[no-untyped-def]
     return inspect_runtime_artifacts(
-        (("runtime/codex-events.jsonl", path),),
+        (("runtime/pi-events.jsonl", path),),
         effective_config_sha256=DIGEST,
         effective_features_sha256=DIGEST,
         runtime_policy_sha256=DIGEST,
@@ -36,7 +36,10 @@ def _inspect(path: Path):  # type: ignore[no-untyped-def]
 
 def test_provider_egress_observation_binds_actual_agent_message_artifact(tmp_path: Path) -> None:
     events = tmp_path / "events.jsonl"
-    events.write_bytes(b'{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n')
+    events.write_bytes(
+        b'{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],'
+        b'"usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"totalTokens":3}}}\n'
+    )
     observation = _inspect(events)
     assert observation.provider_egress == "observed"
     assert observation.provider_evidence_sha256 == sha256_file(events)
@@ -45,7 +48,21 @@ def test_provider_egress_observation_binds_actual_agent_message_artifact(tmp_pat
 
 def test_missing_provider_event_is_explicit_not_observed(tmp_path: Path) -> None:
     events = tmp_path / "events.jsonl"
-    events.write_bytes(b'{"type":"thread.started"}\n')
+    events.write_bytes(b'{"type":"session","version":3}\n')
+    observation = _inspect(events)
+    assert observation.provider_egress == "not-observed"
+    assert observation.provider_evidence_sha256 is None
+
+
+def test_prompt_text_cannot_forge_provider_egress_evidence(tmp_path: Path) -> None:
+    """Substring-level role/usage pairs without a ``message_end`` event are not evidence."""
+
+    events = tmp_path / "events.jsonl"
+    events.write_bytes(
+        b'{"type":"message","message":{"role":"user","content":'
+        b'"the schema literal is \\"role\\":\\"assistant\\",\\"usage\\":{\\"input\\":1}"}}\n'
+        b'{"echo":"assistant notes","role":"assistant","usage":{"input":1}}\n'
+    )
     observation = _inspect(events)
     assert observation.provider_egress == "not-observed"
     assert observation.provider_evidence_sha256 is None
@@ -56,6 +73,8 @@ def test_missing_provider_event_is_explicit_not_observed(tmp_path: Path) -> None
     (
         b'{"type":"telemetry"}\n',
         b'{"endpoint":"https://sentry.io/example"}\n',
+        b'{"endpoint":"https://pi.dev/api/report-install"}\n',
+        b'{"meter":"opentelemetry"}\n',
     ),
 )
 def test_exported_runtime_telemetry_markers_fail_closed(

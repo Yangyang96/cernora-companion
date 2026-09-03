@@ -132,8 +132,8 @@ class ComponentIdentity(StrictContract):
 
 
 class RuntimeIdentity(ComponentIdentity):
-    name: Literal["codex"]
-    version: Literal["0.148.0"]
+    name: Literal["pi"]
+    version: Literal["0.84.4"]
 
 
 class HarnessIdentity(ComponentIdentity):
@@ -142,7 +142,7 @@ class HarnessIdentity(ComponentIdentity):
 
 
 class ModelIdentity(StrictContract):
-    name: Literal["gpt-5.6-terra"]
+    name: Literal["deepseek/deepseek-v4-flash"]
     reasoning_effort: Literal["medium"]
     web_search: StrictBool
     provider_egress: Literal["required-allowed"]

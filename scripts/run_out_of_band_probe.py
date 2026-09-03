@@ -50,8 +50,19 @@ from cernora_reference_workflow.runtime_diagnostic_pilot import (  # noqa: E402
     RuntimeDiagnosticPilotPlan,
 )
 from cernora_reference_workflow.runtime_policy import (  # noqa: E402
-    PROVIDER_PROXY_INPUT_NAMES,
-    resolve_provider_proxy_configuration,
+    resolve_provider_proxy_environment,
+)
+
+_PROXY_INPUT_NAMES = (
+    "CERNORA_HTTP_PROXY",
+    "CERNORA_HTTPS_PROXY",
+    "CERNORA_ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
 )
 
 DEFAULT_PLAN = (
@@ -152,13 +163,7 @@ def _command(
         "--ak",
         f"version={spec.runtime.version}",
         "--ak",
-        f"reasoning_effort={spec.runtime.reasoning_effort}",
-        "--ak",
-        "reasoning_summary=none",
-        "--ak",
-        "web_search=disabled",
-        "--ak",
-        "strict_config=true",
+        f"thinking={spec.runtime.reasoning_effort}",
         "--agent-setup-timeout-multiplier",
         "4",
         "--agent-timeout-multiplier",
@@ -184,9 +189,8 @@ def _command(
 def _child_environment(auth_path: Path) -> dict[str, str]:
     ambient = os.environ
     child = {key: ambient[key] for key in _CHILD_ENV_ALLOWLIST if ambient.get(key)}
-    child["CODEX_AUTH_JSON_PATH"] = str(auth_path)
-    proxy_inputs = {name: ambient[name] for name in PROVIDER_PROXY_INPUT_NAMES if name in ambient}
-    child.update(resolve_provider_proxy_configuration(proxy_inputs).environment)
+    child["PI_AUTH_JSON_PATH"] = str(auth_path)
+    child.update(resolve_provider_proxy_environment(ambient))
     return child
 
 
@@ -227,22 +231,22 @@ def main(argv: list[str] | None = None) -> int:
         print(" ".join(command))
         print(f"output: {output.relative_to(REPOSITORY_ROOT)}")
         print(
-            "expected env: CODEX_AUTH_JSON_PATH plus proxy inputs "
-            + ", ".join(PROVIDER_PROXY_INPUT_NAMES)
+            "expected env: PI_AUTH_JSON_PATH plus optional proxy inputs "
+            + ", ".join(_PROXY_INPUT_NAMES)
         )
         return 0
 
-    auth_value = os.environ.get("CODEX_AUTH_JSON_PATH")
+    auth_value = os.environ.get("PI_AUTH_JSON_PATH")
     if not auth_value:
         print(
-            "error: probe requires CODEX_AUTH_JSON_PATH in the operator environment",
+            "error: probe requires PI_AUTH_JSON_PATH in the operator environment",
             file=sys.stderr,
         )
         return 2
     auth_path = Path(auth_value)
     if not auth_path.is_absolute() or not auth_path.is_file():
         print(
-            "error: CODEX_AUTH_JSON_PATH must be an absolute regular file",
+            "error: PI_AUTH_JSON_PATH must be an absolute regular file",
             file=sys.stderr,
         )
         return 2

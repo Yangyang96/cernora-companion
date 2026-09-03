@@ -1,4 +1,4 @@
-"""Run one explicit authenticated Harbor/Codex tracer and freeze its evidence."""
+"""Run one explicit authenticated Harbor/pi tracer and freeze its evidence."""
 
 from __future__ import annotations
 
@@ -52,9 +52,12 @@ from cernora_reference_workflow.runtime_observation import (
     inspect_runtime_artifacts,
 )
 from cernora_reference_workflow.runtime_policy import (
+    PI_CLI_PATH,
+    PI_RUNTIME_ENVIRONMENT,
+    PI_VERSION,
     RUNTIME_CLEANUP_RECEIPT,
+    RUNTIME_INTERRUPT_TARGET,
     RUNTIME_POLICY,
-    TELEMETRY_CONFIG_TOML,
     OperatorInterruptReceipt,
     resolve_provider_proxy_environment,
 )
@@ -68,7 +71,7 @@ from cernora_reference_workflow.spec_builder import (
 from cernora_reference_workflow.test_runner import ResourceReceipt
 
 ROOT = Path(__file__).resolve().parents[1]
-AGENT_IMPORT = "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex"
+AGENT_IMPORT = "cernora_reference_workflow.runtime_agent:TelemetryDisabledPi"
 _TRANSIENT_PROVIDER_STATUS = re.compile(r"(?<!\d)(?:408|429|500|502|503|504)(?!\d)")
 _TRANSIENT_PROVIDER_MARKERS = (
     "gateway",
@@ -76,8 +79,13 @@ _TRANSIENT_PROVIDER_MARKERS = (
     "rate limit",
     "service unavailable",
     "upstream",
+    # Direct-provider (DeepSeek) overload vocabulary: these messages must classify
+    # as retryable transients, not fatal runtime-pre-terminal failures.
+    "model is overloaded",
+    "model overloaded",
+    "deepseek",
 )
-_AUTH_REDACTION_PLACEHOLDER = b"<redacted-external-codex-auth>"
+_AUTH_REDACTION_PLACEHOLDER = b"<redacted-external-pi-auth>"
 _AUTH_REDACTION_RECEIPT = "auth-redaction.json"
 
 
@@ -120,7 +128,7 @@ def _optional_nonnegative_duration(path: Path) -> int | None:
 def _auth_value_markers(auth_path: Path) -> tuple[bytes, ...]:
     payload = load_json_file(auth_path)
     if not isinstance(payload, dict):
-        raise ContractError("external Codex auth file must contain one JSON object")
+        raise ContractError("external pi auth file must contain one JSON object")
     sensitive_names = (
         "account",
         "email",
@@ -147,7 +155,7 @@ def _auth_value_markers(auth_path: Path) -> tuple[bytes, ...]:
 
     collect(payload)
     if not markers:
-        raise ContractError("external Codex auth file has no verifiable sensitive value markers")
+        raise ContractError("external pi auth file has no verifiable sensitive value markers")
     return tuple(sorted(markers))
 
 
@@ -156,7 +164,7 @@ def _harbor_command(
     job_name: str,
     *,
     agent_timeout_multiplier: float,
-    proxy_environment: dict[str, str],
+    proxy_environment: dict[str, str] | None,
 ) -> list[str]:
     command = [
         str(ROOT / ".venv/bin/harbor"),
@@ -172,13 +180,7 @@ def _harbor_command(
         "--ak",
         f"version={spec.runtime.version}",
         "--ak",
-        f"reasoning_effort={spec.runtime.reasoning_effort}",
-        "--ak",
-        "reasoning_summary=none",
-        "--ak",
-        "web_search=disabled",
-        "--ak",
-        "strict_config=true",
+        f"thinking={spec.runtime.reasoning_effort}",
         "--agent-setup-timeout-multiplier",
         "4",
         "--agent-timeout-multiplier",
@@ -200,8 +202,9 @@ def _harbor_command(
         "0",
         "--yes",
     ]
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
-        command.extend(("--ae", f"{name}={proxy_environment[name]}"))
+    if proxy_environment:
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
+            command.extend(("--ae", f"{name}={proxy_environment[name]}"))
     return command
 
 
@@ -224,10 +227,19 @@ def _running_trial_container(trial_name: str) -> str | None:
     return matches[0] if matches else None
 
 
-def _is_codex_exec_argv(argv: tuple[bytes, ...]) -> bool:
-    """Match the single pinned native ``codex exec`` process and no monitor command."""
+def _is_pi_argv(argv: tuple[bytes, ...]) -> bool:
+    """Match the single pinned native ``pi`` agent process and no monitor command.
 
-    return len(argv) >= 2 and argv[0].rsplit(b"/", 1)[-1] == b"codex" and argv[1] == b"exec"
+    The pinned image executes ``/usr/local/bin/pi`` (a symlink whose shebang is
+    ``#!/usr/bin/env node``), so the live agent process argv starts with the node
+    interpreter immediately followed by the pinned executable path.
+    """
+
+    return (
+        len(argv) >= 2
+        and argv[0].rsplit(b"/", 1)[-1] == b"node"
+        and argv[1] == PI_CLI_PATH.encode("utf-8")
+    )
 
 
 def _container_image_id(container: str) -> str:
@@ -295,10 +307,10 @@ def _observe_runtime_container(
         stopped.wait(0.25)
     if trial is None:
         if operator_interrupt and not stopped.is_set():
-            raise ContractError("operator interruption never observed the Codex run boundary")
+            raise ContractError("operator interruption never observed the pi run boundary")
         return None
 
-    matcher_source = inspect.getsource(_is_codex_exec_argv)
+    matcher_source = inspect.getsource(_is_pi_argv)
     signal_program = f"""import os
 import signal
 
@@ -315,10 +327,10 @@ for entry in os.listdir('/proc'):
         argv = [part for part in raw_argv.split(b'\\0') if part]
     except OSError:
         continue
-    if _is_codex_exec_argv(tuple(argv)):
+    if _is_pi_argv(tuple(argv)):
         targets.append(int(entry))
 if len(targets) != 1:
-    raise SystemExit(f'expected exactly one active codex exec process; observed {{len(targets)}}')
+    raise SystemExit(f'expected exactly one active pi agent process; observed {{len(targets)}}')
 os.kill(targets[0], signal.SIGINT)
 print(1)
 """
@@ -330,7 +342,7 @@ print(1)
         image_id = _container_image_id(container)
         if not operator_interrupt:
             return image_id
-        if not (trial / "agent/effective-config.toml").is_file():
+        if not (trial / "agent/pi-environment.json").is_file():
             stopped.wait(0.25)
             continue
         if stopped.wait(2):
@@ -352,7 +364,7 @@ print(1)
                     OperatorInterruptReceipt(
                         operator_signal="SIGINT",
                         schema_version="cernora.reference.operator-interrupt/v1",
-                        target="active-codex-process",
+                        target=RUNTIME_INTERRUPT_TARGET,
                         verified_signal_count=1,
                     ).model_dump(mode="json")
                 )
@@ -360,7 +372,7 @@ print(1)
             return image_id
         stopped.wait(0.25)
     if operator_interrupt and not stopped.is_set():
-        raise ContractError("operator interruption could not signal the active Codex process")
+        raise ContractError("operator interruption could not signal the active pi process")
     return None
 
 
@@ -391,7 +403,7 @@ def _run_harbor(
         except BaseException as exc:
             errors.append(exc)
 
-    thread = threading.Thread(target=monitor, name="codex-runtime-monitor", daemon=True)
+    thread = threading.Thread(target=monitor, name="pi-runtime-monitor", daemon=True)
     thread.start()
     return_code = process.wait()
     stopped.set()
@@ -426,27 +438,20 @@ def _optional_trial_directory(job: Path) -> Path | None:
 
 
 def _verify_runtime_policy(trial: Path) -> None:
-    effective = trial / "agent/effective-config.toml"
-    effective_features = trial / "agent/effective-features.txt"
+    environment = trial / "agent/pi-environment.json"
+    version = trial / "agent/pi-version.txt"
     policy = trial / "agent/runtime-policy.json"
     cleanup = trial / "agent/runtime-cleanup.json"
-    for path in (effective, effective_features, policy, cleanup):
+    for path in (environment, version, policy, cleanup):
         require_regular_file(path)
-    if effective.read_text(encoding="utf-8") != TELEMETRY_CONFIG_TOML:
-        raise ContractError("observed Codex config does not match the telemetry-off policy")
+    if environment.read_bytes() != canonical_json_bytes(PI_RUNTIME_ENVIRONMENT):
+        raise ContractError("observed pi environment does not match the offline policy")
+    if version.read_text(encoding="utf-8").strip() != PI_VERSION:
+        raise ContractError("observed pi runtime version does not match the pinned Runtime")
     if policy.read_bytes() != canonical_json_bytes(RUNTIME_POLICY):
         raise ContractError("observed Runtime policy receipt mismatch")
-    feature_states = {
-        fields[0]: fields[-1]
-        for line in effective_features.read_text(encoding="utf-8").splitlines()
-        if len(fields := line.split()) >= 3
-    }
-    if feature_states.get("plugins") != "false":
-        raise ContractError("observed Codex plugin feature state is not disabled")
-    if feature_states.get("unified_exec") != "true":
-        raise ContractError("observed Codex unified-exec feature state is not enabled")
     if cleanup.read_bytes() != canonical_json_bytes(RUNTIME_CLEANUP_RECEIPT):
-        raise ContractError("ephemeral Codex auth cleanup was not verified")
+        raise ContractError("ephemeral pi auth cleanup was not verified")
 
 
 def _file_contains_marker(path: Path, markers: tuple[bytes, ...]) -> bool:
@@ -586,10 +591,17 @@ def _sanitized_runtime_files(
     observed_model = agent_info.get("model_info")
     if not isinstance(observed_model, dict):
         raise ContractError("Harbor result is missing model_info")
+    # Harbor reports the pi model identity split across model_info.provider and
+    # model_info.name; the ExperimentSpec pins the same identity in the composite
+    # ``provider/model`` form pi accepts as input. Recompose and compare exactly.
+    observed_provider = observed_model.get("provider")
+    observed_model_name = observed_model.get("name")
     if (
-        agent_info.get("name") != "codex"
+        agent_info.get("name") != "pi"
         or agent_info.get("version") != spec.runtime.version
-        or observed_model.get("name") != spec.runtime.model
+        or not isinstance(observed_provider, str)
+        or not isinstance(observed_model_name, str)
+        or f"{observed_provider}/{observed_model_name}" != spec.runtime.model
         or result.get("task_name") != spec.task.task_id
     ):
         raise ContractError("Harbor result does not match the pinned Runtime identity")
@@ -625,6 +637,7 @@ def _sanitized_runtime_files(
             else None
         ),
         "model": observed_model.get("name"),
+        "model_provider": observed_provider,
         "task_checksum": result.get("task_checksum"),
         "task_name": result.get("task_name"),
     }
@@ -648,8 +661,8 @@ def _sanitized_runtime_files(
     runtime: list[tuple[str, Path]] = [
         ("runtime/harbor-trial-config.json", config_path),
         ("runtime/harbor-trial-result.json", result_path),
-        ("runtime/codex-effective-config.toml", trial / "agent/effective-config.toml"),
-        ("runtime/codex-effective-features.txt", trial / "agent/effective-features.txt"),
+        ("runtime/pi-environment.json", trial / "agent/pi-environment.json"),
+        ("runtime/pi-version.txt", trial / "agent/pi-version.txt"),
         ("runtime/runtime-policy.json", trial / "agent/runtime-policy.json"),
         ("runtime/runtime-cleanup.json", trial / "agent/runtime-cleanup.json"),
         ("runtime/container-cleanup.json", container_cleanup_path),
@@ -660,18 +673,18 @@ def _sanitized_runtime_files(
     if trajectory.is_file():
         runtime.append(("runtime/trajectory.json", trajectory))
         inspected_artifacts.append(("runtime/trajectory.json", trajectory))
-    events = trial / "agent/codex.txt"
+    events = trial / "agent/pi.txt"
     if events.is_file():
-        runtime.append(("runtime/codex-events.jsonl", events))
-        inspected_artifacts.append(("runtime/codex-events.jsonl", events))
+        runtime.append(("runtime/pi-events.jsonl", events))
+        inspected_artifacts.append(("runtime/pi-events.jsonl", events))
     sessions_root = trial / "agent/sessions"
     sessions = sorted(sessions_root.rglob("*.jsonl")) if sessions_root.is_dir() else []
     used_names: set[str] = set()
     for session in sessions:
         if session.name in used_names:
-            raise ContractError("Codex session JSONL basenames are not unique")
+            raise ContractError("pi session JSONL basenames are not unique")
         used_names.add(session.name)
-        relative = f"runtime/codex-session/{session.name}"
+        relative = f"runtime/pi-session/{session.name}"
         runtime.append((relative, session))
         inspected_artifacts.append((relative, session))
     interruption = trial / "operator-interrupt.json"
@@ -679,8 +692,8 @@ def _sanitized_runtime_files(
         runtime.append(("runtime/operator-interrupt.json", interruption))
     observation = inspect_runtime_artifacts(
         tuple(inspected_artifacts),
-        effective_config_sha256=sha256_file(trial / "agent/effective-config.toml"),
-        effective_features_sha256=sha256_file(trial / "agent/effective-features.txt"),
+        effective_config_sha256=sha256_file(trial / "agent/pi-environment.json"),
+        effective_features_sha256=sha256_file(trial / "agent/pi-version.txt"),
         runtime_policy_sha256=sha256_file(trial / "agent/runtime-policy.json"),
         runtime_cleanup_sha256=sha256_file(trial / "agent/runtime-cleanup.json"),
         container_cleanup_sha256=sha256_file(container_cleanup_path),
@@ -880,7 +893,7 @@ def _execute_live_attempt(
     auth_path: Path,
     auth_markers: tuple[bytes, ...],
     env: dict[str, str],
-    proxy_environment: dict[str, str],
+    proxy_environment: dict[str, str] | None,
     agent_timeout_multiplier: float,
     operator_interrupt: bool,
 ) -> AttemptResult[FrozenLiveAttempt]:
@@ -1034,7 +1047,7 @@ def _run_single_attempt(
     auth_path: Path,
     auth_markers: tuple[bytes, ...],
     env: dict[str, str],
-    proxy_environment: dict[str, str],
+    proxy_environment: dict[str, str] | None,
     agent_timeout_multiplier: float,
     operator_interrupt: bool,
 ) -> int:
@@ -1101,9 +1114,9 @@ def main() -> int:
         raise ContractError("single-attempt options require --single-attempt")
     _verify_pinned_task_image(spec)
     proxy_environment = resolve_provider_proxy_environment(os.environ)
-    auth_value = os.environ.get("CODEX_AUTH_JSON_PATH")
+    auth_value = os.environ.get("PI_AUTH_JSON_PATH")
     if not auth_value:
-        raise ContractError("CODEX_AUTH_JSON_PATH must name the explicit external auth file")
+        raise ContractError("PI_AUTH_JSON_PATH must name the explicit external auth file")
     auth_path = Path(auth_value).resolve(strict=True)
     require_regular_file(auth_path)
     auth_markers = _auth_value_markers(auth_path)
@@ -1113,9 +1126,13 @@ def main() -> int:
     if not job_name.replace("-", "").isalnum():
         raise ContractError("job name must contain only letters, digits, and hyphens")
     env = os.environ.copy()
-    env.pop("OPENAI_API_KEY", None)
-    env.pop("CODEX_FORCE_AUTH_JSON", None)
-    env["CODEX_AUTH_JSON_PATH"] = str(auth_path)
+    for bypass_key in (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+    ):
+        env.pop(bypass_key, None)
+    env["PI_AUTH_JSON_PATH"] = str(auth_path)
     if args.single_attempt:
         assert args.ordinal is not None
         assert args.destination is not None

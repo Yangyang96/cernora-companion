@@ -1,4 +1,4 @@
-"""Production Harbor/Codex executor for authority-bound controlled repairs."""
+"""Production Harbor/pi executor for authority-bound controlled repairs."""
 
 from __future__ import annotations
 
@@ -53,14 +53,15 @@ from cernora_reference_workflow.controlled_runtime import (
 )
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
 from cernora_reference_workflow.runtime_policy import (
+    PI_RUNTIME_ENVIRONMENT,
+    PI_VERSION,
     RUNTIME_CLEANUP_RECEIPT,
     RUNTIME_CONFIGURATION_SHA256,
     RUNTIME_POLICY,
-    TELEMETRY_CONFIG_TOML,
-    resolve_provider_proxy_configuration,
+    resolve_provider_proxy_environment,
 )
 
-AGENT_IMPORT = "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex"
+AGENT_IMPORT = "cernora_reference_workflow.runtime_agent:TelemetryDisabledPi"
 _AUTH_MAX_BYTES = 4 * 1024 * 1024
 _TRANSIENT_PROVIDER_EXCEPTIONS = frozenset({"NonZeroAgentExitCodeError"})
 _EXPECTED_RETRY_EXCEPTIONS = frozenset(
@@ -365,7 +366,7 @@ def _child_environment(
     proxy_environment: Mapping[str, str],
 ) -> dict[str, str]:
     child = {key: ambient[key] for key in _CHILD_ENV_ALLOWLIST if ambient.get(key)}
-    child["CODEX_AUTH_JSON_PATH"] = str(auth_path)
+    child["PI_AUTH_JSON_PATH"] = str(auth_path)
     child.update(proxy_environment)
     return child
 
@@ -765,15 +766,15 @@ def _validate_actual_argv(
     kwargs = set(_repeated_values(command, "--ak"))
     if kwargs != {
         f"version={spec.runtime.version}",
-        f"reasoning_effort={spec.runtime.reasoning_effort}",
-        "reasoning_summary=none",
-        "web_search=disabled",
-        "strict_config=true",
+        f"thinking={spec.runtime.reasoning_effort}",
     }:
         raise LiveAttemptError("actual Harbor agent kwargs drift from Runtime authority")
     if _repeated_values(command, "--ae"):
         raise LiveAttemptError("actual Harbor argv must not persist private proxy endpoints")
-    if tuple(sorted(proxy_environment)) != ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"):
+    if tuple(sorted(proxy_environment)) not in (
+        (),
+        ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"),
+    ):
         raise LiveAttemptError("explicit proxy projection is incomplete")
 
 
@@ -792,11 +793,8 @@ def _expected_agent_config(spec: ControlledExperimentSpecV2) -> dict[str, object
         "include_logs": [],
         "exclude_logs": [],
         "kwargs": {
-            "reasoning_effort": spec.runtime.reasoning_effort,
-            "reasoning_summary": "none",
-            "strict_config": True,
+            "thinking": spec.runtime.reasoning_effort,
             "version": spec.runtime.version,
-            "web_search": "disabled",
         },
         "env": {},
         "mcp_servers": [],
@@ -867,8 +865,8 @@ def _json_type_strict_equal(actual: object, expected: object) -> bool:
     return False
 
 
-def _valid_codex_timeout_agent_result(value: object) -> bool:
-    """Validate the two AgentContext shapes Codex can close after cancellation."""
+def _valid_pi_timeout_agent_result(value: object) -> bool:
+    """Validate the two AgentContext shapes pi can close after cancellation."""
 
     if not isinstance(value, dict) or set(value) != {
         "cost_usd",
@@ -1056,7 +1054,7 @@ def _validate_trial_result(
         or not _json_type_strict_equal(
             agent_info,
             {
-                "name": "codex",
+                "name": "pi",
                 "version": spec.runtime.version,
                 "model_info": {"name": spec.runtime.model, "provider": None},
             },
@@ -1255,7 +1253,7 @@ def _classify_preterminal(
                 diagnostic_code=code,
             )
 
-        if not _valid_codex_timeout_agent_result(agent_result):
+        if not _valid_pi_timeout_agent_result(agent_result):
             reject_timeout("agent-timeout-agent-result")
         if not isinstance(agent_execution, dict) or not all(
             isinstance(agent_execution[field], str) and agent_execution[field]
@@ -1409,19 +1407,16 @@ def _result_from_job(
     verifier = trial / "verifier"
     agent = trial / "agent"
     runtime_artifacts = {
-        "effective-config.toml": TELEMETRY_CONFIG_TOML.encode("utf-8"),
+        "pi-environment.json": canonical_json_bytes(PI_RUNTIME_ENVIRONMENT),
         "runtime-policy.json": canonical_json_bytes(RUNTIME_POLICY),
         "runtime-cleanup.json": canonical_json_bytes(RUNTIME_CLEANUP_RECEIPT),
     }
     for name, expected in runtime_artifacts.items():
         if read_regular_file_bytes(agent / name) != expected:
             raise LiveAttemptError("Harbor Runtime artifact contradicts pinned authority")
-    features = read_regular_file_bytes(agent / "effective-features.txt").decode("utf-8")
-    feature_rows = {tuple(line.split()) for line in features.splitlines()}
-    if not {("plugins", "stable", "false"), ("unified_exec", "stable", "true")}.issubset(
-        feature_rows
-    ):
-        raise LiveAttemptError("Harbor Runtime features do not prove pinned policy")
+    version = read_regular_file_bytes(agent / "pi-version.txt").decode("utf-8").strip()
+    if version != PI_VERSION:
+        raise LiveAttemptError("Harbor pi runtime version does not prove pinned policy")
     if request.specification.runtime.configuration_sha256 != RUNTIME_CONFIGURATION_SHA256:
         raise LiveAttemptError("Experiment Runtime configuration is not pinned authority")
     receipt_raw = read_regular_file_bytes(verifier / "execution-receipt.json")
@@ -1522,9 +1517,10 @@ class ControlledHarborAttemptExecutor:
         self._task_suite = tasks
         self._evaluation_root = evaluation_root
         self._auth_file = auth_file
-        proxy = resolve_provider_proxy_configuration(proxy_environment)
-        self._explicit_proxy_endpoints = proxy.source_endpoints
-        self._proxy_environment = proxy.environment
+        self._proxy_environment = resolve_provider_proxy_environment(proxy_environment)
+        # The pi direct-provider egress has no mandatory proxy, and the resolver returns only
+        # the container projection; raw host endpoints are no longer published separately.
+        self._explicit_proxy_endpoints: tuple[str, ...] = ()
         if attempt_envelope_grace_seconds < 0:
             raise ContractError("Attempt envelope grace must be non-negative")
         self._attempt_envelope_grace_seconds = attempt_envelope_grace_seconds
@@ -1572,13 +1568,7 @@ class ControlledHarborAttemptExecutor:
             "--ak",
             f"version={spec.runtime.version}",
             "--ak",
-            f"reasoning_effort={spec.runtime.reasoning_effort}",
-            "--ak",
-            "reasoning_summary=none",
-            "--ak",
-            "web_search=disabled",
-            "--ak",
-            "strict_config=true",
+            f"thinking={spec.runtime.reasoning_effort}",
             "--agent-setup-timeout-multiplier",
             "4",
             "--agent-timeout-multiplier",
@@ -1600,11 +1590,9 @@ class ControlledHarborAttemptExecutor:
             "0",
             "--yes",
         ]
-        if tuple(sorted(proxy_environment)) != (
-            "ALL_PROXY",
-            "HTTPS_PROXY",
-            "HTTP_PROXY",
-            "NO_PROXY",
+        if tuple(sorted(proxy_environment)) not in (
+            (),
+            ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"),
         ):
             raise LiveAttemptError("explicit proxy projection is incomplete")
         return tuple(command)

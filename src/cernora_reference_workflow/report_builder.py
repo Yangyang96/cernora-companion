@@ -96,7 +96,7 @@ def _token_diagnostics(export_root: Path) -> dict[str, dict[str, object]]:
 def _network_command_diagnostics(export_root: Path) -> dict[str, object]:
     candidates = (
         export_root / "runtime/trajectory.json",
-        export_root / "runtime/codex-events.jsonl",
+        export_root / "runtime/pi-events.jsonl",
     )
     source = next((path for path in candidates if path.is_file()), None)
     if source is None:

@@ -54,16 +54,17 @@ from cernora_reference_workflow.controlled_run_plan import (
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
 from cernora_reference_workflow.improvement_loop import CandidateFreeze
 from cernora_reference_workflow.runtime_policy import (
-    CODEX_RUNTIME_INSTALLATION,
+    PI_RUNTIME_ENVIRONMENT,
+    PI_RUNTIME_INSTALLATION,
+    PI_VERSION,
     RUNTIME_CONFIGURATION_SHA256,
     RUNTIME_POLICY,
-    TELEMETRY_CONFIG_TOML,
 )
 
 _BASELINE_CONFIGURATION = "baseline"
 _CANDIDATE_CONFIGURATION = "candidate"
 _PLATFORM = "linux/arm64"
-_MODEL = "gpt-5.6-terra"
+_MODEL = "deepseek/deepseek-v4-flash"
 _REASONING_EFFORT = "medium"
 
 
@@ -153,10 +154,9 @@ def _runtime_source() -> CanonicalAuthoritySource:
         cast(
             JsonValue,
             {
-                "codex_config_toml_sha256": sha256_bytes(TELEMETRY_CONFIG_TOML.encode("utf-8")),
-                "codex_runtime_installation": CODEX_RUNTIME_INSTALLATION,
+                "pi_environment_sha256": sha256_bytes(canonical_json_bytes(PI_RUNTIME_ENVIRONMENT)),
+                "pi_runtime_installation": PI_RUNTIME_INSTALLATION,
                 "policy": RUNTIME_POLICY,
-                "strict_config": True,
             },
         ),
     )
@@ -311,7 +311,7 @@ def _specification(
     harness_source = _source(
         "harness",
         {
-            "agent": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
+            "agent": "cernora_reference_workflow.runtime_agent:TelemetryDisabledPi",
             "environment": "docker",
             "mode": "single-attempt",
             "version": "0.16.1",
@@ -336,8 +336,8 @@ def _specification(
             "configuration_source": harness_source.model_dump(mode="json"),
         },
         "runtime": {
-            "name": "codex",
-            "version": "0.148.0",
+            "name": "pi",
+            "version": PI_VERSION,
             "configuration_sha256": runtime_source.source_sha256,
             "configuration_source": runtime_source.model_dump(mode="json"),
             "model": _MODEL,
@@ -498,8 +498,8 @@ def build_m4_final_plans(
             "companion_version": "0.4.0",
             "cernora_version": "0.1.4",
             "connector": {
-                "connector_id": "cernora-reference-harbor-codex",
-                "connector_version": "1",
+                "connector_id": "cernora-reference-harbor-pi",
+                "connector_version": "2",
                 "platform_qualification": "macos-arm64",
             },
             "experiment_specs": [item.model_dump(mode="json") for item in specs],

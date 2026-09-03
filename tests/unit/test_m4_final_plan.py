@@ -26,7 +26,7 @@ def _digest(value: str) -> str:
 
 def _images(case_ids: tuple[str, ...]) -> M4ImageAuthoritySet:
     return materialize_m4_image_authority_set(
-        build_base_image=f"cernora-reference/codex-runtime@sha256:{_digest('base')}",
+        build_base_image=f"cernora-reference/pi-runtime@sha256:{_digest('base')}",
         images={
             case_id: f"cernora-reference/m4-{case_id}@sha256:{_digest(case_id)}"
             for case_id in case_ids

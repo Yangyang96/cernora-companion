@@ -55,11 +55,12 @@ from cernora_reference_workflow.controlled_task import (
     materialize_controlled_task,
 )
 from cernora_reference_workflow.runtime_policy import (
-    CODEX_RUNTIME_INSTALLATION,
+    PI_RUNTIME_ENVIRONMENT,
+    PI_RUNTIME_INSTALLATION,
+    PI_VERSION,
     RUNTIME_CLEANUP_RECEIPT,
     RUNTIME_CONFIGURATION_SHA256,
     RUNTIME_POLICY,
-    TELEMETRY_CONFIG_TOML,
 )
 from tests.unit.test_controlled_experiment_spec import valid_payload
 
@@ -110,10 +111,9 @@ def _spec(
         cast(
             JsonValue,
             {
-                "codex_config_toml_sha256": sha256_bytes(TELEMETRY_CONFIG_TOML.encode("utf-8")),
-                "codex_runtime_installation": CODEX_RUNTIME_INSTALLATION,
+                "pi_environment_sha256": sha256_bytes(canonical_json_bytes(PI_RUNTIME_ENVIRONMENT)),
+                "pi_runtime_installation": PI_RUNTIME_INSTALLATION,
                 "policy": RUNTIME_POLICY,
-                "strict_config": True,
             },
         ),
     )
@@ -278,7 +278,7 @@ def _request(spec: ControlledExperimentSpecV2, *, trial: str = "live") -> Contro
 
 def _harbor_agent_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
     return {
-        "name": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
+        "name": "cernora_reference_workflow.runtime_agent:TelemetryDisabledPi",
         "import_path": None,
         "model_name": spec.runtime.model,
         "n_concurrent": None,
@@ -291,11 +291,8 @@ def _harbor_agent_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
         "include_logs": [],
         "exclude_logs": [],
         "kwargs": {
-            "reasoning_effort": spec.runtime.reasoning_effort,
-            "reasoning_summary": "none",
-            "strict_config": True,
+            "thinking": spec.runtime.reasoning_effort,
             "version": spec.runtime.version,
-            "web_search": "disabled",
         },
         "env": {},
         "mcp_servers": [],
@@ -455,7 +452,7 @@ class FakeProcess:
     ) -> SubprocessResult:
         del cwd, deadline_monotonic, timeout_seconds, disk_free, safe_stop_free_bytes
         self.commands.append(command)
-        assert "OPENAI_API_KEY" not in environment
+        assert "DEEPSEEK_API_KEY" not in environment
         assert environment["HTTP_PROXY"] == _proxy_environment()["CERNORA_HTTP_PROXY"]
         assert environment["HTTPS_PROXY"] == _proxy_environment()["CERNORA_HTTPS_PROXY"]
         assert environment["ALL_PROXY"] == _proxy_environment()["CERNORA_ALL_PROXY"]
@@ -467,7 +464,7 @@ class FakeProcess:
                 "TMPDIR",
                 "LANG",
                 "LC_ALL",
-                "CODEX_AUTH_JSON_PATH",
+                "PI_AUTH_JSON_PATH",
                 "HTTP_PROXY",
                 "HTTPS_PROXY",
                 "ALL_PROXY",
@@ -489,18 +486,9 @@ class FakeProcess:
             dict(
                 value.split("=", 1)
                 for value in command
-                if "=" in value
-                and value.split("=", 1)[0]
-                in {
-                    "version",
-                    "reasoning_effort",
-                    "reasoning_summary",
-                    "web_search",
-                    "strict_config",
-                }
+                if "=" in value and value.split("=", 1)[0] in {"version", "thinking"}
             ),
         )
-        kwargs["strict_config"] = True
         environment_config = _harbor_environment_config(self.spec)
         job_agent_config = _harbor_agent_config(self.spec)
         trial_agent_config = _harbor_agent_config(self.spec)
@@ -557,12 +545,10 @@ class FakeProcess:
         (job / "config.json").write_bytes(canonical_json_bytes(config))
         agent = verifier.parent / "agent"
         agent.mkdir()
-        (agent / "effective-config.toml").write_text(TELEMETRY_CONFIG_TOML, encoding="utf-8")
+        (agent / "pi-environment.json").write_bytes(canonical_json_bytes(PI_RUNTIME_ENVIRONMENT))
         (agent / "runtime-policy.json").write_bytes(canonical_json_bytes(RUNTIME_POLICY))
         (agent / "runtime-cleanup.json").write_bytes(canonical_json_bytes(RUNTIME_CLEANUP_RECEIPT))
-        (agent / "effective-features.txt").write_text(
-            "plugins stable false\nunified_exec stable true\n", encoding="utf-8"
-        )
+        (agent / "pi-version.txt").write_text(f"{PI_VERSION}\n", encoding="utf-8")
         candidate = verifier / "candidate"
         candidate.mkdir()
         for item in (*self.task.workspace_files, *self.task.test_files):
@@ -630,7 +616,7 @@ class FakeProcess:
             "task_checksum": dirhash(task_root, "sha256"),
             "config": trial_config,
             "agent_info": {
-                "name": "codex",
+                "name": "pi",
                 "version": self.spec.runtime.version,
                 "model_info": {"name": self.spec.runtime.model, "provider": None},
             },
@@ -1192,7 +1178,7 @@ def test_live_executor_observes_authorities_and_emits_real_core_package(
         ambient_environment=lambda: {
             "PATH": "/usr/bin",
             "HOME": "/example/home",
-            "OPENAI_API_KEY": "ambient-must-not-leak",
+            "DEEPSEEK_API_KEY": "ambient-must-not-leak",
             "HTTP_PROXY": "http://ambient.example:19090",
         },
         process_runner=process,
@@ -1923,10 +1909,13 @@ def test_executor_private_scan_uses_only_selected_proxy_endpoints(tmp_path: Path
         attempt_envelope_grace_seconds=60,
     )
 
-    assert executor._explicit_proxy_endpoints == (
-        "http://proxy.example:18080",
-        "socks5://proxy.example:11080",
-    )
+    assert executor._proxy_environment == {
+        "HTTP_PROXY": "http://proxy.example:18080",
+        "HTTPS_PROXY": "http://proxy.example:18080",
+        "ALL_PROXY": "socks5://proxy.example:11080",
+        "NO_PROXY": "localhost,127.0.0.1",
+    }
+    assert executor._explicit_proxy_endpoints == ()
     assert executor._attempt_envelope_grace_seconds == 60
 
 

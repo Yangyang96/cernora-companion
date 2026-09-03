@@ -515,8 +515,8 @@ def build_development_agent_pilot_plan(
         ],
         "baseline_prompt": baseline.model_dump(mode="json"),
         "connector": {
-            "connector_id": "cernora-reference-harbor-codex",
-            "connector_version": "1",
+            "connector_id": "cernora-reference-harbor-pi",
+            "connector_version": "2",
             "platform_qualification": "macos-arm64",
         },
         "experiment_specs": [item.model_dump(mode="json") for item in specs],

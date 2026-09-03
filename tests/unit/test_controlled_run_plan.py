@@ -68,8 +68,8 @@ def valid_payload() -> dict[str, object]:
         "companion_version": "0.3.0",
         "cernora_version": "0.1.4",
         "connector": {
-            "connector_id": "cernora-reference-harbor-codex",
-            "connector_version": "1",
+            "connector_id": "cernora-reference-harbor-pi",
+            "connector_version": "2",
             "platform_qualification": "macos-arm64",
         },
         "experiment_specs": [spec.model_dump(mode="json") for spec in specs],
@@ -155,8 +155,8 @@ def valid_m4_payload(
         "companion_version": "0.4.0",
         "cernora_version": "0.1.4",
         "connector": {
-            "connector_id": "cernora-reference-harbor-codex",
-            "connector_version": "1",
+            "connector_id": "cernora-reference-harbor-pi",
+            "connector_version": "2",
             "platform_qualification": "macos-arm64",
         },
         "experiment_specs": [item.model_dump(mode="json") for item in specs],
@@ -303,7 +303,7 @@ def test_v2_plan_rejects_tamper_incomplete_matrix_and_cross_case_drift(mutation:
         changed["dataset_authority"] = specifications[0]["dataset_authority"]
         runtime = changed["runtime"]
         assert isinstance(runtime, dict)
-        runtime["model"] = "gpt-5.6-sol"
+        runtime["model"] = "deepseek/deepseek-v4-thinker"
         drifted = materialize_controlled_experiment_spec(changed)
         specifications[-1] = drifted.model_dump(mode="json")
         cells = payload["cells"]

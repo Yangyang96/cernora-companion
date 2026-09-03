@@ -25,12 +25,12 @@
       "additionalProperties": false,
       "properties": {
         "connector_id": {
-          "const": "cernora-reference-harbor-codex",
+          "const": "cernora-reference-harbor-pi",
           "title": "Connector Id",
           "type": "string"
         },
         "connector_version": {
-          "const": "1",
+          "const": "2",
           "title": "Connector Version",
           "type": "string"
         },
@@ -437,12 +437,12 @@
           "type": "string"
         },
         "model": {
-          "const": "gpt-5.6-terra",
+          "const": "deepseek/deepseek-v4-flash",
           "title": "Model",
           "type": "string"
         },
         "name": {
-          "const": "codex",
+          "const": "pi",
           "title": "Name",
           "type": "string"
         },
@@ -452,7 +452,7 @@
           "type": "string"
         },
         "version": {
-          "const": "0.148.0",
+          "const": "0.84.4",
           "title": "Version",
           "type": "string"
         }

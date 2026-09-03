@@ -19,12 +19,12 @@ from cernora_reference_workflow.test_runner import TestPlan
 
 WHEEL_SHA256 = "01de19a484172cc8e3940792b90de04683da600320d154fff18b0a717738a2df"
 BASE_IMAGE = (
-    "cernora-reference/codex-runtime@sha256:"
-    "0e9ac928b97a83c54663f1086576039175b9bd4513b7d8d97f8173af62416788"
+    "cernora-reference/pi-runtime@sha256:"
+    "fb84c5a5d4920c6231bb79ecab87cac3bb2baaf2e8f96e5c2cb0a63fdcec2f0f"
 )
 TASK_IMAGE_SHA256 = {
-    "tiny-calculator-v1": "57016ac36d8ad1a402b40de4a370be93e2ac392fa6e093b203aa2676e34debd2",
-    "tiny-calculator-v2": "2ba88de8936e2f396f0e33a6ae11a253fb6b7e779226a82ed2ed727543c4f430",
+    "tiny-calculator-v1": "63492d5ca47a7fa3daead83c45f685b493c26a6b0e8cec9e02e7fbfad7e821e5",
+    "tiny-calculator-v2": "24cea59e89273a1131fb9831c8bacb1e40ce343d2a244904e70a9670f3df2e58",
 }
 TASK_FILES = (
     "environment/.dockerignore",
@@ -48,7 +48,7 @@ def _harness_configuration(
     operator_interrupt: bool,
 ) -> dict[str, object]:
     return {
-        "agent": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
+        "agent": "cernora_reference_workflow.runtime_agent:TelemetryDisabledPi",
         "agent_setup_timeout_multiplier": 4,
         "agent_timeout_multiplier": agent_timeout_multiplier,
         "delete_environment": True,
@@ -171,10 +171,10 @@ def _build_spec(
                 "configuration_sha256": harness_configuration_sha256,
             },
             "runtime": {
-                "name": "codex",
-                "version": "0.148.0",
+                "name": "pi",
+                "version": "0.84.4",
                 "configuration_sha256": RUNTIME_CONFIGURATION_SHA256,
-                "model": "gpt-5.6-terra",
+                "model": "deepseek/deepseek-v4-flash",
                 "reasoning_effort": "medium",
             },
             "prompt_sha256": instruction_sha256,

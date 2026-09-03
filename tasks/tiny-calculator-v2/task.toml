@@ -15,6 +15,6 @@ timeout_sec = 300.0
 
 [environment]
 build_timeout_sec = 600.0
-docker_image = "sha256:2ba88de8936e2f396f0e33a6ae11a253fb6b7e779226a82ed2ed727543c4f430"
+docker_image = "sha256:24cea59e89273a1131fb9831c8bacb1e40ce343d2a244904e70a9670f3df2e58"
 workdir = "/workspace"
 network_mode = "public"

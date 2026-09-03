@@ -57,7 +57,7 @@ def test_noncompleted_lifecycle_remains_inconclusive_with_passing_tests(
                 OperatorInterruptReceipt(
                     schema_version="cernora.reference.operator-interrupt/v1",
                     operator_signal="SIGINT",
-                    target="active-codex-process",
+                    target="active-pi-process",
                     verified_signal_count=1,
                 ).model_dump(mode="json")
             )

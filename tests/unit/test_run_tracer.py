@@ -89,18 +89,57 @@ def test_live_preflight_rejects_task_image_identity_drift(
 @pytest.mark.parametrize(
     ("argv", "expected"),
     [
-        ((b"/npm/vendor/aarch64-unknown-linux-musl/bin/codex", b"exec", b"-"), True),
-        ((b"/usr/bin/node", b"/npm/@openai/codex/bin/codex.js", b"exec"), False),
-        ((b"python", b"-c", b"source containing codex exec"), False),
-        ((b"codex", b"features", b"list"), False),
+        ((b"/usr/local/bin/node", b"/usr/local/bin/pi", b"--print"), True),
+        ((b"node", b"/usr/local/bin/pi", b"--print", b"--mode", b"json"), True),
+        ((b"/usr/bin/env", b"node", b"/usr/local/bin/pi"), False),
+        ((b"/usr/local/bin/node", b"/npm/@earendil-works/pi/dist/cli.js", b"--print"), False),
+        ((b"python", b"-c", b"source containing pi --print"), False),
+        ((b"node", b"/usr/local/bin/node", b"-e"), False),
     ],
 )
-def test_operator_interrupt_matches_only_pinned_native_codex_exec_child(
+def test_operator_interrupt_matches_only_pinned_native_pi_agent_child(
     argv: tuple[bytes, ...],
     expected: bool,
 ) -> None:
-    matcher = cast(Callable[[tuple[bytes, ...]], bool], SCRIPT["_is_codex_exec_argv"])
+    matcher = cast(Callable[[tuple[bytes, ...]], bool], SCRIPT["_is_pi_argv"])
     assert matcher(argv) is expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_state"),
+    [
+        (
+            "500 Internal Server Error: model is overloaded (deepseek api)",
+            "transient-provider-pre-terminal",
+        ),
+        (
+            "429 Too Many Requests: rate limit exceeded at deepseek.com upstream",
+            "transient-provider-pre-terminal",
+        ),
+        (
+            "402 Payment Required: insufficient balance in deepseek account",
+            "runtime-pre-terminal-failure",
+        ),
+        ("chatgpt unauthorized: 401 invalid api key", "runtime-pre-terminal-failure"),
+        ("exited 1 without a provider-shaped failure", "runtime-pre-terminal-failure"),
+    ],
+)
+def test_transient_provider_classification_covers_direct_provider_vocabulary(
+    message: str,
+    expected_state: str,
+) -> None:
+    classifier = cast(Callable[..., object], SCRIPT["_preterminal_state"])
+    result = {
+        "agent_execution": {"duration_ms": 1},
+        "verifier_result": None,
+        "agent_result": None,
+        "exception_info": {
+            "exception_type": "NonZeroAgentExitCodeError",
+            "exception_message": message,
+        },
+    }
+    state = classifier(result, 1)
+    assert state == expected_state
 
 
 def test_auth_value_scanner_rejects_nonregex_oauth_and_account_leaks(tmp_path: Path) -> None:
@@ -167,11 +206,11 @@ def test_auth_sanitizer_redacts_exact_path_and_values_before_retention(tmp_path:
 
     scanner(retained, auth.resolve(), markers)
     assert (retained / "job.log").read_text(encoding="utf-8") == (
-        "auth path=<redacted-external-codex-auth> token=<redacted-external-codex-auth>\n"
+        "auth path=<redacted-external-pi-auth> token=<redacted-external-pi-auth>\n"
     )
     assert (retained / "auth-redaction.json").read_bytes() == (
         b'{"files":[{"path":"job.log","redaction_count":2}],'
-        b'"placeholder":"<redacted-external-codex-auth>",'
+        b'"placeholder":"<redacted-external-pi-auth>",'
         b'"schema_version":"cernora.reference.auth-redaction/v1"}'
     )
 
@@ -207,7 +246,7 @@ def test_auth_sanitizer_rejects_exportable_evidence_without_mutation(tmp_path: P
         SCRIPT["_sanitize_auth_artifacts"],
     )
     retained = tmp_path / "retained"
-    exportable = retained / "trial/agent/codex.txt"
+    exportable = retained / "trial/agent/pi.txt"
     exportable.parent.mkdir(parents=True)
     exportable.write_text(marker, encoding="utf-8")
 

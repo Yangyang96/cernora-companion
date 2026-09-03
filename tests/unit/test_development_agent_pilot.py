@@ -18,7 +18,7 @@ from cernora_reference_workflow.study_preparation import ImplementationCandidate
 
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "examples" / "priority4-development-pilot"
-BASE = "cernora-reference/codex-runtime@sha256:" + "a" * 64
+BASE = "cernora-reference/pi-runtime@sha256:" + "a" * 64
 
 
 def _implementations() -> tuple[ImplementationCandidate, ...]:
@@ -89,7 +89,7 @@ def test_confirmatory_pilot_plan_is_exact_baseline_only_and_not_authorized() -> 
     assert plan.execution.max_attempt_count == 12
     assert plan.execution.max_total_wall_time_seconds == 7200
     assert {item.configuration_id for item in plan.experiment_specs} == {"baseline"}
-    assert {item.runtime.model for item in plan.experiment_specs} == {"gpt-5.6-terra"}
+    assert {item.runtime.model for item in plan.experiment_specs} == {"deepseek/deepseek-v4-flash"}
     assert {item.runtime.reasoning_effort for item in plan.experiment_specs} == {"medium"}
     assert {item.limits.timeout_seconds for item in plan.experiment_specs} == {300}
     assert tuple(item.task.task_id for item in plan.experiment_specs) == PILOT_CASE_IDS

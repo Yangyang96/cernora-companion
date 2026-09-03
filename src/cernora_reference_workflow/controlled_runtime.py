@@ -144,13 +144,10 @@ def runtime_invocation_sha256(spec: ControlledExperimentSpecV2) -> str:
     return sha256_bytes(
         canonical_json_bytes(
             {
-                "agent": "cernora_reference_workflow.runtime_agent:TelemetryDisabledCodex",
+                "agent": "cernora_reference_workflow.runtime_agent:TelemetryDisabledPi",
                 "agent_kwargs": {
-                    "reasoning_effort": spec.runtime.reasoning_effort,
-                    "reasoning_summary": "none",
-                    "strict_config": True,
+                    "thinking": spec.runtime.reasoning_effort,
                     "version": spec.runtime.version,
-                    "web_search": "disabled",
                 },
                 "auto_confirm": True,
                 "delete_environment": True,

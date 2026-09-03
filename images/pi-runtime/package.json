@@ -1,0 +1,1 @@
+{"name":"cernora-reference-pi-runtime","private":true,"engines":{"node":">=20.6.0"},"dependencies":{"@earendil-works/pi-coding-agent":"0.84.4"}}
