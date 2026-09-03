@@ -40,10 +40,14 @@ from cernora_reference_workflow.controlled_experiment_spec import (
     ControlledExperimentSpecV2,
     Digest,
     StrictV2Contract,
+    materialize_controlled_experiment_spec,
 )
 from cernora_reference_workflow.controlled_run_plan import ControlledTrialSlotV2
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
-from cernora_reference_workflow.development_agent_pilot import DevelopmentAgentPilotPlan
+from cernora_reference_workflow.development_agent_pilot import (
+    PILOT_PROVIDER_SCOPE,
+    DevelopmentAgentPilotPlan,
+)
 from cernora_reference_workflow.publication import atomic_publish_directory
 from cernora_reference_workflow.study_preparation import (
     ImplementationCandidate,
@@ -57,7 +61,7 @@ DIAGNOSTIC_ATTEMPT_ENVELOPE_SECONDS = 360
 DIAGNOSTIC_MAX_WALL_SECONDS = 900
 DIAGNOSTIC_PREFLIGHT_FREE_BYTES = 15 * 1024**3
 DIAGNOSTIC_SAFE_STOP_FREE_BYTES = 8 * 1024**3
-SOURCE_PI_DEVELOPMENT_PLAN_ID = "e490d58fb7500d77019a5ca566809e0d7f0834a46597ca0989540e6d4cca9458"
+SOURCE_PI_DEVELOPMENT_PLAN_ID = "776c2f8f86fe532e003cfc42b6bfe7428d366d4a11835008a19484160ad81a75"
 CONSUMED_DIAGNOSTIC_PLAN_ID = "6a342640911cade0ed3bd381e3ff80e0327d5230817a72ef6bac5d46e8d8bd4a"
 CONSUMED_VALUE_FREE_DIAGNOSTIC_PLAN_ID = (
     "b039fa42eafc1a85be6e79bbbb4952639f64d8b4b89d3f62184b68838058ff76"
@@ -101,7 +105,7 @@ class RuntimeDiagnosticPilotPlan(StrictV2Contract):
     execution_authorized: Literal[False]
     authority_scope: Literal["development-only-runtime-diagnostic"]
     source_development_plan_id: Literal[
-        "e490d58fb7500d77019a5ca566809e0d7f0834a46597ca0989540e6d4cca9458"
+        "776c2f8f86fe532e003cfc42b6bfe7428d366d4a11835008a19484160ad81a75"
     ]
     task: ControlledTaskAuthority
     specification: ControlledExperimentSpecV2
@@ -115,7 +119,7 @@ class RuntimeDiagnosticPilotPlan(StrictV2Contract):
     maximum_wall_seconds: Literal[900]
     preflight_free_bytes: Literal[16106127360]
     safe_stop_free_bytes: Literal[8589934592]
-    external_provider_scope: Literal["openai-codex-authenticated-generation-only"]
+    external_provider_scope: Literal["pi-authenticated-generation-only"]
     completion: Literal["stop-after-one-terminal-publication"]
     no_retry: Literal[True]
     claim_authority: Literal["diagnostic-only"]
@@ -218,7 +222,7 @@ class RuntimeDiagnosticAuthorizationRequest(StrictV2Contract):
     attempt_envelope_timeout_seconds: Literal[360]
     maximum_wall_seconds: Literal[900]
     no_retry: Literal[True]
-    external_provider_scope: Literal["openai-codex-authenticated-generation-only"]
+    external_provider_scope: Literal["pi-authenticated-generation-only"]
     custody_path_sha256: Digest
     completion: Literal["stop-after-one-terminal-publication"]
     explicitly_not_authorized: tuple[
@@ -446,6 +450,10 @@ def build_runtime_diagnostic_pilot_plan(
         raise ContractError("Runtime diagnostic source is not the pinned development Plan")
     indexed_tasks = {item.case.case_id: item for item in source.corpus.tasks}
     indexed_specs = {item.task.task_id: item for item in source.experiment_specs}
+    spec_payload = indexed_specs[DIAGNOSTIC_CASE_ID].model_dump(mode="json")
+    spec_payload["limits"]["timeout_seconds"] = DIAGNOSTIC_AGENT_TIMEOUT_SECONDS
+    spec_payload.pop("experiment_id")
+    specification = materialize_controlled_experiment_spec(spec_payload)
     payload: dict[str, object] = {
         "schema_version": "cernora.reference.runtime-diagnostic-pilot-plan/v1",
         "status": "awaiting-user-authorization",
@@ -453,7 +461,7 @@ def build_runtime_diagnostic_pilot_plan(
         "authority_scope": "development-only-runtime-diagnostic",
         "source_development_plan_id": source.plan_id,
         "task": indexed_tasks[DIAGNOSTIC_CASE_ID].model_dump(mode="json"),
-        "specification": indexed_specs[DIAGNOSTIC_CASE_ID].model_dump(mode="json"),
+        "specification": specification.model_dump(mode="json"),
         "implementation_candidates": [
             item.model_dump(mode="json") for item in implementation_candidates
         ],
@@ -466,7 +474,7 @@ def build_runtime_diagnostic_pilot_plan(
         "maximum_wall_seconds": DIAGNOSTIC_MAX_WALL_SECONDS,
         "preflight_free_bytes": DIAGNOSTIC_PREFLIGHT_FREE_BYTES,
         "safe_stop_free_bytes": DIAGNOSTIC_SAFE_STOP_FREE_BYTES,
-        "external_provider_scope": "openai-codex-authenticated-generation-only",
+        "external_provider_scope": PILOT_PROVIDER_SCOPE,
         "completion": "stop-after-one-terminal-publication",
         "no_retry": True,
         "claim_authority": "diagnostic-only",
@@ -525,7 +533,7 @@ def build_runtime_diagnostic_authorization_request(
         "attempt_envelope_timeout_seconds": DIAGNOSTIC_ATTEMPT_ENVELOPE_SECONDS,
         "maximum_wall_seconds": DIAGNOSTIC_MAX_WALL_SECONDS,
         "no_retry": True,
-        "external_provider_scope": "openai-codex-authenticated-generation-only",
+        "external_provider_scope": PILOT_PROVIDER_SCOPE,
         "custody_path_sha256": _custody_path_sha256(custody, must_exist=False),
         "completion": "stop-after-one-terminal-publication",
         "explicitly_not_authorized": [
@@ -564,7 +572,7 @@ def _review_bytes(
         f"- Case: `{DIAGNOSTIC_CASE_ID}`\n"
         "- Scope: one development-only Trial, exactly one Attempt, no retry\n"
         "- Bounds: concurrency 1; Agent 300s; Attempt envelope 360s; total wall 900s\n"
-        "- Provider: authenticated OpenAI Codex generation only\n"
+        "- Provider: authenticated pi provider generation only\n"
         "- Output: one diagnostic-only controlled terminal artifact\n"
         f"{diagnostic_receipt}"
         "- Excluded: Candidate, held-out, smoke, Study, matrix, or second Attempt authority\n"

@@ -41,6 +41,17 @@ from cernora_reference_workflow.run_plan import (
 from cernora_reference_workflow.study_preparation import ImplementationCandidate
 
 PILOT_CASE_IDS = (
+    "p4-dev-csv-quoted",
+    "p4-dev-json-pointer",
+    "p4-dev-midnight-window",
+    "p4-dev-range-intersect",
+    "p4-dev-semver-precedence",
+    "p4-dev-slug-collapse",
+    "p4-reg-cache-key",
+    "p4-reg-nested-delete",
+    "p4-reg-vary-header",
+)
+LEGACY_PILOT_CASE_IDS = (
     "p4-dev-json-pointer",
     "p4-dev-midnight-window",
     "p4-dev-semver-precedence",
@@ -51,11 +62,19 @@ PILOT_CASE_IDS = (
 PILOT_BASELINE_PROMPT_TEXT = (
     "Repair the task from its declared behavior and the available workspace evidence."
 )
-PILOT_TIMEOUT_SECONDS = 300
-PILOT_ATTEMPT_ENVELOPE_SECONDS = 360
+PILOT_TIMEOUT_SECONDS = 600
+PILOT_ATTEMPT_ENVELOPE_SECONDS = 660
 PILOT_SETUP_TIMEOUT_SECONDS = 1440
-PILOT_MAX_ATTEMPTS = 12
-PILOT_MAX_WALL_SECONDS = 7200
+PILOT_MAX_ATTEMPTS = 18
+PILOT_MAX_WALL_SECONDS = 14400
+PILOT_PROVIDER_SCOPE = "pi-authenticated-generation-only"
+PILOT_TRIAL_COUNT = 9
+LEGACY_PILOT_TRIAL_COUNT = 6
+LEGACY_PILOT_TIMEOUT_SECONDS = 300
+LEGACY_PILOT_ATTEMPT_ENVELOPE_SECONDS = 360
+LEGACY_PILOT_MAX_ATTEMPTS = 12
+LEGACY_PILOT_MAX_WALL_SECONDS = 7200
+LEGACY_PILOT_PROVIDER_SCOPE = "openai-codex-authenticated-generation-only"
 PILOT_PREFLIGHT_FREE_BYTES = 15 * 1024**3
 PILOT_SAFE_STOP_FREE_BYTES = 8 * 1024**3
 _CALIBRATION_TIMEOUT_SECONDS: Literal[10] = 10
@@ -95,11 +114,14 @@ class DevelopmentPilotCalibration(StrictV2Contract):
 
 
 class DevelopmentPilotCorpus(StrictV2Contract):
-    schema_version: Literal["cernora.reference.development-pilot-corpus/v1"]
+    schema_version: Literal[
+        "cernora.reference.development-pilot-corpus/v1",
+        "cernora.reference.development-pilot-corpus/v2",
+    ]
     corpus_id: Digest
-    tasks: Annotated[tuple[ControlledTaskAuthority, ...], Field(min_length=6, max_length=6)]
+    tasks: Annotated[tuple[ControlledTaskAuthority, ...], Field(min_length=6, max_length=9)]
     calibrations: Annotated[
-        tuple[DevelopmentPilotCalibration, ...], Field(min_length=6, max_length=6)
+        tuple[DevelopmentPilotCalibration, ...], Field(min_length=6, max_length=9)
     ]
 
     @field_validator("tasks", "calibrations", mode="before")
@@ -109,13 +131,21 @@ class DevelopmentPilotCorpus(StrictV2Contract):
 
     @model_validator(mode="after")
     def exact_fresh_corpus(self) -> Self:
+        current = self.schema_version.endswith("/v2")
+        expected_ids = PILOT_CASE_IDS if current else LEGACY_PILOT_CASE_IDS
         task_ids = tuple(item.case.case_id for item in self.tasks)
         calibration_ids = tuple(item.case_id for item in self.calibrations)
         splits = tuple(item.split_id for item in self.tasks)
-        if task_ids != PILOT_CASE_IDS or calibration_ids != PILOT_CASE_IDS:
-            raise ValueError("development pilot corpus does not equal the fresh six-Case set")
-        if splits.count("development") != 3 or splits.count("regression") != 3:
-            raise ValueError("development pilot corpus requires exact 3/3 visible splits")
+        if task_ids != expected_ids or calibration_ids != expected_ids:
+            raise ValueError(
+                "development pilot corpus does not equal its exact Case set"
+                + (" (nine Cases)" if current else " (legacy six Cases)")
+            )
+        if splits.count("development") != (6 if current else 3) or splits.count("regression") != 3:
+            raise ValueError(
+                "development pilot corpus requires exact visible splits"
+                + (" (six development, three regression)" if current else " (3/3)")
+            )
         if any(item.split_id == "held-out" for item in self.tasks):
             raise ValueError("development pilot corpus cannot contain held-out material")
         by_case = {item.case.case_id: item for item in self.tasks}
@@ -155,11 +185,14 @@ class DevelopmentPilotImage(StrictV2Contract):
 
 
 class DevelopmentPilotImageSet(StrictV2Contract):
-    schema_version: Literal["cernora.reference.development-pilot-images/v1"]
+    schema_version: Literal[
+        "cernora.reference.development-pilot-images/v1",
+        "cernora.reference.development-pilot-images/v2",
+    ]
     image_set_id: Digest
     build_base_image: NonEmpty
     platform: Literal["linux/arm64"]
-    images: Annotated[tuple[DevelopmentPilotImage, ...], Field(min_length=6, max_length=6)]
+    images: Annotated[tuple[DevelopmentPilotImage, ...], Field(min_length=6, max_length=9)]
 
     @field_validator("images", mode="before")
     @classmethod
@@ -168,9 +201,11 @@ class DevelopmentPilotImageSet(StrictV2Contract):
 
     @model_validator(mode="after")
     def canonical_image_set(self) -> Self:
+        current = self.schema_version.endswith("/v2")
+        expected_ids = PILOT_CASE_IDS if current else LEGACY_PILOT_CASE_IDS
         case_ids = tuple(item.case_id for item in self.images)
-        if case_ids != PILOT_CASE_IDS:
-            raise ValueError("development pilot images do not equal the fresh Case set")
+        if case_ids != expected_ids:
+            raise ValueError("development pilot images do not equal their exact Case set")
         marker = "@sha256:"
         if marker not in self.build_base_image:
             raise ValueError("development pilot build base must be immutable")
@@ -208,7 +243,7 @@ def materialize_development_pilot_image_set(
     if set(images) != set(PILOT_CASE_IDS):
         raise ContractError("development pilot image input does not equal the fresh Case set")
     payload: dict[str, object] = {
-        "schema_version": "cernora.reference.development-pilot-images/v1",
+        "schema_version": "cernora.reference.development-pilot-images/v2",
         "build_base_image": build_base_image,
         "platform": "linux/arm64",
         "images": [{"case_id": case_id, "image": images[case_id]} for case_id in PILOT_CASE_IDS],
@@ -231,6 +266,7 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
         "cernora.reference.development-agent-pilot-plan/v1",
         "cernora.reference.development-agent-pilot-plan/v2",
         "cernora.reference.development-agent-pilot-plan/v3",
+        "cernora.reference.development-agent-pilot-plan/v4",
     ]
     plan_id: Digest
     selected_study_mode: Literal["confirmatory-effect"]
@@ -243,16 +279,19 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
     baseline_prompt: CanonicalAuthoritySource
     connector: ConnectorIdentity
     experiment_specs: Annotated[
-        tuple[ControlledExperimentSpecV2, ...], Field(min_length=6, max_length=6)
+        tuple[ControlledExperimentSpecV2, ...], Field(min_length=6, max_length=9)
     ]
     repetitions: Literal[1]
-    planned_trial_count: Literal[6]
-    worst_case_attempt_count: Literal[12]
-    attempt_envelope_timeout_seconds: Literal[360] | None = None
+    planned_trial_count: Literal[6, 9]
+    worst_case_attempt_count: Literal[12, 18]
+    attempt_envelope_timeout_seconds: Literal[360, 660] | None = None
     execution: RunExecutionPolicy
     preflight_free_bytes: Literal[16106127360]
     safe_stop_free_bytes: Literal[8589934592]
-    external_provider_scope: Literal["openai-codex-authenticated-generation-only"]
+    external_provider_scope: Literal[
+        "openai-codex-authenticated-generation-only",
+        "pi-authenticated-generation-only",
+    ]
     custody_policy: Literal["new-durable-git-ignored-directory"]
     stop_policy: DevelopmentPilotStopPolicy
     prohibited_actions: tuple[
@@ -275,6 +314,12 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
 
     @model_validator(mode="after")
     def exact_development_authority(self) -> Self:
+        current = self.schema_version.endswith("/v4")
+        expected_case_ids = PILOT_CASE_IDS if current else LEGACY_PILOT_CASE_IDS
+        expected_timeout = PILOT_TIMEOUT_SECONDS if current else LEGACY_PILOT_TIMEOUT_SECONDS
+        expected_attempts = PILOT_MAX_ATTEMPTS if current else LEGACY_PILOT_MAX_ATTEMPTS
+        expected_wall = PILOT_MAX_WALL_SECONDS if current else LEGACY_PILOT_MAX_WALL_SECONDS
+        expected_provider_scope = PILOT_PROVIDER_SCOPE if current else LEGACY_PILOT_PROVIDER_SCOPE
         tasks = self.corpus.tasks
         case_ids = tuple(item.case.case_id for item in tasks)
         spec_ids = tuple(item.task.task_id for item in self.experiment_specs)
@@ -294,10 +339,21 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
         ) != ("cernora", "cernora-reference-workflow"):
             raise ValueError("development pilot implementation authority is incomplete")
         if self.schema_version == "cernora.reference.development-agent-pilot-plan/v3":
+            if self.attempt_envelope_timeout_seconds != LEGACY_PILOT_ATTEMPT_ENVELOPE_SECONDS:
+                raise ValueError("development pilot Attempt envelope authority drifted")
+        elif self.schema_version == "cernora.reference.development-agent-pilot-plan/v4":
             if self.attempt_envelope_timeout_seconds != PILOT_ATTEMPT_ENVELOPE_SECONDS:
                 raise ValueError("development pilot Attempt envelope authority drifted")
         elif self.attempt_envelope_timeout_seconds is not None:
             raise ValueError("legacy development pilot Plan cannot bind an Attempt envelope")
+        if current != self.corpus.schema_version.endswith("/v2"):
+            raise ValueError("development pilot Plan and corpus authorities are not paired")
+        if current != self.images.schema_version.endswith("/v2"):
+            raise ValueError("development pilot Plan and image authorities are not paired")
+        if case_ids != expected_case_ids or self.planned_trial_count != len(tasks):
+            raise ValueError("development pilot matrix does not equal its exact Case set")
+        if self.external_provider_scope != expected_provider_scope:
+            raise ValueError("development pilot provider scope authority drifted")
         if spec_ids != case_ids or self.prohibited_actions != expected_prohibitions:
             raise ValueError("development pilot matrix or prohibitions are not exact")
         if self.baseline_prompt.source_id != "p4-confirmatory-baseline-prompt-v1":
@@ -311,15 +367,15 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
                 or spec.container.image != image_by_case[task.case.case_id]
                 or spec.container.build_base_image != self.images.build_base_image
                 or spec.container.platform != self.images.platform
-                or spec.limits.timeout_seconds != PILOT_TIMEOUT_SECONDS
+                or spec.limits.timeout_seconds != expected_timeout
                 or spec.limits.agent_setup_timeout_seconds != PILOT_SETUP_TIMEOUT_SECONDS
                 or spec.retry.max_retries != 1
             ):
                 raise ValueError("development pilot Experiment authority drifted")
         if (
             self.execution.concurrency != 1
-            or self.execution.max_attempt_count != PILOT_MAX_ATTEMPTS
-            or self.execution.max_total_wall_time_seconds != PILOT_MAX_WALL_SECONDS
+            or self.execution.max_attempt_count != expected_attempts
+            or self.execution.max_total_wall_time_seconds != expected_wall
             or self.worst_case_attempt_count
             != sum(1 + item.retry.max_retries for item in self.experiment_specs)
         ):
@@ -447,15 +503,17 @@ def load_development_pilot_corpus(root: Path) -> DevelopmentPilotCorpus:
         raise ContractError("development pilot corpus root must be one real directory")
     root = root.resolve(strict=True)
     roots = tuple(sorted(root.iterdir()))
-    if len(roots) != 6 or any(not path.is_dir() or path.is_symlink() for path in roots):
-        raise ContractError("development pilot corpus must be a closed six-directory tree")
+    if len(roots) != len(PILOT_CASE_IDS) or any(
+        not path.is_dir() or path.is_symlink() for path in roots
+    ):
+        raise ContractError("development pilot corpus must be a closed nine-directory tree")
     tasks = tuple(
         sorted((load_visible_task(path) for path in roots), key=lambda item: item.case.case_id)
     )
     by_id = {task.case.case_id: task for task in tasks}
     if (
         tuple(by_id) != PILOT_CASE_IDS
-        or sum(item.split_id == "development" for item in tasks) != 3
+        or sum(item.split_id == "development" for item in tasks) != 6
         or sum(item.split_id == "regression" for item in tasks) != 3
         or any(item.split_id == "held-out" for item in tasks)
     ):
@@ -468,7 +526,7 @@ def load_development_pilot_corpus(root: Path) -> DevelopmentPilotCorpus:
         _calibrate(root_by_id[case_id], by_id[case_id]) for case_id in PILOT_CASE_IDS
     )
     payload: dict[str, object] = {
-        "schema_version": "cernora.reference.development-pilot-corpus/v1",
+        "schema_version": "cernora.reference.development-pilot-corpus/v2",
         "tasks": [item.model_dump(mode="json") for item in tasks],
         "calibrations": [item.model_dump(mode="json") for item in calibrations],
     }
@@ -501,9 +559,10 @@ def build_development_agent_pilot_plan(
             seed_source="comparison_input_sha256",
         ),
         pass_k=None,
+        timeout_seconds=PILOT_TIMEOUT_SECONDS,
     )
     payload: dict[str, object] = {
-        "schema_version": "cernora.reference.development-agent-pilot-plan/v3",
+        "schema_version": "cernora.reference.development-agent-pilot-plan/v4",
         "selected_study_mode": "confirmatory-effect",
         "authority_scope": "development-only-agent-pilot",
         "execution_authorized": False,
@@ -521,8 +580,8 @@ def build_development_agent_pilot_plan(
         },
         "experiment_specs": [item.model_dump(mode="json") for item in specs],
         "repetitions": 1,
-        "planned_trial_count": 6,
-        "worst_case_attempt_count": 12,
+        "planned_trial_count": PILOT_TRIAL_COUNT,
+        "worst_case_attempt_count": PILOT_MAX_ATTEMPTS,
         "attempt_envelope_timeout_seconds": PILOT_ATTEMPT_ENVELOPE_SECONDS,
         "execution": {
             "concurrency": 1,
@@ -539,7 +598,7 @@ def build_development_agent_pilot_plan(
         },
         "preflight_free_bytes": PILOT_PREFLIGHT_FREE_BYTES,
         "safe_stop_free_bytes": PILOT_SAFE_STOP_FREE_BYTES,
-        "external_provider_scope": "openai-codex-authenticated-generation-only",
+        "external_provider_scope": PILOT_PROVIDER_SCOPE,
         "custody_policy": "new-durable-git-ignored-directory",
         "stop_policy": {
             "no_behavioral_failure": "stop-no-candidate",
@@ -560,11 +619,17 @@ def build_development_agent_pilot_plan(
 
 
 __all__ = [
+    "LEGACY_PILOT_CASE_IDS",
+    "LEGACY_PILOT_PROVIDER_SCOPE",
+    "LEGACY_PILOT_TRIAL_COUNT",
     "PILOT_ATTEMPT_ENVELOPE_SECONDS",
     "PILOT_BASELINE_PROMPT_TEXT",
     "PILOT_CASE_IDS",
     "PILOT_MAX_ATTEMPTS",
     "PILOT_MAX_WALL_SECONDS",
+    "PILOT_PROVIDER_SCOPE",
+    "PILOT_SETUP_TIMEOUT_SECONDS",
+    "PILOT_TRIAL_COUNT",
     "DevelopmentAgentPilotPlan",
     "DevelopmentPilotCalibration",
     "DevelopmentPilotCorpus",

@@ -322,3 +322,41 @@ with Companion wheel SHA-256
 `af27b05cbc54b6649856bac996106c21794de3f769bb75f9b98d50dfed87f2bd`, and request
 `18ecdf5e3778dbef994fa9733e17cf012bcc82e71c0bd5fef0681dfb07e3763a`.
 At materialization it was unprepared, unclaimed, and unauthorized.
+
+
+## Pi-era development-only pilot preparation (2026-09-04)
+
+After the runtime switch, the development-line corpus and control plane were migrated to the pinned
+pi Runtime for the next bounded development-only Agent pilot. The visible corpus is extended from
+six to nine fresh Cases (six `development`, three `regression`) with three new Case authorities
+(`p4-dev-csv-quoted`, `p4-dev-range-intersect`, `p4-dev-slug-collapse`). The pilot contract family
+moves to Plan `v4`, corpus/images `v2`, authorization request `v3`, and execution record `v3`:
+nine Trials, at most eighteen Attempts, a 600-second Agent timeout inside a 660-second Attempt
+envelope, a 14,400-second wall bound, concurrency one, and provider scope
+`pi-authenticated-generation-only` with authentication from `PI_AUTH_JSON_PATH`. Historical
+v1-v3 contracts remain loadable only through frozen legacy constants and version-pairing maps;
+the current seams (`prepare`, `step`, runtime verification) require Plan v4 and request v3. A
+focused independent review of the migration found no P0/P1; two P2 and three P3 findings were
+repaired offline and re-verified.
+
+The new closed request bundle is
+[`preparations/next-priority4-development-pilot-pi`](../preparations/next-priority4-development-pilot-pi),
+bound to the pinned pi base image and image set
+`285c1712852b870c9ddfeb8954b49e8aa51a4d8065eb3570f6f1667229bbf798`:
+
+| Authority | Value |
+|---|---|
+| Bundle | `c34f5b656f11ba900b311e0ba29a8ce734c3045bebfde7e38c08d6fb7f18583f` |
+| Plan | `1e22ec497f0535282625c646fe5cde8aa9c2c5dc3378a1fba4abac7d29e44b7e` |
+| Authorization request | `3df49127b1acc716e41524a2289d8934ed4014f449b57b6241798af1f7df5cc0` |
+| Corpus | `89cd20fd80630448524a6d4c722f54d52139e3d29f87314faef10b04013ce0cd` |
+| Image set | `285c1712852b870c9ddfeb8954b49e8aa51a4d8065eb3570f6f1667229bbf798` |
+| Cernora Core wheel | `0.1.4`, SHA-256 `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `0.4.0`, SHA-256 `3806453f75f29c2537e0f1485c23aad738dabc761df714d56cfeb23fa0fb3b12` |
+
+The Companion wheel was built twice offline with byte-identical digests, all nine task images were
+built twice per the existing no-cache reproducibility procedure, and the bundle was strictly
+verified against both exact wheel artifacts. Its status remains
+`awaiting-development-pilot-authorization`: creation grants no execution authority. Authorization,
+if granted, authors only the nine-Trial baseline development pilot above and stops before
+Candidate construction.

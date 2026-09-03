@@ -44,6 +44,7 @@ from cernora_reference_workflow.development_agent_pilot import (
     DevelopmentAgentPilotPlan,
 )
 from cernora_reference_workflow.development_pilot_bundle import (
+    _PLAN_TO_REQUEST_VERSION,
     DevelopmentPilotAuthorizationRequest,
 )
 from cernora_reference_workflow.publication import atomic_publish_directory
@@ -75,6 +76,7 @@ class DevelopmentPilotExecutionRecord(StrictV2Contract):
     schema_version: Literal[
         "cernora.reference.development-pilot-execution/v1",
         "cernora.reference.development-pilot-execution/v2",
+        "cernora.reference.development-pilot-execution/v3",
     ]
     execution_id: Digest
     plan_id: Digest
@@ -85,7 +87,7 @@ class DevelopmentPilotExecutionRecord(StrictV2Contract):
 
     @model_validator(mode="after")
     def canonical_identity(self) -> Self:
-        if self.schema_version.endswith("/v2"):
+        if self.schema_version.endswith(("/v2", "/v3")):
             if self.custody_path_sha256 is None or self.authorization_request_id is None:
                 raise ValueError("current execution must bind its request and custody path")
         elif self.custody_path_sha256 is not None or self.authorization_request_id is not None:
@@ -167,8 +169,8 @@ class DevelopmentPilotOutcome(StrictV2Contract):
     execution_id: Digest
     plan_id: Digest
     status: Literal["candidate-eligible", "no-candidate", "inconclusive"]
-    trial_count: Literal[6]
-    attempt_count: Annotated[StrictInt, Field(ge=6, le=12)]
+    trial_count: Literal[6, 9]
+    attempt_count: Annotated[StrictInt, Field(ge=6, le=18)]
     observations: tuple[DevelopmentObservation, ...]
     leading_failure_code: str | None
 
@@ -189,8 +191,14 @@ class DevelopmentPilotOutcome(StrictV2Contract):
             if not failures or self.leading_failure_code is None:
                 raise ValueError("candidate eligibility requires an authoritative Agent failure")
         elif self.status == "no-candidate":
-            if len(self.observations) != 6 or failures or self.leading_failure_code is not None:
-                raise ValueError("no-candidate requires six authoritative Agent passes")
+            if (
+                len(self.observations) != self.trial_count
+                or failures
+                or self.leading_failure_code is not None
+            ):
+                raise ValueError(
+                    "no-candidate requires an authoritative Agent pass for every Trial"
+                )
         elif self.leading_failure_code is not None:
             raise ValueError("inconclusive pilot cannot select a failure mechanism")
         expected = canonical_content_id(
@@ -237,8 +245,8 @@ class DevelopmentPilotStepResult(StrictV2Contract):
     execution_id: Digest
     plan_id: Digest
     status: Literal["prepared", "running", "completed"]
-    completed_trial_count: Annotated[StrictInt, Field(ge=0, le=6)]
-    attempt_count: Annotated[StrictInt, Field(ge=0, le=12)]
+    completed_trial_count: Annotated[StrictInt, Field(ge=0, le=9)]
+    attempt_count: Annotated[StrictInt, Field(ge=0, le=18)]
     outcome_id: Digest | None
 
 
@@ -408,14 +416,14 @@ def prepare_development_pilot_execution(
 ) -> DevelopmentPilotStepResult:
     """Prepare durable custody offline; this operation performs no external Attempt."""
 
-    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v3":
-        raise ContractError("development pilot prepare requires current Plan v3")
+    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v4":
+        raise ContractError("development pilot prepare requires current Plan v4")
     if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
         raise ContractError("development pilot custody destination must be new")
     custody_path_sha256 = _custody_path_sha256(destination, must_exist=False)
     if (
         authorization_request.schema_version
-        != "cernora.reference.development-pilot-authorization-request/v2"
+        != "cernora.reference.development-pilot-authorization-request/v3"
         or authorization_request.plan_id != plan.plan_id
         or authorization_request.case_authority_sha256
         != tuple(item.authority_sha256 for item in plan.corpus.tasks)
@@ -431,7 +439,7 @@ def prepare_development_pilot_execution(
         raise ContractError("development pilot nonce must be 32-byte lowercase hex")
     prepared_ms = int(wall_clock() * 1000)
     record = DevelopmentPilotExecutionRecord(
-        schema_version="cernora.reference.development-pilot-execution/v2",
+        schema_version="cernora.reference.development-pilot-execution/v3",
         execution_id=canonical_content_id(
             {
                 "authorization_request_id": authorization_request.request_id,
@@ -562,7 +570,7 @@ def _derive_outcome(
         "execution_id": record.execution_id,
         "plan_id": plan.plan_id,
         "status": status,
-        "trial_count": 6,
+        "trial_count": plan.planned_trial_count,
         "attempt_count": sum(map(len, attempts_by_slot)),
         "observations": [item.model_dump(mode="json") for item in ordered],
         "leading_failure_code": leading,
@@ -598,20 +606,23 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
     ):
         raise ContractError("development pilot custody directories are ambiguous")
     plan = DevelopmentAgentPilotPlan.from_file(entries["plan.json"])
-    current = plan.schema_version.endswith("/v3")
-    if current and ({"diagnostics", "authorization-request.json"} - set(entries)):
-        raise ContractError("current development pilot custody omits current authorities")
-    if not current and "diagnostics" in entries:
+    record_value = _load_json_model(entries["record.json"], DevelopmentPilotExecutionRecord)
+    assert isinstance(record_value, DevelopmentPilotExecutionRecord)
+    record = record_value
+    current = plan.schema_version.endswith("/v4")
+    request_bound = record.schema_version.endswith(("/v2", "/v3"))
+    if (current or request_bound) and (
+        {"diagnostics", "authorization-request.json"} - set(entries)
+    ):
+        raise ContractError("bound development pilot custody omits bound authorities")
+    if not (current or request_bound) and "diagnostics" in entries:
         raise ContractError("legacy development pilot custody cannot contain diagnostics")
-    if not current and "authorization-request.json" in entries:
+    if not (current or request_bound) and "authorization-request.json" in entries:
         raise ContractError("legacy development pilot custody cannot contain a current request")
     if "diagnostics" in entries and (
         not entries["diagnostics"].is_dir() or entries["diagnostics"].is_symlink()
     ):
         raise ContractError("development pilot diagnostics directory is ambiguous")
-    record_value = _load_json_model(entries["record.json"], DevelopmentPilotExecutionRecord)
-    assert isinstance(record_value, DevelopmentPilotExecutionRecord)
-    record = record_value
     if record.plan_id != plan.plan_id:
         raise ContractError("development pilot record binds another Plan")
     actual_custody_path_sha256 = _custody_path_sha256(root, must_exist=True)
@@ -620,11 +631,12 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
     ):
         raise ContractError("development pilot record binds another custody path")
     authorization_request = (
-        _load_authorization_request(entries["authorization-request.json"]) if current else None
+        _load_authorization_request(entries["authorization-request.json"])
+        if "authorization-request.json" in entries
+        else None
     )
     if authorization_request is not None and (
-        authorization_request.schema_version
-        != "cernora.reference.development-pilot-authorization-request/v2"
+        authorization_request.schema_version != _PLAN_TO_REQUEST_VERSION[plan.schema_version]
         or authorization_request.request_id != record.authorization_request_id
         or authorization_request.plan_id != plan.plan_id
         or authorization_request.case_authority_sha256
@@ -856,7 +868,7 @@ def _finish_if_complete(
     *,
     observed_ms: int,
 ) -> DevelopmentPilotOutcome | None:
-    if state.completed_trial_count != 6:
+    if state.completed_trial_count != state.plan.planned_trial_count:
         return None
     outcome = _derive_outcome(state.plan, state.record, state.attempts_by_slot)
     outcome_path = root / "outcome.json"
@@ -894,8 +906,8 @@ def step_development_pilot_execution(
 
     with _writer_lock(root):
         state = inspect_development_pilot_execution(root)
-        if state.plan.schema_version != "cernora.reference.development-agent-pilot-plan/v3":
-            raise ContractError("development pilot step requires current Plan v3")
+        if state.plan.schema_version != "cernora.reference.development-agent-pilot-plan/v4":
+            raise ContractError("development pilot step requires current Plan v4")
         if accepted_plan_id != state.plan.plan_id:
             raise ContractError("development pilot acceptance does not equal the exact Plan ID")
         if accepted_request_id != state.record.authorization_request_id:
@@ -939,7 +951,7 @@ def step_development_pilot_execution(
                 execution_id=state.record.execution_id,
                 plan_id=state.plan.plan_id,
                 status="completed",
-                completed_trial_count=6,
+                completed_trial_count=state.plan.planned_trial_count,
                 attempt_count=state.attempt_count,
                 outcome_id=state.outcome.outcome_id,
             )
@@ -970,7 +982,7 @@ def step_development_pilot_execution(
                 execution_id=state.record.execution_id,
                 plan_id=state.plan.plan_id,
                 status="completed",
-                completed_trial_count=6,
+                completed_trial_count=state.plan.planned_trial_count,
                 attempt_count=state.attempt_count,
                 outcome_id=outcome.outcome_id,
             )
@@ -1114,7 +1126,7 @@ def step_development_pilot_execution(
                 execution_id=updated.record.execution_id,
                 plan_id=updated.plan.plan_id,
                 status="completed",
-                completed_trial_count=6,
+                completed_trial_count=state.plan.planned_trial_count,
                 attempt_count=updated.attempt_count,
                 outcome_id=outcome.outcome_id,
             )

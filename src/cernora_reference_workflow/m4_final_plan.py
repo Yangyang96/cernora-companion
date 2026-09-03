@@ -306,6 +306,7 @@ def _specification(
     statistics: object,
     task_payload: dict[str, object],
     evaluation_payload: dict[str, object],
+    timeout_seconds: int = 300,
 ) -> ControlledExperimentSpecV2:
     runtime_source = _runtime_source()
     harness_source = _source(
@@ -356,7 +357,7 @@ def _specification(
         ).model_dump(mode="json"),
         "limits": {
             "agent_setup_timeout_seconds": 1440,
-            "timeout_seconds": 300,
+            "timeout_seconds": timeout_seconds,
             "memory_mebibytes": 4096,
             "cpu_millis": 2000,
         },
@@ -400,6 +401,7 @@ def build_controlled_specifications(
     configurations: tuple[tuple[str, CanonicalAuthoritySource], ...],
     bootstrap: BootstrapPlan,
     pass_k: PassKPlan | None,
+    timeout_seconds: int = 300,
 ) -> tuple[ControlledExperimentSpecV2, ...]:
     """Build exact controlled specifications for one closed task/configuration matrix."""
 
@@ -441,6 +443,7 @@ def build_controlled_specifications(
             statistics=statistics.model_dump(mode="json"),
             task_payload=materials[task.case.case_id][0],
             evaluation_payload=materials[task.case.case_id][2],
+            timeout_seconds=timeout_seconds,
         )
         for task in ordered_tasks
         for configuration_id, prompt in configurations

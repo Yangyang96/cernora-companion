@@ -22,7 +22,18 @@ from cernora_reference_workflow.common import (
     sha256_bytes,
 )
 from cernora_reference_workflow.development_agent_pilot import (
+    LEGACY_PILOT_ATTEMPT_ENVELOPE_SECONDS,
+    LEGACY_PILOT_MAX_ATTEMPTS,
+    LEGACY_PILOT_MAX_WALL_SECONDS,
+    LEGACY_PILOT_PROVIDER_SCOPE,
+    LEGACY_PILOT_TIMEOUT_SECONDS,
+    LEGACY_PILOT_TRIAL_COUNT,
     PILOT_ATTEMPT_ENVELOPE_SECONDS,
+    PILOT_MAX_ATTEMPTS,
+    PILOT_MAX_WALL_SECONDS,
+    PILOT_PROVIDER_SCOPE,
+    PILOT_TIMEOUT_SECONDS,
+    PILOT_TRIAL_COUNT,
     DevelopmentAgentPilotPlan,
     DevelopmentPilotCorpus,
     DevelopmentPilotImageSet,
@@ -51,6 +62,20 @@ _EXPECTED_FILES: tuple[BundlePath, ...] = (
     "plan.json",
     "review.md",
 )
+_PLAN_TO_REQUEST_VERSION: dict[str, str] = {
+    "cernora.reference.development-agent-pilot-plan/v1": (
+        "cernora.reference.development-pilot-authorization-request/v1"
+    ),
+    "cernora.reference.development-agent-pilot-plan/v2": (
+        "cernora.reference.development-pilot-authorization-request/v1"
+    ),
+    "cernora.reference.development-agent-pilot-plan/v3": (
+        "cernora.reference.development-pilot-authorization-request/v2"
+    ),
+    "cernora.reference.development-agent-pilot-plan/v4": (
+        "cernora.reference.development-pilot-authorization-request/v3"
+    ),
+}
 
 
 class DevelopmentPilotAuthorizationRequest(StrictContract):
@@ -59,6 +84,7 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
     schema_version: Literal[
         "cernora.reference.development-pilot-authorization-request/v1",
         "cernora.reference.development-pilot-authorization-request/v2",
+        "cernora.reference.development-pilot-authorization-request/v3",
     ]
     request_id: Digest
     status: Literal["awaiting-user-authorization"]
@@ -66,13 +92,16 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
     selected_study_mode: Literal["confirmatory-effect"]
     authority_scope: Literal["development-only-agent-pilot"]
     case_authority_sha256: tuple[Digest, ...]
-    planned_trial_count: Literal[6]
-    maximum_attempt_count: Literal[12]
-    per_attempt_timeout_seconds: Literal[300]
-    attempt_envelope_timeout_seconds: Literal[360] | None = None
-    maximum_wall_seconds: Literal[7200]
+    planned_trial_count: Literal[6, 9]
+    maximum_attempt_count: Literal[12, 18]
+    per_attempt_timeout_seconds: Literal[300, 600]
+    attempt_envelope_timeout_seconds: Literal[360, 660] | None = None
+    maximum_wall_seconds: Literal[7200, 14400]
     concurrency: Literal[1]
-    external_provider_scope: Literal["openai-codex-authenticated-generation-only"]
+    external_provider_scope: Literal[
+        "openai-codex-authenticated-generation-only",
+        "pi-authenticated-generation-only",
+    ]
     credential_source: Literal["PI_AUTH_JSON_PATH"]
     proxy_sources: tuple[
         Literal[
@@ -114,9 +143,11 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
 
     @model_validator(mode="after")
     def exact_request(self) -> Self:
+        current = self.schema_version.endswith("/v3")
+        expected_case_count = 9 if current else 6
         if (
-            len(self.case_authority_sha256) != 6
-            or len(set(self.case_authority_sha256)) != 6
+            len(self.case_authority_sha256) != expected_case_count
+            or len(set(self.case_authority_sha256)) != expected_case_count
             or self.proxy_sources
             != (
                 (
@@ -130,7 +161,7 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
                     "HTTPS_PROXY",
                     "ALL_PROXY",
                 )
-                if self.schema_version.endswith("/v2")
+                if self.schema_version.endswith("/v2") or current
                 else ("CERNORA_HTTP_PROXY", "CERNORA_HTTPS_PROXY", "CERNORA_ALL_PROXY")
             )
             or self.explicitly_not_authorized
@@ -145,15 +176,36 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
             or self.custody_subdirectory != f".agent/custody/development-pilot-{self.plan_id}"
         ):
             raise ValueError("development pilot authorization request is not exact")
-        if self.schema_version.endswith("/v2"):
+        if current:
             if (
                 self.attempt_envelope_timeout_seconds != PILOT_ATTEMPT_ENVELOPE_SECONDS
                 or self.custody_path_sha256 is None
+                or self.planned_trial_count != PILOT_TRIAL_COUNT
+                or self.maximum_attempt_count != PILOT_MAX_ATTEMPTS
+                or self.per_attempt_timeout_seconds != PILOT_TIMEOUT_SECONDS
+                or self.maximum_wall_seconds != PILOT_MAX_WALL_SECONDS
+                or self.external_provider_scope != PILOT_PROVIDER_SCOPE
             ):
-                raise ValueError("development pilot request Attempt envelope drifted")
+                raise ValueError("development pilot request bounds or envelope drifted")
+        elif self.schema_version.endswith("/v2"):
+            if (
+                self.attempt_envelope_timeout_seconds != LEGACY_PILOT_ATTEMPT_ENVELOPE_SECONDS
+                or self.custody_path_sha256 is None
+                or self.planned_trial_count != LEGACY_PILOT_TRIAL_COUNT
+                or self.maximum_attempt_count != LEGACY_PILOT_MAX_ATTEMPTS
+                or self.per_attempt_timeout_seconds != LEGACY_PILOT_TIMEOUT_SECONDS
+                or self.maximum_wall_seconds != LEGACY_PILOT_MAX_WALL_SECONDS
+                or self.external_provider_scope != LEGACY_PILOT_PROVIDER_SCOPE
+            ):
+                raise ValueError("development pilot request bounds or envelope drifted")
         elif (
             self.attempt_envelope_timeout_seconds is not None
             or self.custody_path_sha256 is not None
+            or self.planned_trial_count != LEGACY_PILOT_TRIAL_COUNT
+            or self.maximum_attempt_count != LEGACY_PILOT_MAX_ATTEMPTS
+            or self.per_attempt_timeout_seconds != LEGACY_PILOT_TIMEOUT_SECONDS
+            or self.maximum_wall_seconds != LEGACY_PILOT_MAX_WALL_SECONDS
+            or self.external_provider_scope != LEGACY_PILOT_PROVIDER_SCOPE
         ):
             raise ValueError("legacy authorization request cannot bind an Attempt envelope")
         identity = self.model_dump(mode="json")
@@ -226,8 +278,9 @@ def _authorization_request(
 ) -> DevelopmentPilotAuthorizationRequest:
     custody_subdirectory = f".agent/custody/development-pilot-{plan.plan_id}"
     custody_path = repository_root.resolve(strict=True).joinpath(*custody_subdirectory.split("/"))
+    request_schema = _PLAN_TO_REQUEST_VERSION[plan.schema_version]
     payload: dict[str, object] = {
-        "schema_version": "cernora.reference.development-pilot-authorization-request/v2",
+        "schema_version": request_schema,
         "status": "awaiting-user-authorization",
         "plan_id": plan.plan_id,
         "selected_study_mode": plan.selected_study_mode,
@@ -273,26 +326,48 @@ def _authorization_request(
 def _review_bytes(
     plan: DevelopmentAgentPilotPlan, request: DevelopmentPilotAuthorizationRequest
 ) -> bytes:
-    timeout_sentence = (
-        "Attempts, one at a time, with a 300-second Agent timeout, a 360-second Attempt envelope, "
-        "and a 7,200-second total wall bound."
-        if request.schema_version.endswith("/v2")
-        else "Attempts, one at a time, with a 300-second Attempt timeout and a 7,200-second total "
-        "wall bound."
-    )
+    if request.schema_version.endswith("/v3"):
+        corpus_sentence = (
+            "nine fresh visible Cases (six development and three regression), offline "
+            "verifier calibrations"
+        )
+        timeout_sentence = (
+            "Attempts, one at a time, with a 600-second Agent timeout, a 660-second Attempt "
+            "envelope, and a 14,400-second total wall bound, under the pinned pi Runtime with "
+            "authenticated provider generation."
+        )
+        bound_sentence = (
+            "Authorization, if granted, covers only nine baseline development Trials, at "
+            "most eighteen "
+        )
+    else:
+        corpus_sentence = (
+            "six fresh visible Cases (three development and three regression), offline "
+            "verifier calibrations"
+        )
+        timeout_sentence = (
+            "Attempts, one at a time, with a 300-second Agent timeout, a 360-second Attempt "
+            "envelope, and a 7,200-second total wall bound."
+            if request.schema_version.endswith("/v2")
+            else "Attempts, one at a time, with a 300-second Attempt timeout and a 7,200-second "
+            "total wall bound."
+        )
+        bound_sentence = (
+            "Authorization, if granted, covers only six baseline development Trials, at most "
+            "twelve "
+        )
     return (
         "# Priority 4 development-only Agent pilot\n\n"
         "Status: **offline prepared; awaiting explicit development-pilot authorization**\n\n"
         f"Plan: `{plan.plan_id}`\n\n"
         f"Authorization request: `{request.request_id}`\n\n"
         "The selected future study mode is `confirmatory-effect`, with `prompt-instruction` as "
-        "the only eligible Candidate Treatment axis. This bundle contains six fresh visible "
-        "Cases (three development and three regression), offline verifier calibrations, exact "
-        "baseline-only Experiment authorities, task image identities, and bounded execution "
-        "controls. Calibration records are not Agent observations.\n\n"
-        "Authorization, if granted, covers only six baseline development Trials, at most twelve "
-        f"{timeout_sentence} It does not cover smoke work, held-out access or reveal, Controlled "
-        "Study execution, or the 54-Trial matrix.\n\n"
+        "the only eligible Candidate Treatment axis. This bundle contains "
+        f"{corpus_sentence}, exact baseline-only Experiment authorities, task image "
+        "identities, and bounded execution controls. Calibration records are not Agent "
+        "observations.\n\n"
+        f"{bound_sentence}{timeout_sentence} It does not cover smoke work, held-out access or "
+        "reveal, Controlled Study execution, or the 54-Trial matrix.\n\n"
         "After the pilot, missing evidence is inconclusive. If no authoritative behavioral "
         "failure exists, stop with `no-candidate`. Otherwise stop before Candidate construction "
         "so the failure mechanism and one prompt patch can be reviewed separately.\n"
@@ -424,10 +499,7 @@ def inspect_development_pilot_bundle(root: Path) -> DevelopmentPilotBundleManife
         or request.plan_id != plan.plan_id
         or request.case_authority_sha256
         != tuple(item.authority_sha256 for item in plan.corpus.tasks)
-        or (plan.schema_version == "cernora.reference.development-agent-pilot-plan/v3")
-        != (
-            request.schema_version == "cernora.reference.development-pilot-authorization-request/v2"
-        )
+        or _PLAN_TO_REQUEST_VERSION[plan.schema_version] != request.schema_version
         or request.attempt_envelope_timeout_seconds != plan.attempt_envelope_timeout_seconds
         or request.request_id != manifest.authorization_request_id
         or request.canonical_bytes() != read_regular_file_bytes(files["authorization-request.json"])
@@ -465,8 +537,8 @@ def verify_development_pilot_runtime(
     """Bind the active pilot interpreter to both exact current Plan wheel candidates."""
 
     candidates = plan.implementation_candidates
-    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v3":
-        raise ContractError("development pilot Runtime requires current Plan v3")
+    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v4":
+        raise ContractError("development pilot Runtime requires current Plan v4")
     assert candidates is not None
     expected_prefix = repository_root.resolve(strict=True) / ".venv"
     if Path(sys.prefix).resolve(strict=True) != expected_prefix.resolve(strict=True):

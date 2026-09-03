@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cernora import BootstrapPlan
 
 import cernora_reference_workflow.development_pilot_execution as pilot_execution_module
 from cernora_reference_workflow.common import (
@@ -18,11 +19,17 @@ from cernora_reference_workflow.controlled_execution import (
     ControlledAttempt,
     ControlledAttemptRequest,
 )
+from cernora_reference_workflow.controlled_experiment_spec import materialize_authority_source
 from cernora_reference_workflow.controlled_live_attempt import ControlledHarborAttemptExecutor
 from cernora_reference_workflow.controlled_runtime import SubprocessResult
 from cernora_reference_workflow.development_agent_pilot import (
+    LEGACY_PILOT_CASE_IDS,
+    LEGACY_PILOT_PROVIDER_SCOPE,
+    PILOT_BASELINE_PROMPT_TEXT,
     PILOT_CASE_IDS,
     DevelopmentAgentPilotPlan,
+    DevelopmentPilotCorpus,
+    DevelopmentPilotImageSet,
     build_development_agent_pilot_plan,
     load_development_pilot_corpus,
     materialize_development_pilot_image_set,
@@ -33,12 +40,14 @@ from cernora_reference_workflow.development_pilot_bundle import (
 )
 from cernora_reference_workflow.development_pilot_execution import (
     AmbiguousDevelopmentPilotAttempt,
+    DevelopmentPilotExecutionRecord,
     DevelopmentPilotIncidentReceipt,
     inspect_development_pilot_execution,
     prepare_development_pilot_execution,
     step_development_pilot_execution,
     summarize_development_pilot_execution,
 )
+from cernora_reference_workflow.m4_final_plan import build_controlled_specifications
 from cernora_reference_workflow.study_preparation import ImplementationCandidate
 from tests.unit.test_controlled_execution import lifecycle_attempt
 from tests.unit.test_controlled_live_attempt import (
@@ -82,12 +91,113 @@ def _plan() -> DevelopmentAgentPilotPlan:
     )
 
 
+_LEGACY_BASE = "cernora-reference/pi-runtime@sha256:" + "a" * 64
+
+
+def _legacy_corpus_and_images() -> tuple[DevelopmentPilotCorpus, DevelopmentPilotImageSet]:
+    corpus = load_development_pilot_corpus(CORPUS)
+    corpus_payload: dict[str, object] = {
+        "schema_version": "cernora.reference.development-pilot-corpus/v1",
+        "tasks": [
+            item.model_dump(mode="json")
+            for item in corpus.tasks
+            if item.case.case_id in LEGACY_PILOT_CASE_IDS
+        ],
+        "calibrations": [
+            item.model_dump(mode="json")
+            for item in corpus.calibrations
+            if item.case_id in LEGACY_PILOT_CASE_IDS
+        ],
+    }
+    corpus_payload["corpus_id"] = canonical_content_id(corpus_payload, excluded=frozenset())
+    images_payload: dict[str, object] = {
+        "schema_version": "cernora.reference.development-pilot-images/v1",
+        "build_base_image": _LEGACY_BASE,
+        "platform": "linux/arm64",
+        "images": [
+            {
+                "case_id": case_id,
+                "image": f"cernora-reference/p4-pilot-{case_id}@sha256:{index:064x}",
+            }
+            for index, case_id in enumerate(LEGACY_PILOT_CASE_IDS, start=1)
+        ],
+    }
+    images_payload["image_set_id"] = canonical_content_id(images_payload, excluded=frozenset())
+    return (
+        DevelopmentPilotCorpus.model_validate(corpus_payload),
+        DevelopmentPilotImageSet.model_validate(images_payload),
+    )
+
+
 def _legacy_plan() -> DevelopmentAgentPilotPlan:
-    payload = _plan().model_dump(mode="json")
-    payload["schema_version"] = "cernora.reference.development-agent-pilot-plan/v1"
-    payload.pop("implementation_candidates")
-    payload.pop("attempt_envelope_timeout_seconds")
-    payload.pop("plan_id")
+    corpus, images = _legacy_corpus_and_images()
+    baseline = materialize_authority_source(
+        "p4-confirmatory-baseline-prompt-v1", {"text": PILOT_BASELINE_PROMPT_TEXT}
+    )
+    specs = build_controlled_specifications(
+        tasks=corpus.tasks,
+        images={item.case_id: item.image for item in images.images},
+        build_base_image=images.build_base_image,
+        configurations=(("baseline", baseline),),
+        bootstrap=BootstrapPlan(
+            method="case-clustered-paired-bootstrap/v1",
+            confidence_basis_points=9500,
+            resamples=10000,
+            percentile="nearest_rank_closed",
+            seed_source="comparison_input_sha256",
+        ),
+        pass_k=None,
+        timeout_seconds=300,
+    )
+    payload: dict[str, object] = {
+        "schema_version": "cernora.reference.development-agent-pilot-plan/v1",
+        "selected_study_mode": "confirmatory-effect",
+        "authority_scope": "development-only-agent-pilot",
+        "execution_authorized": False,
+        "treatment_axis_if_eligible": "prompt-instruction",
+        "corpus": corpus.model_dump(mode="json"),
+        "images": images.model_dump(mode="json"),
+        "baseline_prompt": baseline.model_dump(mode="json"),
+        "connector": {
+            "connector_id": "cernora-reference-harbor-pi",
+            "connector_version": "2",
+            "platform_qualification": "macos-arm64",
+        },
+        "experiment_specs": [item.model_dump(mode="json") for item in specs],
+        "repetitions": 1,
+        "planned_trial_count": 6,
+        "worst_case_attempt_count": 12,
+        "execution": {
+            "concurrency": 1,
+            "max_attempt_count": 12,
+            "max_total_wall_time_seconds": 7200,
+            "token_budget": {
+                "status": "unavailable",
+                "reason": "no-structured-authoritative-source",
+            },
+            "monetary_budget": {
+                "status": "unavailable",
+                "reason": "no-structured-authoritative-source",
+            },
+        },
+        "preflight_free_bytes": 16106127360,
+        "safe_stop_free_bytes": 8589934592,
+        "external_provider_scope": LEGACY_PILOT_PROVIDER_SCOPE,
+        "custody_policy": "new-durable-git-ignored-directory",
+        "stop_policy": {
+            "no_behavioral_failure": "stop-no-candidate",
+            "incomplete_or_missing_evidence": "stop-inconclusive",
+            "ambiguous_active_attempt": "pause-no-retry",
+            "completion": "stop-before-candidate-construction",
+        },
+        "prohibited_actions": [
+            "held-out-access",
+            "smoke-execution",
+            "study-start-execution",
+            "study-step-execution",
+            "54-trial-matrix",
+        ],
+    }
     payload["plan_id"] = canonical_content_id(payload, excluded=frozenset())
     return DevelopmentAgentPilotPlan.model_validate(payload)
 
@@ -193,7 +303,7 @@ def test_each_step_claims_at_most_one_attempt_and_all_passes_stop_no_candidate(
     _prepare(plan, custody)
     executor = EvaluatedExecutor(plan, tmp_path / "evaluations")
 
-    for index in range(6):
+    for index in range(len(PILOT_CASE_IDS)):
         result = step_development_pilot_execution(
             custody,
             executor,
@@ -210,9 +320,9 @@ def test_each_step_claims_at_most_one_attempt_and_all_passes_stop_no_candidate(
     assert state.outcome is not None
     assert state.outcome.status == "no-candidate"
     assert state.outcome.leading_failure_code is None
-    assert len(state.outcome.observations) == 6
+    assert len(state.outcome.observations) == len(PILOT_CASE_IDS)
     assert all(item.agent_outcome == "pass" for item in state.outcome.observations)
-    assert state.attempt_count == 6
+    assert state.attempt_count == len(PILOT_CASE_IDS)
 
 
 def test_prepared_custody_is_not_reported_as_running(tmp_path: Path) -> None:
@@ -228,7 +338,7 @@ def test_prepared_custody_is_not_reported_as_running(tmp_path: Path) -> None:
 
 
 def test_core_prepare_rejects_historical_unbound_plan(tmp_path: Path) -> None:
-    with pytest.raises(ContractError, match="current Plan v3"):
+    with pytest.raises(ContractError, match="current Plan v4"):
         prepare_development_pilot_execution(
             _legacy_plan(),
             tmp_path / "legacy-custody",
@@ -250,7 +360,7 @@ def test_core_step_rejects_historical_unbound_plan(
     )
     executor = CrashingExecutor()
 
-    with pytest.raises(ContractError, match="current Plan v3"):
+    with pytest.raises(ContractError, match="current Plan v4"):
         step_development_pilot_execution(
             custody,
             executor,
@@ -269,8 +379,20 @@ def test_legacy_custody_rejects_posthoc_diagnostics_directory(tmp_path: Path) ->
     (custody / "artifacts").mkdir()
     (custody / "diagnostics").mkdir()
     (custody / "ledger").mkdir()
-    (custody / "plan.json").write_bytes(_legacy_plan().canonical_bytes())
-    (custody / "record.json").write_bytes(b"{}")
+    legacy = _legacy_plan()
+    record_payload: dict[str, object] = {
+        "schema_version": "cernora.reference.development-pilot-execution/v1",
+        "plan_id": legacy.plan_id,
+        "nonce": "a" * 64,
+        "prepared_unix_milliseconds": 1,
+    }
+    record_payload["execution_id"] = canonical_content_id(
+        {"nonce": record_payload["nonce"], "plan_id": record_payload["plan_id"]},
+        excluded=frozenset(),
+    )
+    record = DevelopmentPilotExecutionRecord.model_validate(record_payload)
+    (custody / "plan.json").write_bytes(legacy.canonical_bytes())
+    (custody / "record.json").write_bytes(record.canonical_bytes())
 
     with pytest.raises(ContractError, match="legacy.*cannot contain diagnostics"):
         inspect_development_pilot_execution(custody)
@@ -733,10 +855,10 @@ def test_real_evaluated_failure_is_selected_without_heldout_or_fabrication(
     plan = _plan()
     custody = tmp_path / "custody"
     _prepare(plan, custody)
-    failing = frozenset({PILOT_CASE_IDS[0]})
+    failing = frozenset({"p4-dev-json-pointer"})
     executor = EvaluatedExecutor(plan, tmp_path / "evaluations", failing_cases=failing)
 
-    for _ in range(6):
+    for _ in range(len(PILOT_CASE_IDS)):
         step_development_pilot_execution(
             custody,
             executor,
@@ -753,7 +875,7 @@ def test_real_evaluated_failure_is_selected_without_heldout_or_fabrication(
     assert outcome.leading_failure_code == "json_pointer_escape_order_v1"
     failures = [item for item in outcome.observations if item.agent_outcome == "behavioral-failure"]
     assert len(failures) == 1
-    assert failures[0].case_id == PILOT_CASE_IDS[0]
+    assert failures[0].case_id == "p4-dev-json-pointer"
     assert failures[0].source == "agent-pilot"
 
 
@@ -817,7 +939,7 @@ def test_final_infrastructure_attempt_makes_complete_pilot_inconclusive(tmp_path
         retry_first=False,
     )
 
-    for _ in range(6):
+    for _ in range(len(PILOT_CASE_IDS)):
         step_development_pilot_execution(
             custody,
             executor,
@@ -832,7 +954,7 @@ def test_final_infrastructure_attempt_makes_complete_pilot_inconclusive(tmp_path
     assert outcome is not None
     assert outcome.status == "inconclusive"
     assert outcome.leading_failure_code is None
-    assert len(outcome.observations) == 5
+    assert len(outcome.observations) == len(PILOT_CASE_IDS) - 1
 
 
 def test_retry_stays_inside_first_trial_and_uses_frozen_delay(tmp_path: Path) -> None:
@@ -846,7 +968,7 @@ def test_retry_stays_inside_first_trial_and_uses_frozen_delay(tmp_path: Path) ->
     )
     sleeps: list[float] = []
 
-    for _ in range(7):
+    for _ in range(len(PILOT_CASE_IDS) + 1):
         step_development_pilot_execution(
             custody,
             executor,
@@ -861,6 +983,6 @@ def test_retry_stays_inside_first_trial_and_uses_frozen_delay(tmp_path: Path) ->
     state = inspect_development_pilot_execution(custody)
     assert state.outcome is not None
     assert state.outcome.status == "no-candidate"
-    assert state.attempt_count == 7
+    assert state.attempt_count == len(PILOT_CASE_IDS) + 1
     assert len(state.attempts_by_slot[0]) == 2
     assert sleeps == [10.0]

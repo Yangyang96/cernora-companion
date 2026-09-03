@@ -32,7 +32,7 @@ def create_development_pilot_images(
     work_root: Path,
     output: Path,
 ) -> None:
-    """Publish exact reproducible image identities for the visible six-Case corpus."""
+    """Publish exact reproducible image identities for the visible nine-Case corpus."""
 
     corpus = load_development_pilot_corpus(corpus_root)
     if not work_root.is_dir() or work_root.is_symlink() or _inside_git_worktree(work_root):

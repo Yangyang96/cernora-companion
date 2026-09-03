@@ -47,7 +47,7 @@ def test_fresh_corpus_is_offline_calibrated_without_agent_observations() -> None
     corpus = load_development_pilot_corpus(CORPUS)
 
     assert tuple(item.case.case_id for item in corpus.tasks) == PILOT_CASE_IDS
-    assert [item.split_id for item in corpus.tasks].count("development") == 3
+    assert [item.split_id for item in corpus.tasks].count("development") == 6
     assert [item.split_id for item in corpus.tasks].count("regression") == 3
     assert all(item.baseline_exit_code > 0 for item in corpus.calibrations)
     assert all(item.solution_exit_code == 0 for item in corpus.calibrations)
@@ -79,19 +79,19 @@ def test_confirmatory_pilot_plan_is_exact_baseline_only_and_not_authorized() -> 
     )
 
     assert plan.selected_study_mode == "confirmatory-effect"
-    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v3"
-    assert plan.attempt_envelope_timeout_seconds == 360
+    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v4"
+    assert plan.attempt_envelope_timeout_seconds == 660
     assert plan.execution_authorized is False
     assert plan.implementation_candidates == _implementations()
     assert plan.treatment_axis_if_eligible == "prompt-instruction"
-    assert plan.planned_trial_count == 6
-    assert plan.worst_case_attempt_count == 12
-    assert plan.execution.max_attempt_count == 12
-    assert plan.execution.max_total_wall_time_seconds == 7200
+    assert plan.planned_trial_count == 9
+    assert plan.worst_case_attempt_count == 18
+    assert plan.execution.max_attempt_count == 18
+    assert plan.execution.max_total_wall_time_seconds == 14400
     assert {item.configuration_id for item in plan.experiment_specs} == {"baseline"}
     assert {item.runtime.model for item in plan.experiment_specs} == {"deepseek/deepseek-v4-flash"}
     assert {item.runtime.reasoning_effort for item in plan.experiment_specs} == {"medium"}
-    assert {item.limits.timeout_seconds for item in plan.experiment_specs} == {300}
+    assert {item.limits.timeout_seconds for item in plan.experiment_specs} == {600}
     assert tuple(item.task.task_id for item in plan.experiment_specs) == PILOT_CASE_IDS
     assert "held-out-access" in plan.prohibited_actions
     assert "54-trial-matrix" in plan.prohibited_actions
@@ -102,13 +102,13 @@ def test_corpus_rejects_extra_or_relabelled_cases(tmp_path: Path) -> None:
     copied = tmp_path / "corpus"
     shutil.copytree(CORPUS, copied)
     shutil.copytree(copied / "dev-json-pointer", copied / "extra")
-    with pytest.raises(ContractError, match="closed six-directory"):
+    with pytest.raises(ContractError, match="closed nine-directory"):
         load_development_pilot_corpus(copied)
 
     shutil.rmtree(copied / "extra")
     extra_link = copied / "extra-link"
     extra_link.symlink_to(copied / "dev-json-pointer", target_is_directory=True)
-    with pytest.raises(ContractError, match="closed six-directory"):
+    with pytest.raises(ContractError, match="closed nine-directory"):
         load_development_pilot_corpus(copied)
 
     extra_link.unlink()

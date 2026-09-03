@@ -301,6 +301,33 @@ user subsequently authorized it, and its sole 315,506-millisecond Attempt closed
 evidence is usable for lifecycle diagnosis only, and no Runtime observation, RepairResult,
 evaluation, Candidate, smoke, held-out, or Study evidence was produced.
 
+### Pi-era development-only pilot preparation (2026-09-04)
+
+After the codex-to-pi runtime switch, the development line was migrated to the pinned pi Runtime
+for the next bounded development-only Agent pilot. The visible corpus was extended to nine fresh
+Cases (six `development`, three `regression`) with three new Case authorities, and the pilot
+contract family moved to Plan `v4` / request `v3` / execution record `v3` bounds: nine baseline
+Trials, at most eighteen Attempts, a 600-second Agent timeout inside a 660-second Attempt envelope,
+a 14,400-second wall bound, concurrency one, and provider scope
+`pi-authenticated-generation-only`. Historical v1-v3 pilot contracts remain loadable only through
+frozen legacy constants and version-pairing maps; `prepare`/`step`/runtime verification require the
+v4 authority. A focused independent review of the migration found no P0-P1; all P2/P3 findings
+were repaired and re-verified offline.
+
+The closed pi-era request bundle is
+[`preparations/next-priority4-development-pilot-pi`](../preparations/next-priority4-development-pilot-pi),
+with bundle `c34f5b656f11ba900b311e0ba29a8ce734c3045bebfde7e38c08d6fb7f18583f`, Plan
+`1e22ec497f0535282625c646fe5cde8aa9c2c5dc3378a1fba4abac7d29e44b7e`, and authorization request
+`3df49127b1acc716e41524a2289d8934ed4014f449b57b6241798af1f7df5cc0`. It binds image set
+`285c1712852b870c9ddfeb8954b49e8aa51a4d8065eb3570f6f1667229bbf798` on the pinned pi base image,
+Companion wheel `3806453f75f29c2537e0f1485c23aad738dabc761df714d56cfeb23fa0fb3b12`, and Core wheel
+`4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d`; the Companion wheel and every
+task image were built twice with byte-identical or no-cache-reproducible digests, and the bundle
+passes strict verification against both exact wheels. At materialization it was prepared offline
+with status `awaiting-development-pilot-authorization`; its existence grants no execution
+authority, and it authorizes no held-out access or reveal, smoke execution, Controlled Study
+execution, or any Trial of the future 54-Trial matrix.
+
 ### Proxy-diagnostic follow-up boundary (2026-09-02)
 
 Two further one-shot diagnostics ran on the same `p4-dev-json-pointer` Case through a locally
