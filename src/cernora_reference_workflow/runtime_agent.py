@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import shlex
 from pathlib import Path
 from typing import override
@@ -87,6 +88,18 @@ class TelemetryDisabledPi(Pi):  # type: ignore[misc]
         )
         policy_receipt = shlex.quote(canonical_json_bytes(RUNTIME_POLICY).decode("utf-8"))
 
+        # Prepare directories before uploading auth: the upload target must exist
+        # so the fast compose copy path is taken instead of a slow tar fallback
+        # that can burn the whole agent time budget on short-timeout trials.
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -euo pipefail; "
+                f"mkdir -p {shlex.quote(remote_home)} {shlex.quote(remote_secrets)} "
+                f"{shlex.quote(agent_dir)} {shlex.quote(sessions_dir)}"
+            ),
+            env=dict(_PI_OFFLINE_ENVIRONMENT),
+        )
         auth_path = self._resolve_auth_path()
         await environment.upload_file(auth_path, remote_auth)
         if environment.default_user is not None:
@@ -98,8 +111,6 @@ class TelemetryDisabledPi(Pi):  # type: ignore[misc]
             environment,
             command=(
                 "set -euo pipefail; "
-                f"mkdir -p {shlex.quote(remote_home)} {shlex.quote(remote_secrets)} "
-                f"{shlex.quote(agent_dir)} {shlex.quote(sessions_dir)}; "
                 f"ln -sf {shlex.quote(remote_auth)} {shlex.quote(remote_home)}/auth.json; "
                 f"printf %s {environment_receipt} > "
                 f"{shlex.quote(agent_dir)}/pi-environment.json; "
@@ -134,18 +145,28 @@ class TelemetryDisabledPi(Pi):  # type: ignore[misc]
             )
             # ``set -euo pipefail`` is load-bearing: a failed removal test must abort
             # before the receipt write so the cleanup receipt can never claim a
-            # removal that did not verifiably happen, and the exec must fail.
-            await self.exec_as_agent(
-                environment,
-                command=(
-                    "set -euo pipefail; "
-                    f"rm -rf {shlex.quote(remote_home)} {shlex.quote(remote_secrets)}; "
-                    f"test ! -e {shlex.quote(remote_home)}; "
-                    f"test ! -e {shlex.quote(remote_secrets)}; "
-                    f"printf %s {cleanup_receipt} > "
-                    f"{shlex.quote(agent_dir)}/runtime-cleanup.json"
-                ),
+            # removal that did not verifiably happen, and the exec must fail. The
+            # shielded task keeps the removal alive when a timeout cancels this
+            # coroutine, so the receipt is still written before cancellation
+            # propagates instead of an asyncio interrupt skipping the cleanup.
+            cleanup_task = asyncio.ensure_future(
+                self.exec_as_agent(
+                    environment,
+                    command=(
+                        "set -euo pipefail; "
+                        f"rm -rf {shlex.quote(remote_home)} {shlex.quote(remote_secrets)}; "
+                        f"test ! -e {shlex.quote(remote_home)}; "
+                        f"test ! -e {shlex.quote(remote_secrets)}; "
+                        f"printf %s {cleanup_receipt} > "
+                        f"{shlex.quote(agent_dir)}/runtime-cleanup.json"
+                    ),
+                )
             )
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                await cleanup_task
+                raise
         write_pi_trajectory(
             self.logs_dir / "sessions",
             self.logs_dir / "trajectory.json",
