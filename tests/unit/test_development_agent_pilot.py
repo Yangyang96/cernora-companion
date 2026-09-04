@@ -79,19 +79,19 @@ def test_confirmatory_pilot_plan_is_exact_baseline_only_and_not_authorized() -> 
     )
 
     assert plan.selected_study_mode == "confirmatory-effect"
-    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v4"
-    assert plan.attempt_envelope_timeout_seconds == 660
+    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v5"
+    assert plan.attempt_envelope_timeout_seconds == 1260
     assert plan.execution_authorized is False
     assert plan.implementation_candidates == _implementations()
     assert plan.treatment_axis_if_eligible == "prompt-instruction"
     assert plan.planned_trial_count == 9
     assert plan.worst_case_attempt_count == 18
     assert plan.execution.max_attempt_count == 18
-    assert plan.execution.max_total_wall_time_seconds == 14400
+    assert plan.execution.max_total_wall_time_seconds == 25200
     assert {item.configuration_id for item in plan.experiment_specs} == {"baseline"}
     assert {item.runtime.model for item in plan.experiment_specs} == {"deepseek/deepseek-v4-flash"}
     assert {item.runtime.reasoning_effort for item in plan.experiment_specs} == {"medium"}
-    assert {item.limits.timeout_seconds for item in plan.experiment_specs} == {600}
+    assert {item.limits.timeout_seconds for item in plan.experiment_specs} == {1200}
     assert tuple(item.task.task_id for item in plan.experiment_specs) == PILOT_CASE_IDS
     assert "held-out-access" in plan.prohibited_actions
     assert "54-trial-matrix" in plan.prohibited_actions

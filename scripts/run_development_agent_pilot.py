@@ -119,7 +119,17 @@ def _step(
         raise ContractError("development pilot requires explicit PI_AUTH_JSON_PATH")
     auth_file = Path(auth_value)
     assert state.plan.attempt_envelope_timeout_seconds is not None
-    with tempfile.TemporaryDirectory(prefix="cernora-development-pilot-evaluation-") as temporary:
+    # Harbor's docker compose bind mounts are only reliable for evaluation
+    # trees on paths shared with the Docker VM. macOS system temporary
+    # directories such as the default TMPDIR are not, and bind sources there
+    # silently lose container-side writes (the "pi session directory is
+    # missing" failure). Keep the evaluation tree under an operator-owned,
+    # worktree-external, VM-shared directory instead.
+    evaluation_parent = Path.home() / ".cernora" / "pilot-evaluation"
+    evaluation_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="cernora-development-pilot-evaluation-", dir=evaluation_parent
+    ) as temporary:
         executor = ControlledHarborAttemptExecutor(
             repository_root=repository,
             tasks=state.plan.corpus.tasks,

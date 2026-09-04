@@ -22,7 +22,6 @@ from cernora_reference_workflow.common import (
     sha256_bytes,
 )
 from cernora_reference_workflow.development_agent_pilot import (
-    LEGACY_PILOT_ATTEMPT_ENVELOPE_SECONDS,
     LEGACY_PILOT_MAX_ATTEMPTS,
     LEGACY_PILOT_MAX_WALL_SECONDS,
     LEGACY_PILOT_PROVIDER_SCOPE,
@@ -34,6 +33,9 @@ from cernora_reference_workflow.development_agent_pilot import (
     PILOT_PROVIDER_SCOPE,
     PILOT_TIMEOUT_SECONDS,
     PILOT_TRIAL_COUNT,
+    PILOT_V4_ATTEMPT_ENVELOPE_SECONDS,
+    PILOT_V4_MAX_WALL_SECONDS,
+    PILOT_V4_TIMEOUT_SECONDS,
     DevelopmentAgentPilotPlan,
     DevelopmentPilotCorpus,
     DevelopmentPilotImageSet,
@@ -75,6 +77,9 @@ _PLAN_TO_REQUEST_VERSION: dict[str, str] = {
     "cernora.reference.development-agent-pilot-plan/v4": (
         "cernora.reference.development-pilot-authorization-request/v3"
     ),
+    "cernora.reference.development-agent-pilot-plan/v5": (
+        "cernora.reference.development-pilot-authorization-request/v4"
+    ),
 }
 
 
@@ -85,6 +90,7 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
         "cernora.reference.development-pilot-authorization-request/v1",
         "cernora.reference.development-pilot-authorization-request/v2",
         "cernora.reference.development-pilot-authorization-request/v3",
+        "cernora.reference.development-pilot-authorization-request/v4",
     ]
     request_id: Digest
     status: Literal["awaiting-user-authorization"]
@@ -94,9 +100,9 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
     case_authority_sha256: tuple[Digest, ...]
     planned_trial_count: Literal[6, 9]
     maximum_attempt_count: Literal[12, 18]
-    per_attempt_timeout_seconds: Literal[300, 600]
-    attempt_envelope_timeout_seconds: Literal[360, 660] | None = None
-    maximum_wall_seconds: Literal[7200, 14400]
+    per_attempt_timeout_seconds: Literal[300, 600, 1200]
+    attempt_envelope_timeout_seconds: Literal[360, 660, 1260] | None = None
+    maximum_wall_seconds: Literal[7200, 14400, 25200]
     concurrency: Literal[1]
     external_provider_scope: Literal[
         "openai-codex-authenticated-generation-only",
@@ -143,7 +149,8 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
 
     @model_validator(mode="after")
     def exact_request(self) -> Self:
-        current = self.schema_version.endswith("/v3")
+        current = self.schema_version.endswith("/v4")
+        historical_v3 = self.schema_version.endswith("/v3")
         expected_case_count = 9 if current else 6
         if (
             len(self.case_authority_sha256) != expected_case_count
@@ -187,17 +194,17 @@ class DevelopmentPilotAuthorizationRequest(StrictContract):
                 or self.external_provider_scope != PILOT_PROVIDER_SCOPE
             ):
                 raise ValueError("development pilot request bounds or envelope drifted")
-        elif self.schema_version.endswith("/v2"):
+        elif historical_v3:
             if (
-                self.attempt_envelope_timeout_seconds != LEGACY_PILOT_ATTEMPT_ENVELOPE_SECONDS
+                self.attempt_envelope_timeout_seconds != PILOT_V4_ATTEMPT_ENVELOPE_SECONDS
                 or self.custody_path_sha256 is None
-                or self.planned_trial_count != LEGACY_PILOT_TRIAL_COUNT
-                or self.maximum_attempt_count != LEGACY_PILOT_MAX_ATTEMPTS
-                or self.per_attempt_timeout_seconds != LEGACY_PILOT_TIMEOUT_SECONDS
-                or self.maximum_wall_seconds != LEGACY_PILOT_MAX_WALL_SECONDS
-                or self.external_provider_scope != LEGACY_PILOT_PROVIDER_SCOPE
+                or self.planned_trial_count != PILOT_TRIAL_COUNT
+                or self.maximum_attempt_count != PILOT_MAX_ATTEMPTS
+                or self.per_attempt_timeout_seconds != PILOT_V4_TIMEOUT_SECONDS
+                or self.maximum_wall_seconds != PILOT_V4_MAX_WALL_SECONDS
+                or self.external_provider_scope != PILOT_PROVIDER_SCOPE
             ):
-                raise ValueError("development pilot request bounds or envelope drifted")
+                raise ValueError("development pi-era request bounds or envelope drifted")
         elif (
             self.attempt_envelope_timeout_seconds is not None
             or self.custody_path_sha256 is not None
@@ -326,7 +333,21 @@ def _authorization_request(
 def _review_bytes(
     plan: DevelopmentAgentPilotPlan, request: DevelopmentPilotAuthorizationRequest
 ) -> bytes:
-    if request.schema_version.endswith("/v3"):
+    if request.schema_version.endswith("/v4"):
+        corpus_sentence = (
+            "nine fresh visible Cases (six development and three regression), offline "
+            "verifier calibrations"
+        )
+        timeout_sentence = (
+            "Attempts, one at a time, with a 1,200-second Agent timeout, a 1,260-second "
+            "Attempt envelope, and a 25,200-second total wall bound, under the pinned pi "
+            "Runtime with authenticated provider generation."
+        )
+        bound_sentence = (
+            "Authorization, if granted, covers only nine baseline development Trials, at "
+            "most eighteen "
+        )
+    elif request.schema_version.endswith("/v3"):
         corpus_sentence = (
             "nine fresh visible Cases (six development and three regression), offline "
             "verifier calibrations"
@@ -537,8 +558,8 @@ def verify_development_pilot_runtime(
     """Bind the active pilot interpreter to both exact current Plan wheel candidates."""
 
     candidates = plan.implementation_candidates
-    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v4":
-        raise ContractError("development pilot Runtime requires current Plan v4")
+    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v5":
+        raise ContractError("development pilot Runtime requires current Plan v5")
     assert candidates is not None
     expected_prefix = repository_root.resolve(strict=True) / ".venv"
     if Path(sys.prefix).resolve(strict=True) != expected_prefix.resolve(strict=True):

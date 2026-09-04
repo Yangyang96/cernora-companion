@@ -416,14 +416,14 @@ def prepare_development_pilot_execution(
 ) -> DevelopmentPilotStepResult:
     """Prepare durable custody offline; this operation performs no external Attempt."""
 
-    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v4":
-        raise ContractError("development pilot prepare requires current Plan v4")
+    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v5":
+        raise ContractError("development pilot prepare requires current Plan v5")
     if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
         raise ContractError("development pilot custody destination must be new")
     custody_path_sha256 = _custody_path_sha256(destination, must_exist=False)
     if (
         authorization_request.schema_version
-        != "cernora.reference.development-pilot-authorization-request/v3"
+        != "cernora.reference.development-pilot-authorization-request/v4"
         or authorization_request.plan_id != plan.plan_id
         or authorization_request.case_authority_sha256
         != tuple(item.authority_sha256 for item in plan.corpus.tasks)
@@ -609,7 +609,7 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
     record_value = _load_json_model(entries["record.json"], DevelopmentPilotExecutionRecord)
     assert isinstance(record_value, DevelopmentPilotExecutionRecord)
     record = record_value
-    current = plan.schema_version.endswith("/v4")
+    current = plan.schema_version.endswith("/v5")
     request_bound = record.schema_version.endswith(("/v2", "/v3"))
     if (current or request_bound) and (
         {"diagnostics", "authorization-request.json"} - set(entries)
@@ -906,8 +906,8 @@ def step_development_pilot_execution(
 
     with _writer_lock(root):
         state = inspect_development_pilot_execution(root)
-        if state.plan.schema_version != "cernora.reference.development-agent-pilot-plan/v4":
-            raise ContractError("development pilot step requires current Plan v4")
+        if state.plan.schema_version != "cernora.reference.development-agent-pilot-plan/v5":
+            raise ContractError("development pilot step requires current Plan v5")
         if accepted_plan_id != state.plan.plan_id:
             raise ContractError("development pilot acceptance does not equal the exact Plan ID")
         if accepted_request_id != state.record.authorization_request_id:

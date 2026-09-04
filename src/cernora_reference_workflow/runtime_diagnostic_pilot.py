@@ -61,7 +61,7 @@ DIAGNOSTIC_ATTEMPT_ENVELOPE_SECONDS = 360
 DIAGNOSTIC_MAX_WALL_SECONDS = 900
 DIAGNOSTIC_PREFLIGHT_FREE_BYTES = 15 * 1024**3
 DIAGNOSTIC_SAFE_STOP_FREE_BYTES = 8 * 1024**3
-SOURCE_PI_DEVELOPMENT_PLAN_ID = "776c2f8f86fe532e003cfc42b6bfe7428d366d4a11835008a19484160ad81a75"
+SOURCE_PI_DEVELOPMENT_PLAN_ID = "fc6bfeff2dde3a221513ac11bec9f0b94e43f8c826f04213cc1a362490f6e8f9"
 CONSUMED_DIAGNOSTIC_PLAN_ID = "6a342640911cade0ed3bd381e3ff80e0327d5230817a72ef6bac5d46e8d8bd4a"
 CONSUMED_VALUE_FREE_DIAGNOSTIC_PLAN_ID = (
     "b039fa42eafc1a85be6e79bbbb4952639f64d8b4b89d3f62184b68838058ff76"
@@ -105,7 +105,7 @@ class RuntimeDiagnosticPilotPlan(StrictV2Contract):
     execution_authorized: Literal[False]
     authority_scope: Literal["development-only-runtime-diagnostic"]
     source_development_plan_id: Literal[
-        "776c2f8f86fe532e003cfc42b6bfe7428d366d4a11835008a19484160ad81a75"
+        "fc6bfeff2dde3a221513ac11bec9f0b94e43f8c826f04213cc1a362490f6e8f9"
     ]
     task: ControlledTaskAuthority
     specification: ControlledExperimentSpecV2

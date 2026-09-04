@@ -93,9 +93,9 @@ def test_bundle_closes_exact_unapproved_development_request(tmp_path: Path) -> N
     assert request.plan_id == created.plan_id
     assert request.planned_trial_count == 9
     assert request.maximum_attempt_count == 18
-    assert request.per_attempt_timeout_seconds == 600
-    assert request.schema_version == "cernora.reference.development-pilot-authorization-request/v3"
-    assert request.attempt_envelope_timeout_seconds == 660
+    assert request.per_attempt_timeout_seconds == 1200
+    assert request.schema_version == "cernora.reference.development-pilot-authorization-request/v4"
+    assert request.attempt_envelope_timeout_seconds == 1260
     expected_custody = (
         tmp_path.resolve(strict=True)
         / ".agent"
@@ -114,7 +114,7 @@ def test_bundle_closes_exact_unapproved_development_request(tmp_path: Path) -> N
         "HTTPS_PROXY",
         "ALL_PROXY",
     )
-    assert request.maximum_wall_seconds == 14400
+    assert request.maximum_wall_seconds == 25200
     assert request.completion_stop == "before-candidate-construction"
     assert request.no_failure_stop == "no-candidate"
     assert request.missing_evidence_stop == "inconclusive"
@@ -133,7 +133,7 @@ def test_bundle_closes_exact_unapproved_development_request(tmp_path: Path) -> N
     )
     assert b'"agent_outcome":"behavioral-failure"' not in serialized
     plan = DevelopmentAgentPilotPlan.from_file(destination / "plan.json")
-    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v4"
+    assert plan.schema_version == "cernora.reference.development-agent-pilot-plan/v5"
     assert plan.implementation_candidates == created.implementation_candidates
     assert {item.configuration_id for item in plan.experiment_specs} == {"baseline"}
     DevelopmentPilotImageSet.from_file(destination / "images.json")
