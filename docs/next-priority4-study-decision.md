@@ -360,3 +360,46 @@ verified against both exact wheel artifacts. Its status remains
 `awaiting-development-pilot-authorization`: creation grants no execution authority. Authorization,
 if granted, authors only the nine-Trial baseline development pilot above and stops before
 Candidate construction.
+
+
+## Live development pilot campaign (2026-09-04)
+
+Five pi-era development pilots ran under exact fresh authorities. The campaign
+repaired four live-only defects that offline gates could not expose, and it
+froze two authorities on the ambiguity protocol instead of producing a
+candidate-eligible outcome:
+
+1. **r1** (plan 1e22ec49, wheel 48f87698-predecessor) — every attempt closed
+   pre-terminal. Root cause: the trial-result validator expected a Codex-era
+   unsplit `model_info`, while the pinned pi Runtime reports the provider
+   split. Repaired in 7fd8f3a.
+2. **r2** (plan 2cbb430e, wheel 48f87698) — three clean timeouts and six
+   pre-terminal closures. Root cause: Harbor's docker compose bind mounts
+   silently lose container-side writes when the evaluation tree lives under
+   macOS system temporary directories, which the pi session-directory contract
+   then reports as missing. Repaired by pinning the pilot evaluation tree to
+   an operator-owned VM-shared root, and the Agent timeout moved from 600 to
+   1,800 seconds across v4/v5/v6 plan generations as three corpus Cases were
+   observed closing at each shorter ceiling (a4c2122, 0f15262, 7c3186b).
+3. **r3** (plan 42d81add, wheel d7684a26) — two evaluated Trials (csv and
+   json-pointer behavioral failures) then a slot-3 ambiguous claim: a
+   controlled-attempt-error raised by the executor after the claim without a
+   terminal publication. The execution froze under the ambiguity protocol.
+4. **r4** (plan 2026f510, wheel d7684a26) — six evaluated Trials including
+   **five authoritative behavioral failures** and one pass, three timeout
+   Trials, before the outcome derivation rejected attempts that also carried
+   `unauthorized_path_changed_v1` next to the declared code. Repaired to a
+   membership check in 7c3186b.
+5. **r5** (plan 8801699d, wheel 87bff95d) — a slot-1 controlled-attempt-error
+   after a 37-minute claim froze the execution under the ambiguity protocol.
+
+The r4 custody keeps the five behavioral-failure attempt artifacts as frozen
+evidence; per the stop policy its execution is inconclusive and cannot mint
+development observations. The remaining blocker is the executor-side
+controlled-attempt-error family after an active claim — value-free by
+contract, so diagnosing it requires the one-shot runtime-diagnostic authority
+cycle (a fresh wheel, diagnostic plan, request, and authorization per the
+established pattern), not further pilot rounds. All five bundles are archived
+under `preparations/next-priority4-development-pilot-pi-r*` with their frozen
+custodies; no Candidate, held-out, smoke, Study, or 54-Trial authority was
+consumed. The sixth pilot must not reuse any retired plan.
