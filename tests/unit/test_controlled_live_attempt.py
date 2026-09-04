@@ -83,6 +83,14 @@ def _auth_file(root: Path) -> Path:
     return path
 
 
+def _split_model_info(model: str) -> dict[str, str | None]:
+    if "/" in model:
+        provider, name = model.split("/", 1)
+        # Harbor 0.16.1 with the pinned pi Runtime reports the provider split.
+        return {"name": name, "provider": provider}
+    return {"name": model, "provider": None}
+
+
 def _spec(
     task: ControlledTaskAuthority,
     *,
@@ -618,7 +626,7 @@ class FakeProcess:
             "agent_info": {
                 "name": "pi",
                 "version": self.spec.runtime.version,
-                "model_info": {"name": self.spec.runtime.model, "provider": None},
+                "model_info": _split_model_info(self.spec.runtime.model),
             },
             "agent_result": {},
             "verifier_result": {},

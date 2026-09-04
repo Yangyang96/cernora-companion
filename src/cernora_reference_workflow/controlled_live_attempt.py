@@ -1045,6 +1045,14 @@ def _validate_trial_result(
             "actual Harbor Trial config drifts from Runtime/task authority",
             diagnostic_code="trial-config-authority-rejected",
         )
+    # The pinned pi Runtime is configured with a provider/model pair; Harbor 0.16.1
+    # reports the split representation in agent_info.model_info, and the slash
+    # form never appears in a real pi result.
+    prov, separator, model_name = spec.runtime.model.partition("/")
+    if separator:
+        expected_model_info: dict[str, object] = {"name": model_name, "provider": prov}
+    else:
+        expected_model_info = {"name": spec.runtime.model, "provider": None}
     if (
         set(agent_info) != {"name", "version", "model_info"}
         or set(model) != {"name", "provider"}
@@ -1056,7 +1064,7 @@ def _validate_trial_result(
             {
                 "name": "pi",
                 "version": spec.runtime.version,
-                "model_info": {"name": spec.runtime.model, "provider": None},
+                "model_info": expected_model_info,
             },
         )
     ):
