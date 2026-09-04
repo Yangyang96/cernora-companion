@@ -344,7 +344,7 @@ def test_prepared_custody_is_not_reported_as_running(tmp_path: Path) -> None:
 
 
 def test_core_prepare_rejects_historical_unbound_plan(tmp_path: Path) -> None:
-    with pytest.raises(ContractError, match="current Plan v5"):
+    with pytest.raises(ContractError, match="current Plan v6"):
         prepare_development_pilot_execution(
             _legacy_plan(),
             tmp_path / "legacy-custody",
@@ -366,7 +366,7 @@ def test_core_step_rejects_historical_unbound_plan(
     )
     executor = CrashingExecutor()
 
-    with pytest.raises(ContractError, match="current Plan v5"):
+    with pytest.raises(ContractError, match="current Plan v6"):
         step_development_pilot_execution(
             custody,
             executor,

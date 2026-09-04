@@ -416,14 +416,14 @@ def prepare_development_pilot_execution(
 ) -> DevelopmentPilotStepResult:
     """Prepare durable custody offline; this operation performs no external Attempt."""
 
-    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v5":
-        raise ContractError("development pilot prepare requires current Plan v5")
+    if plan.schema_version != "cernora.reference.development-agent-pilot-plan/v6":
+        raise ContractError("development pilot prepare requires current Plan v6")
     if destination.exists() or destination.is_symlink() or not destination.parent.is_dir():
         raise ContractError("development pilot custody destination must be new")
     custody_path_sha256 = _custody_path_sha256(destination, must_exist=False)
     if (
         authorization_request.schema_version
-        != "cernora.reference.development-pilot-authorization-request/v4"
+        != "cernora.reference.development-pilot-authorization-request/v5"
         or authorization_request.plan_id != plan.plan_id
         or authorization_request.case_authority_sha256
         != tuple(item.authority_sha256 for item in plan.corpus.tasks)
@@ -538,7 +538,10 @@ def _derive_outcome(
             failure_code = None
             agent_outcome = "pass"
         else:
-            if result.failure_codes != (task.failure_code,):
+            # A real Agent may fail the declared check and additionally violate
+            # protected-path authority in the same attempt; the declared code
+            # must be present, and extra codes stay part of the frozen result.
+            if task.failure_code not in result.failure_codes:
                 raise ContractError("development Agent failure code contradicts task authority")
             failure_code = task.failure_code
             agent_outcome = "behavioral-failure"
@@ -609,7 +612,7 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
     record_value = _load_json_model(entries["record.json"], DevelopmentPilotExecutionRecord)
     assert isinstance(record_value, DevelopmentPilotExecutionRecord)
     record = record_value
-    current = plan.schema_version.endswith("/v5")
+    current = plan.schema_version.endswith("/v6")
     request_bound = record.schema_version.endswith(("/v2", "/v3"))
     if (current or request_bound) and (
         {"diagnostics", "authorization-request.json"} - set(entries)
@@ -906,8 +909,8 @@ def step_development_pilot_execution(
 
     with _writer_lock(root):
         state = inspect_development_pilot_execution(root)
-        if state.plan.schema_version != "cernora.reference.development-agent-pilot-plan/v5":
-            raise ContractError("development pilot step requires current Plan v5")
+        if state.plan.schema_version != "cernora.reference.development-agent-pilot-plan/v6":
+            raise ContractError("development pilot step requires current Plan v6")
         if accepted_plan_id != state.plan.plan_id:
             raise ContractError("development pilot acceptance does not equal the exact Plan ID")
         if accepted_request_id != state.record.authorization_request_id:

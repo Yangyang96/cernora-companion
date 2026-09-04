@@ -62,16 +62,19 @@ LEGACY_PILOT_CASE_IDS = (
 PILOT_BASELINE_PROMPT_TEXT = (
     "Repair the task from its declared behavior and the available workspace evidence."
 )
-PILOT_TIMEOUT_SECONDS = 1200
-PILOT_ATTEMPT_ENVELOPE_SECONDS = 1260
+PILOT_TIMEOUT_SECONDS = 1800
+PILOT_ATTEMPT_ENVELOPE_SECONDS = 1860
 PILOT_SETUP_TIMEOUT_SECONDS = 1440
 PILOT_MAX_ATTEMPTS = 18
-PILOT_MAX_WALL_SECONDS = 25200
+PILOT_MAX_WALL_SECONDS = 36000
 PILOT_PROVIDER_SCOPE = "pi-authenticated-generation-only"
 PILOT_TRIAL_COUNT = 9
 PILOT_V4_TIMEOUT_SECONDS = 600
 PILOT_V4_ATTEMPT_ENVELOPE_SECONDS = 660
 PILOT_V4_MAX_WALL_SECONDS = 14400
+PILOT_V5_TIMEOUT_SECONDS = 1200
+PILOT_V5_ATTEMPT_ENVELOPE_SECONDS = 1260
+PILOT_V5_MAX_WALL_SECONDS = 25200
 LEGACY_PILOT_TRIAL_COUNT = 6
 LEGACY_PILOT_TIMEOUT_SECONDS = 300
 LEGACY_PILOT_ATTEMPT_ENVELOPE_SECONDS = 360
@@ -271,6 +274,7 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
         "cernora.reference.development-agent-pilot-plan/v3",
         "cernora.reference.development-agent-pilot-plan/v4",
         "cernora.reference.development-agent-pilot-plan/v5",
+        "cernora.reference.development-agent-pilot-plan/v6",
     ]
     plan_id: Digest
     selected_study_mode: Literal["confirmatory-effect"]
@@ -288,7 +292,7 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
     repetitions: Literal[1]
     planned_trial_count: Literal[6, 9]
     worst_case_attempt_count: Literal[12, 18]
-    attempt_envelope_timeout_seconds: Literal[360, 660, 1260] | None = None
+    attempt_envelope_timeout_seconds: Literal[360, 660, 1260, 1860] | None = None
     execution: RunExecutionPolicy
     preflight_free_bytes: Literal[16106127360]
     safe_stop_free_bytes: Literal[8589934592]
@@ -318,24 +322,32 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
 
     @model_validator(mode="after")
     def exact_development_authority(self) -> Self:
-        current = self.schema_version.endswith("/v5")
+        current = self.schema_version.endswith("/v6")
+        historical_v5 = self.schema_version.endswith("/v5")
         current_v4 = self.schema_version.endswith("/v4")
-        expected_case_ids = PILOT_CASE_IDS if (current or current_v4) else LEGACY_PILOT_CASE_IDS
+        current_era = current or historical_v5 or current_v4
+        expected_case_ids = PILOT_CASE_IDS if current_era else LEGACY_PILOT_CASE_IDS
         expected_timeout = (
             PILOT_TIMEOUT_SECONDS
             if current
-            else (PILOT_V4_TIMEOUT_SECONDS if current_v4 else LEGACY_PILOT_TIMEOUT_SECONDS)
+            else (
+                PILOT_V5_TIMEOUT_SECONDS
+                if historical_v5
+                else (PILOT_V4_TIMEOUT_SECONDS if current_v4 else LEGACY_PILOT_TIMEOUT_SECONDS)
+            )
         )
-        expected_attempts = (
-            PILOT_MAX_ATTEMPTS if (current or current_v4) else LEGACY_PILOT_MAX_ATTEMPTS
-        )
+        expected_attempts = PILOT_MAX_ATTEMPTS if current_era else LEGACY_PILOT_MAX_ATTEMPTS
         expected_wall = (
             PILOT_MAX_WALL_SECONDS
             if current
-            else (PILOT_V4_MAX_WALL_SECONDS if current_v4 else LEGACY_PILOT_MAX_WALL_SECONDS)
+            else (
+                PILOT_V5_MAX_WALL_SECONDS
+                if historical_v5
+                else (PILOT_V4_MAX_WALL_SECONDS if current_v4 else LEGACY_PILOT_MAX_WALL_SECONDS)
+            )
         )
         expected_provider_scope = (
-            PILOT_PROVIDER_SCOPE if (current or current_v4) else LEGACY_PILOT_PROVIDER_SCOPE
+            PILOT_PROVIDER_SCOPE if current_era else LEGACY_PILOT_PROVIDER_SCOPE
         )
         tasks = self.corpus.tasks
         case_ids = tuple(item.case.case_id for item in tasks)
@@ -362,13 +374,16 @@ class DevelopmentAgentPilotPlan(StrictV2Contract):
             if self.attempt_envelope_timeout_seconds != PILOT_V4_ATTEMPT_ENVELOPE_SECONDS:
                 raise ValueError("development pilot Attempt envelope authority drifted")
         elif self.schema_version == "cernora.reference.development-agent-pilot-plan/v5":
+            if self.attempt_envelope_timeout_seconds != PILOT_V5_ATTEMPT_ENVELOPE_SECONDS:
+                raise ValueError("development pilot Attempt envelope authority drifted")
+        elif self.schema_version == "cernora.reference.development-agent-pilot-plan/v6":
             if self.attempt_envelope_timeout_seconds != PILOT_ATTEMPT_ENVELOPE_SECONDS:
                 raise ValueError("development pilot Attempt envelope authority drifted")
         elif self.attempt_envelope_timeout_seconds is not None:
             raise ValueError("legacy development pilot Plan cannot bind an Attempt envelope")
-        if (current or current_v4) != self.corpus.schema_version.endswith("/v2"):
+        if current_era != self.corpus.schema_version.endswith("/v2"):
             raise ValueError("development pilot Plan and corpus authorities are not paired")
-        if (current or current_v4) != self.images.schema_version.endswith("/v2"):
+        if current_era != self.images.schema_version.endswith("/v2"):
             raise ValueError("development pilot Plan and image authorities are not paired")
         if case_ids != expected_case_ids or self.planned_trial_count != len(tasks):
             raise ValueError("development pilot matrix does not equal its exact Case set")
@@ -582,7 +597,7 @@ def build_development_agent_pilot_plan(
         timeout_seconds=PILOT_TIMEOUT_SECONDS,
     )
     payload: dict[str, object] = {
-        "schema_version": "cernora.reference.development-agent-pilot-plan/v5",
+        "schema_version": "cernora.reference.development-agent-pilot-plan/v6",
         "selected_study_mode": "confirmatory-effect",
         "authority_scope": "development-only-agent-pilot",
         "execution_authorized": False,
