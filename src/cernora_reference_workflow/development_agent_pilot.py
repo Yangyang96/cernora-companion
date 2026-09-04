@@ -48,8 +48,8 @@ PILOT_CASE_IDS = (
     "p4-dev-semver-precedence",
     "p4-dev-slug-collapse",
     "p4-reg-cache-key",
+    "p4-reg-filename-sort",
     "p4-reg-nested-delete",
-    "p4-reg-vary-header",
 )
 LEGACY_PILOT_CASE_IDS = (
     "p4-dev-json-pointer",

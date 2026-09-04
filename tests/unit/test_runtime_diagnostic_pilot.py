@@ -55,7 +55,7 @@ from tests.unit.test_study_preparation import _candidate_wheels
 FREE = 20 * 1024**3
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "examples" / "priority4-development-pilot"
-SOURCE_PI_PLAN_ID = "fc6bfeff2dde3a221513ac11bec9f0b94e43f8c826f04213cc1a362490f6e8f9"
+SOURCE_PI_PLAN_ID = "187e2fbc6c83ad2c3b99ff7561270ad5e322cac3b5930e6f1ed9255d458b719e"
 
 
 def _source_plan() -> DevelopmentAgentPilotPlan:

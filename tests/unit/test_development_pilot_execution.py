@@ -95,19 +95,25 @@ _LEGACY_BASE = "cernora-reference/pi-runtime@sha256:" + "a" * 64
 
 
 def _legacy_corpus_and_images() -> tuple[DevelopmentPilotCorpus, DevelopmentPilotImageSet]:
+    from cernora_reference_workflow import development_agent_pilot as pilot_module
+    from cernora_reference_workflow.controlled_task import load_visible_task
+
     corpus = load_development_pilot_corpus(CORPUS)
+    retired_root = ROOT / "tests" / "fixtures" / "legacy-corpus" / "reg-vary-header"
+    retired = load_visible_task(retired_root)
+    retired_calibration = pilot_module._calibrate(retired_root, retired)
+    legacy_tasks = [item for item in corpus.tasks if item.case.case_id in LEGACY_PILOT_CASE_IDS] + [
+        retired
+    ]
+    legacy_calibrations = [
+        item for item in corpus.calibrations if item.case_id in LEGACY_PILOT_CASE_IDS
+    ] + [retired_calibration]
+    legacy_tasks.sort(key=lambda item: item.case.case_id)
+    legacy_calibrations.sort(key=lambda item: item.case_id)
     corpus_payload: dict[str, object] = {
         "schema_version": "cernora.reference.development-pilot-corpus/v1",
-        "tasks": [
-            item.model_dump(mode="json")
-            for item in corpus.tasks
-            if item.case.case_id in LEGACY_PILOT_CASE_IDS
-        ],
-        "calibrations": [
-            item.model_dump(mode="json")
-            for item in corpus.calibrations
-            if item.case_id in LEGACY_PILOT_CASE_IDS
-        ],
+        "tasks": [item.model_dump(mode="json") for item in legacy_tasks],
+        "calibrations": [item.model_dump(mode="json") for item in legacy_calibrations],
     }
     corpus_payload["corpus_id"] = canonical_content_id(corpus_payload, excluded=frozenset())
     images_payload: dict[str, object] = {
