@@ -571,3 +571,29 @@ persists its fixed value-free family discriminator. If the pilot closes
 inconclusive again, work stops for a user decision instead of opening a
 seventh round.
 
+## r6 live outcome: family identified, pilot frozen (2026-09-07)
+
+Execution `10d7057f…` closed six of nine Trials cleanly — five authoritative
+behavioral failures (csv_quoted_field_scanning_v1,
+json_pointer_escape_order_v1, midnight_window_wrap_v1,
+half_open_range_semantics_v1, semver_prerelease_order_v1) and one pass
+(slug-collapse) — in under fourteen minutes of live time. Its seventh claim
+(slot 7, `p4-reg-cache-key`) froze at
+2026-09-06T16:55:17Z with incident `phase=executor`,
+`category=controlled-attempt-error`, and the first durable family
+discriminator: **`private-value-in-artifact`**.
+
+This identifies the r3/r5 executor-phase exception family at the class-code
+level: after the Harbor process closes, the private-value scan finds a
+prohibited marker byte-string inside a job artifact file and fails closed
+before any terminal publication. The dying ephemeral evidence (temporary job
+tree, marker identity, exact artifact path) is destroyed by the fail-closed
+cleanup, so pinpointing which marker corrupted which artifact requires a
+further bounded instrumentation step (a value-free marker-kind/artifact-path
+code) or an offline reproduction with the reg-cache-key Case.
+
+Per the stop policy the execution is permanently ambiguous and its outcome is
+`inconclusive`: six Trials cannot mint development observations, and the five
+frozen behavioral-failure attempt artifacts remain evidence-only in custody.
+The r7 boundary is a user decision.
+
