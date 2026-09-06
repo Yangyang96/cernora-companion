@@ -639,3 +639,25 @@ Mypy across 152 source files, Ruff, format, the full suite run of record, and
 a regression test that plants a secret marker into a fake Harbor job tree and
 asserts the composite-code lifecycle closure plus value-free serialization.
 
+## Seventh development pilot preparation (2026-09-07)
+
+The replacement bundle is
+[`preparations/next-priority4-development-pilot-pi-r7`](../preparations/next-priority4-development-pilot-pi-r7),
+again over the frozen nine-Case corpus and the r5 image set:
+
+| Authority | Value |
+|---|---|
+| Bundle | `3078b72db26575c0dda121f1c2b3079aa84343d9c5b942b99e5330ca58a8feb2` |
+| Plan | `b2e99c2dd78cdfd71b515d84558e6a6fdef21b181191c25c9c9e648714dd1c66` |
+| Authorization request | `42ecc8ea47c430ad517b13a38a6b18f1d218dc60b35f8615a5cc2167312a2ea6` |
+| Cernora Core wheel | `0.1.4`, SHA-256 `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `0.4.0`, SHA-256 `4ec1a8e3a5345e73a1da741ed50c02066868b4a6a4e124b284db4552f994754b` (built twice byte-identical) |
+
+Bounds are unchanged from r6: nine Trials, at most eighteen Attempts, the
+1,800-second Agent timeout inside its 1,860-second envelope, the 36,000-second
+wall bound, concurrency one, provider scope `pi-authenticated-generation-only`.
+A private-value artifact hit now closes its Trial with the composite code in
+the published terminal reason instead of freezing the execution; a pilot whose
+Trials all evaluate can still reach `candidate-eligible`. The stop rule above
+still applies: an inconclusive r7 halts for a user decision.
+
