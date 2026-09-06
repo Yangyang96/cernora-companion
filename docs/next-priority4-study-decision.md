@@ -519,3 +519,55 @@ diagnostic receipt. It authorizes no Candidate construction, held-out access or
 reveal, smoke execution, Study execution, or 54-Trial work, and at
 materialization it is unprepared and unauthorized.
 
+
+## Second live one-shot closes evaluated (2026-09-07)
+
+Execution `6f7983d6ef43531ea4f62b9762cbca7dca4872aeb23ffd0fc60b11a7287d6c8b`
+under Plan `4fba5a12…` (request `8d3403c3…`) ran under the same standing
+diagnostic mandate and in-session ID publication, and **completed**: its sole
+Attempt claimed at ordinal 1 closed in 152,990 milliseconds as one evaluated
+terminal artifact (`attempt_id 05b355c9…`, classification `evaluated`, outcome
+`26c398861b2fa64d8b60ef2abc9b9f2dcc3ac0a51ea2f5bc5b8bbd2c5639f30d`). The pi
+agent produced an **authoritative behavioral failure** on json-pointer
+(`json_pointer_escape_order_v1`, changed `src/json_pointer.py`, terminal state
+`behavioral-failure`, retry-ineligible). This is the first fully evaluated
+Attempt in the one-shot diagnostic control plane's history: the executor, the
+private-value scan, the container cleanup, the single-task Evaluation Package,
+and the authority validation all closed end-to-end.
+
+Consequences: the c7d8ee3c freeze family (suite-binding construction defect) is
+repaired and live-confirmed; the r3/r5 executor-phase exception family did not
+reproduce across either one-shot, and every unconverted executor raise site now
+carries a fixed value-free code, so any r6 recurrence will be durably
+identifiable in the incident receipt. The diagnostic-only attempt cannot mint
+development evidence; the sixth development pilot remains the vehicle for a
+candidate-eligible outcome.
+
+## Sixth development pilot preparation (2026-09-07)
+
+The replacement bundle is
+[`preparations/next-priority4-development-pilot-pi-r6`](../preparations/next-priority4-development-pilot-pi-r6),
+reusing the frozen nine-Case corpus and the r5 image set
+`799ab92a61edf21fad8beb14f029eab4e9dde68259bda5305cc17bddc8e74a0f` with the
+instrumented implementation:
+
+| Authority | Value |
+|---|---|
+| Bundle | `3f007d38e5a4a0b7f0d122f775661f37d9e131765ac2706456e42afed0c28bab` |
+| Plan | `a2911ae4b3ccd3c454fcb681f23db3731d8239afedc2f618395d7912e8fddc4a` |
+| Authorization request | `bb171b4703285d658c880cfbe83e01bd917b3a06af981dcbf3d154ca97871a77` |
+| Corpus | nine fresh visible Cases (six development, three regression), calibrations verifier-only |
+| Image set | `799ab92a61edf21fad8beb14f029eab4e9dde68259bda5305cc17bddc8e74a0f` |
+| Cernora Core wheel | `0.1.4`, SHA-256 `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `0.4.0`, SHA-256 `ea4a6aa956cd25d6f1da107488ef14caf6353e6189998d1827c68d5661ed91e4` (built twice byte-identical) |
+
+Execution was prepared as
+`10d7057f1e4d33f7d36d90dac46c3b3ffa3ab2038e7fed352d59cab3ec9d7cdd`. The
+bounds are unchanged from r5: nine Trials, at most eighteen Attempts, the
+1,800-second Agent timeout inside its 1,860-second envelope, the 36,000-second
+wall bound, concurrency one, and provider scope
+`pi-authenticated-generation-only`. Any incident that freezes a claim now
+persists its fixed value-free family discriminator. If the pilot closes
+inconclusive again, work stops for a user decision instead of opening a
+seventh round.
+
