@@ -20,7 +20,10 @@ from cernora_reference_workflow.controlled_execution import (
     ControlledAttemptRequest,
 )
 from cernora_reference_workflow.controlled_experiment_spec import materialize_authority_source
-from cernora_reference_workflow.controlled_live_attempt import ControlledHarborAttemptExecutor
+from cernora_reference_workflow.controlled_live_attempt import (
+    ControlledHarborAttemptExecutor,
+    LiveAttemptError,
+)
 from cernora_reference_workflow.controlled_runtime import SubprocessResult
 from cernora_reference_workflow.development_agent_pilot import (
     LEGACY_PILOT_CASE_IDS,
@@ -42,6 +45,7 @@ from cernora_reference_workflow.development_pilot_execution import (
     AmbiguousDevelopmentPilotAttempt,
     DevelopmentPilotExecutionRecord,
     DevelopmentPilotIncidentReceipt,
+    DevelopmentPilotIncidentReceiptV1,
     inspect_development_pilot_execution,
     prepare_development_pilot_execution,
     step_development_pilot_execution,
@@ -680,6 +684,128 @@ def test_executor_failure_writes_value_free_incident_and_keeps_claim_ambiguous(
     assert b"simulated process loss" not in serialized
 
 
+def test_controlled_executor_error_incident_records_fixed_family_discriminator(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    custody = tmp_path / "custody"
+    _prepare(plan, custody)
+
+    class DockerCleanupLossExecutor(CrashingExecutor):
+        def __call__(self, request: ControlledAttemptRequest) -> ControlledAttempt:
+            self.requests.append(request)
+            raise LiveAttemptError(
+                "exact Goal container survived force removal",
+                diagnostic_code="docker-removal-survived",
+            )
+
+    with pytest.raises(ContractError, match="force removal"):
+        step_development_pilot_execution(
+            custody,
+            DockerCleanupLossExecutor(),
+            accepted_plan_id=plan.plan_id,
+            accepted_request_id=_request_id(custody),
+            wall_clock=lambda: 1000.0,
+            clock=lambda: 0.0,
+            disk_free=lambda _: FREE,
+        )
+
+    state = inspect_development_pilot_execution(custody)
+    assert state.ambiguous_claim is not None
+    assert len(state.incidents) == 1
+    receipt = state.incidents[0]
+    assert isinstance(receipt, DevelopmentPilotIncidentReceipt)
+    assert receipt.category == "controlled-attempt-error"
+    assert receipt.phase == "executor"
+    assert receipt.schema_version == "cernora.reference.development-pilot-incident/v2"
+    assert receipt.discriminator == "docker-removal-survived"
+    serialized = next((custody / "diagnostics").iterdir()).read_bytes()
+    assert b"docker-removal-survived" in serialized
+    assert b"force removal" not in serialized
+
+
+def test_unclassified_contract_error_incident_uses_fallback_discriminator(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    custody = tmp_path / "custody"
+    _prepare(plan, custody)
+
+    class PlainContractLossExecutor(CrashingExecutor):
+        def __call__(self, request: ControlledAttemptRequest) -> ControlledAttempt:
+            self.requests.append(request)
+            raise ContractError("file exceeds 8388608 bytes: session.json")
+
+    with pytest.raises(ContractError, match="session.json"):
+        step_development_pilot_execution(
+            custody,
+            PlainContractLossExecutor(),
+            accepted_plan_id=plan.plan_id,
+            accepted_request_id=_request_id(custody),
+            wall_clock=lambda: 1000.0,
+            clock=lambda: 0.0,
+            disk_free=lambda _: FREE,
+        )
+
+    state = inspect_development_pilot_execution(custody)
+    assert len(state.incidents) == 1
+    fallback_receipt = state.incidents[0]
+    assert isinstance(fallback_receipt, DevelopmentPilotIncidentReceipt)
+    assert fallback_receipt.category == "controlled-attempt-error"
+    assert fallback_receipt.discriminator == "unclassified-contract-error"
+    serialized = next((custody / "diagnostics").iterdir()).read_bytes()
+    assert b"session.json" not in serialized
+
+
+def test_legacy_v1_incident_receipt_still_replays_from_frozen_custody(
+    tmp_path: Path,
+) -> None:
+    plan = _plan()
+    custody = tmp_path / "custody"
+    _prepare(plan, custody)
+
+    class LegacyFreezeExecutor(CrashingExecutor):
+        def __call__(self, request: ControlledAttemptRequest) -> ControlledAttempt:
+            self.requests.append(request)
+            raise LiveAttemptError("exact Goal container survived force removal")
+
+    with pytest.raises(ContractError, match="force removal"):
+        step_development_pilot_execution(
+            custody,
+            LegacyFreezeExecutor(),
+            accepted_plan_id=plan.plan_id,
+            accepted_request_id=_request_id(custody),
+            wall_clock=lambda: 1000.0,
+            clock=lambda: 0.0,
+            disk_free=lambda _: FREE,
+        )
+
+    state = inspect_development_pilot_execution(custody)
+    assert len(state.incidents) == 1
+    claim = state.ambiguous_claim
+    assert claim is not None
+    receipt_path = custody / "diagnostics" / f"{claim.entry_id}.json"
+    legacy_payload: dict[str, object] = {
+        "schema_version": "cernora.reference.development-pilot-incident/v1",
+        "execution_id": state.record.execution_id,
+        "plan_id": plan.plan_id,
+        "claim_entry_id": claim.entry_id,
+        "phase": "executor",
+        "category": "controlled-attempt-error",
+        "observed_unix_milliseconds": claim.observed_unix_milliseconds,
+    }
+    legacy_payload["incident_id"] = canonical_content_id(legacy_payload, excluded=frozenset())
+    receipt = DevelopmentPilotIncidentReceiptV1.model_validate(legacy_payload)
+    receipt_path.write_bytes(receipt.canonical_bytes())
+
+    replayed = inspect_development_pilot_execution(custody)
+    assert len(replayed.incidents) == 1
+    assert replayed.incidents[0].schema_version == (
+        "cernora.reference.development-pilot-incident/v1"
+    )
+    assert replayed.incidents[0].category == "controlled-attempt-error"
+
+
 def test_post_executor_validation_failure_writes_incident(tmp_path: Path) -> None:
     plan = _plan()
     custody = tmp_path / "custody"
@@ -732,7 +858,7 @@ def test_incident_cannot_bind_a_published_claim_or_predate_it(tmp_path: Path) ->
         "observed_unix_milliseconds": 0,
     }
     payload["incident_id"] = canonical_content_id(payload, excluded=frozenset())
-    receipt = DevelopmentPilotIncidentReceipt.model_validate(payload)
+    receipt = DevelopmentPilotIncidentReceiptV1.model_validate(payload)
     (custody / "diagnostics" / f"{claim.entry_id}.json").write_bytes(receipt.canonical_bytes())
 
     with pytest.raises(ContractError, match="incident contradicts custody"):

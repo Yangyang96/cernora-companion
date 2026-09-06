@@ -61,7 +61,7 @@ DIAGNOSTIC_ATTEMPT_ENVELOPE_SECONDS = 360
 DIAGNOSTIC_MAX_WALL_SECONDS = 900
 DIAGNOSTIC_PREFLIGHT_FREE_BYTES = 15 * 1024**3
 DIAGNOSTIC_SAFE_STOP_FREE_BYTES = 8 * 1024**3
-SOURCE_PI_DEVELOPMENT_PLAN_ID = "458777b90d4a71653464438db37acbda2e5dae48842bc057ee74df3b2b18326b"
+SOURCE_PI_DEVELOPMENT_PLAN_ID = "8801699dbda55bab8b3edfdc9ec190c62dac667419c93b35465c899a35882771"
 CONSUMED_DIAGNOSTIC_PLAN_ID = "6a342640911cade0ed3bd381e3ff80e0327d5230817a72ef6bac5d46e8d8bd4a"
 CONSUMED_VALUE_FREE_DIAGNOSTIC_PLAN_ID = (
     "b039fa42eafc1a85be6e79bbbb4952639f64d8b4b89d3f62184b68838058ff76"
@@ -70,30 +70,11 @@ CONSUMED_VALUE_FREE_DIAGNOSTIC_PLAN_ID = (
 WallClock = Callable[[], float]
 Clock = Callable[[], float]
 DiskProbe = Callable[[Path], int]
-DiagnosticCode = Literal[
-    "agent-timeout-agent-result",
-    "agent-timeout-agent-timing-shape",
-    "agent-timeout-duration-bound",
-    "agent-timeout-evidence-accepted",
-    "agent-timeout-exception-timezone",
-    "agent-timeout-message",
-    "agent-timeout-timestamp-parse",
-    "agent-timeout-timezone-order",
-    "agent-timeout-traceback",
-    "agent-timeout-verifier-result",
-    "agent-timeout-verifier-timing-shape",
-    "infrastructure-start-exception",
-    "job-config-authority-rejected",
-    "missing-trial-result",
-    "non-timeout-exception-with-phase-evidence",
-    "process-envelope-failure",
-    "preterminal-structure-rejected",
-    "strict-runtime-evidence-rejected",
-    "trial-config-authority-rejected",
-    "trial-tree-rejected",
-    "transient-provider-exception",
-    "unclassified-runtime-exception",
-]
+# The persisted diagnostic code is one fixed kebab-case string from the closed
+# executor-side catalog plus the predeclared runtime classification codes; the
+# historical fixed set from the consumed timeout-diagnosis authorities is
+# recorded in docs/next-priority4-study-decision.md.
+DiagnosticCodeString = Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
 
 
 class RuntimeDiagnosticPilotPlan(StrictV2Contract):
@@ -105,7 +86,7 @@ class RuntimeDiagnosticPilotPlan(StrictV2Contract):
     execution_authorized: Literal[False]
     authority_scope: Literal["development-only-runtime-diagnostic"]
     source_development_plan_id: Literal[
-        "458777b90d4a71653464438db37acbda2e5dae48842bc057ee74df3b2b18326b"
+        "8801699dbda55bab8b3edfdc9ec190c62dac667419c93b35465c899a35882771"
     ]
     task: ControlledTaskAuthority
     specification: ControlledExperimentSpecV2
@@ -356,7 +337,7 @@ class RuntimeDiagnosticOutcome(StrictV2Contract):
     attempt_id: Digest
     attempt_artifact_id: Digest
     classification: Literal["timed-out", "evaluated", "inconclusive"]
-    diagnostic_code: DiagnosticCode | None = None
+    diagnostic_code: DiagnosticCodeString | None = None
     terminal_evidence: Literal["controlled-attempt-terminal"]
     claim_authority: Literal["diagnostic-only"]
     no_retry: Literal[True]
@@ -377,13 +358,17 @@ class RuntimeDiagnosticOutcome(StrictV2Contract):
 
 
 class RuntimeDiagnosticReceipt(StrictV2Contract):
-    """Value-free reason code retained before terminal artifact publication."""
+    """Value-free reason code retained before terminal artifact publication.
+
+    The code is one fixed kebab-case string drawn from the closed executor-side
+    catalog or the predeclared diagnostic codes; raw evidence is never retained.
+    """
 
     schema_version: Literal["cernora.reference.runtime-diagnostic-receipt/v1"]
     receipt_id: Digest
     execution_id: Digest
     claim_id: Digest
-    diagnostic_code: DiagnosticCode
+    diagnostic_code: DiagnosticCodeString
 
     @model_validator(mode="after")
     def canonical_receipt(self) -> Self:
@@ -1090,7 +1075,19 @@ def _step_runtime_diagnostic_pilot(
         )
         try:
             attempt = executor(attempt_request)
-        except BaseException:
+        except BaseException as exc:
+            # Keep only the fixed, value-free family code the executor retained,
+            # then fail closed. The receipt survives the frozen claim so the
+            # closing error family remains identifiable without raw evidence.
+            exception_code = getattr(exc, "diagnostic_code", None)
+            executor_code = getattr(executor, "diagnostic_code", None)
+            if isinstance(exc, KeyboardInterrupt):
+                code = "operator-interrupt"
+            elif isinstance(exc, ContractError):
+                code = exception_code or executor_code or "unclassified-contract-error"
+            else:
+                code = executor_code or "unexpected-executor-error"
+            _publish_diagnostic_receipt(root, state, diagnostic_code=code)
             _publish_incident(
                 root,
                 state,

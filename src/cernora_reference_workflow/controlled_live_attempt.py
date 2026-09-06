@@ -282,20 +282,32 @@ def _path_is_inside_git_worktree(path: Path) -> bool:
 def _stable_auth_markers(auth_path: Path, repository_root: Path) -> tuple[bytes, ...]:
     del repository_root
     if not auth_path.is_absolute() or auth_path.name in {"", ".", ".."}:
-        raise LiveAttemptError("auth file must be an explicit absolute regular file")
+        raise LiveAttemptError(
+            "auth file must be an explicit absolute regular file",
+            diagnostic_code="auth-file-not-absolute",
+        )
     if _path_is_inside_git_worktree(auth_path):
-        raise LiveAttemptError("auth file must remain outside every Git worktree")
+        raise LiveAttemptError(
+            "auth file must remain outside every Git worktree",
+            diagnostic_code="auth-file-inside-worktree",
+        )
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         parent_fd = os.open(auth_path.parent, parent_flags)
     except OSError as exc:
-        raise LiveAttemptError("auth parent must be one no-follow directory") from exc
+        raise LiveAttemptError(
+            "auth parent must be one no-follow directory",
+            diagnostic_code="auth-parent-not-a-directory",
+        ) from exc
     try:
         parent_before = os.fstat(parent_fd)
         path_before = os.stat(auth_path.name, dir_fd=parent_fd, follow_symlinks=False)
         if not stat.S_ISREG(path_before.st_mode) or path_before.st_nlink != 1:
-            raise LiveAttemptError("auth file must be one no-follow regular file")
+            raise LiveAttemptError(
+                "auth file must be one no-follow regular file",
+                diagnostic_code="auth-file-not-regular",
+            )
         file_fd = os.open(auth_path.name, file_flags, dir_fd=parent_fd)
         try:
             file_before = os.fstat(file_fd)
@@ -304,7 +316,10 @@ def _stable_auth_markers(auth_path: Path, repository_root: Path) -> tuple[bytes,
             while chunk := os.read(file_fd, 64 * 1024):
                 total += len(chunk)
                 if total > _AUTH_MAX_BYTES:
-                    raise LiveAttemptError("auth file exceeds the private read limit")
+                    raise LiveAttemptError(
+                        "auth file exceeds the private read limit",
+                        diagnostic_code="auth-file-exceeds-read-limit",
+                    )
                 chunks.append(chunk)
             file_after = os.fstat(file_fd)
         finally:
@@ -312,7 +327,10 @@ def _stable_auth_markers(auth_path: Path, repository_root: Path) -> tuple[bytes,
         path_after = os.stat(auth_path.name, dir_fd=parent_fd, follow_symlinks=False)
         parent_after = os.fstat(parent_fd)
     except OSError as exc:
-        raise LiveAttemptError("auth file changed during stable no-follow read") from exc
+        raise LiveAttemptError(
+            "auth file changed during stable no-follow read",
+            diagnostic_code="auth-file-unstable-read",
+        ) from exc
     finally:
         os.close(parent_fd)
 
@@ -333,10 +351,16 @@ def _stable_auth_markers(auth_path: Path, repository_root: Path) -> tuple[bytes,
         or metadata(file_before) != metadata(file_after)
         or (file_before.st_dev, file_before.st_ino) != (path_before.st_dev, path_before.st_ino)
     ):
-        raise LiveAttemptError("auth file changed during stable no-follow read")
+        raise LiveAttemptError(
+            "auth file changed during stable no-follow read",
+            diagnostic_code="auth-file-unstable-read",
+        )
     payload = load_json_bytes(b"".join(chunks))
     if not isinstance(payload, dict):
-        raise LiveAttemptError("auth file must contain one JSON object")
+        raise LiveAttemptError(
+            "auth file must contain one JSON object",
+            diagnostic_code="auth-file-not-one-object",
+        )
     sensitive_names = ("account", "email", "key", "organization", "secret", "token")
     markers: set[bytes] = set()
 
@@ -356,7 +380,10 @@ def _stable_auth_markers(auth_path: Path, repository_root: Path) -> tuple[bytes,
 
     collect(payload)
     if not markers:
-        raise LiveAttemptError("auth file has no privately verifiable secret markers")
+        raise LiveAttemptError(
+            "auth file has no privately verifiable secret markers",
+            diagnostic_code="auth-file-no-secret-markers",
+        )
     return tuple(sorted(markers))
 
 
@@ -384,7 +411,8 @@ def _assert_private_values_absent(
         resolved_auth_path = auth_path.resolve(strict=True)
     except OSError as exc:
         raise LiveAttemptError(
-            "auth path could not be resolved for private-value scanning"
+            "auth path could not be resolved for private-value scanning",
+            diagnostic_code="auth-path-unresolvable",
         ) from exc
     prohibited = (
         str(auth_path).encode("utf-8"),
@@ -394,15 +422,32 @@ def _assert_private_values_absent(
         *(value.encode("utf-8") for value in explicit_proxy_endpoints),
     )
     if any(marker in process.stdout or marker in process.stderr for marker in prohibited):
-        raise LiveAttemptError("private value appeared in Harbor process output")
+        raise LiveAttemptError(
+            "private value appeared in Harbor process output",
+            diagnostic_code="private-value-in-process-output",
+        )
     if not root.is_dir():
         return
-    for path in closed_regular_tree(root).values():
-        if path.name == "auth.json":
-            raise LiveAttemptError("Harbor retained a prohibited authentication artifact")
-        data = read_regular_file_bytes(path, maximum=8 * 1024 * 1024)
-        if any(marker in data for marker in prohibited):
-            raise LiveAttemptError("private value appeared in a Harbor artifact")
+    try:
+        for path in closed_regular_tree(root).values():
+            if path.name == "auth.json":
+                raise LiveAttemptError(
+                    "Harbor retained a prohibited authentication artifact",
+                    diagnostic_code="auth-artifact-retained",
+                )
+            data = read_regular_file_bytes(path, maximum=8 * 1024 * 1024)
+            if any(marker in data for marker in prohibited):
+                raise LiveAttemptError(
+                    "private value appeared in a Harbor artifact",
+                    diagnostic_code="private-value-in-artifact",
+                )
+    except LiveAttemptError:
+        raise
+    except (ContractError, OSError) as exc:
+        raise LiveAttemptError(
+            "private-value scan could not inspect the closed Harbor tree",
+            diagnostic_code="scan-tree-unreadable",
+        ) from exc
 
 
 class DockerContainerController:
@@ -423,18 +468,30 @@ class DockerContainerController:
             )
             payload = load_json_bytes(inspected.stdout)
             if not isinstance(payload, list):
-                raise LiveAttemptError("Docker inspect did not return one container list")
+                raise LiveAttemptError(
+                    "Docker inspect did not return one container list",
+                    diagnostic_code="docker-inspect-not-a-list",
+                )
             for item in payload:
                 if not isinstance(item, dict):
-                    raise LiveAttemptError("Docker container observation is malformed")
+                    raise LiveAttemptError(
+                        "Docker container observation is malformed",
+                        diagnostic_code="docker-observation-malformed",
+                    )
                 config = item.get("Config")
                 if not isinstance(config, dict) or not isinstance(config.get("Labels"), dict):
-                    raise LiveAttemptError("Docker container labels are unavailable")
+                    raise LiveAttemptError(
+                        "Docker container labels are unavailable",
+                        diagnostic_code="docker-labels-unavailable",
+                    )
                 created = item.get("Created")
                 identifier = item.get("Id")
                 image = item.get("Image")
                 if not all(isinstance(value, str) for value in (created, identifier, image)):
-                    raise LiveAttemptError("Docker container identity is malformed")
+                    raise LiveAttemptError(
+                        "Docker container identity is malformed",
+                        diagnostic_code="docker-identity-malformed",
+                    )
                 assert isinstance(created, str)
                 assert isinstance(identifier, str)
                 assert isinstance(image, str)
@@ -468,7 +525,10 @@ class DockerContainerController:
             subprocess.run(("docker", "rm", "-f", identifier), check=True, capture_output=True)
         remaining = self.snapshot().records
         if any(identifier in remaining for identifier in selected):
-            raise LiveAttemptError("exact Goal container survived force removal")
+            raise LiveAttemptError(
+                "exact Goal container survived force removal",
+                diagnostic_code="docker-removal-survived",
+            )
         return tuple(selected)
 
 
@@ -486,7 +546,10 @@ def _verify_local_task_image(
     if inspected.returncode != 0 or inspected.stdout.strip() != (
         f"{expected} {specification.container.platform}"
     ):
-        raise LiveAttemptError("local task image identity or platform is unavailable")
+        raise LiveAttemptError(
+            "local task image identity or platform is unavailable",
+            diagnostic_code="image-identity-unavailable",
+        )
     created = subprocess.run(
         ("docker", "create", "--entrypoint", "/bin/true", expected),
         check=True,
@@ -494,7 +557,10 @@ def _verify_local_task_image(
         text=True,
     ).stdout.strip()
     if not created:
-        raise LiveAttemptError("task image workspace probe did not create one container")
+        raise LiveAttemptError(
+            "task image workspace probe did not create one container",
+            diagnostic_code="image-probe-no-container",
+        )
     probe = Path(tempfile.mkdtemp(prefix="cernora-image-workspace-"))
     try:
         subprocess.run(("docker", "cp", f"{created}:/workspace/.", str(probe)), check=True)
@@ -504,7 +570,10 @@ def _verify_local_task_image(
         }
         expected_workspace = {item.path: item.content() for item in task.workspace_files}
         if observed != expected_workspace:
-            raise LiveAttemptError("pinned task image workspace contradicts task authority")
+            raise LiveAttemptError(
+                "pinned task image workspace contradicts task authority",
+                diagnostic_code="image-workspace-drift",
+            )
     finally:
         subprocess.run(("docker", "rm", "-f", created), check=False, capture_output=True)
         removal = subprocess.run(
@@ -514,7 +583,10 @@ def _verify_local_task_image(
         )
         shutil.rmtree(probe, ignore_errors=True)
     if removal.returncode == 0:
-        raise LiveAttemptError("task image workspace probe container survived cleanup")
+        raise LiveAttemptError(
+            "task image workspace probe container survived cleanup",
+            diagnostic_code="image-probe-container-survived",
+        )
     return expected.removeprefix("sha256:")
 
 
@@ -533,7 +605,10 @@ def _verify_task_binding(spec: ControlledExperimentSpecV2, task: ControlledTaskA
         or spec.test_runner.command != task.test_command
         or spec.test_runner.test_source_sha256 != task.test_source_sha256
     ):
-        raise LiveAttemptError("Experiment does not bind the exact controlled task authority")
+        raise LiveAttemptError(
+            "Experiment does not bind the exact controlled task authority",
+            diagnostic_code="task-authority-unbound",
+        )
 
 
 def compose_controlled_instruction(
@@ -548,7 +623,10 @@ def compose_controlled_instruction(
             or set(payload) not in ({"text"}, allowed)
             or not isinstance(payload["text"], str)
         ):
-            raise LiveAttemptError(f"{label} authority has an invalid strict text payload")
+            raise LiveAttemptError(
+                f"{label} authority has an invalid strict text payload",
+                diagnostic_code="authority-text-payload-invalid",
+            )
         return payload["text"]
 
     spec = request.specification
@@ -722,14 +800,20 @@ def _materialize_task(
 def _single_value(command: tuple[str, ...], option: str) -> str:
     positions = [index for index, value in enumerate(command) if value == option]
     if len(positions) != 1 or positions[0] + 1 >= len(command):
-        raise LiveAttemptError(f"actual Harbor argv has invalid {option}")
+        raise LiveAttemptError(
+            f"actual Harbor argv has invalid {option}",
+            diagnostic_code="harbor-argv-option-invalid",
+        )
     return command[positions[0] + 1]
 
 
 def _repeated_values(command: tuple[str, ...], option: str) -> tuple[str, ...]:
     positions = [index for index, value in enumerate(command) if value == option]
     if any(index + 1 >= len(command) for index in positions):
-        raise LiveAttemptError(f"actual Harbor argv has invalid {option}")
+        raise LiveAttemptError(
+            f"actual Harbor argv has invalid {option}",
+            diagnostic_code="harbor-argv-option-invalid",
+        )
     return tuple(command[index + 1] for index in positions)
 
 
@@ -745,7 +829,10 @@ def _validate_actual_argv(
     spec = request.specification
     flags = {"--delete", "--yes"}
     if command[:2] != (str(command[0]), "run") or any(command.count(flag) != 1 for flag in flags):
-        raise LiveAttemptError("actual Harbor argv omits exact delete/yes controls")
+        raise LiveAttemptError(
+            "actual Harbor argv omits exact delete/yes controls",
+            diagnostic_code="harbor-argv-controls-incomplete",
+        )
     expected = {
         "-p": str(task_root),
         "-a": AGENT_IMPORT,
@@ -762,20 +849,32 @@ def _validate_actual_argv(
         "-r": "0",
     }
     if any(_single_value(command, option) != value for option, value in expected.items()):
-        raise LiveAttemptError("actual Harbor argv drifts from Experiment authority")
+        raise LiveAttemptError(
+            "actual Harbor argv drifts from Experiment authority",
+            diagnostic_code="harbor-argv-authority-drift",
+        )
     kwargs = set(_repeated_values(command, "--ak"))
     if kwargs != {
         f"version={spec.runtime.version}",
         f"thinking={spec.runtime.reasoning_effort}",
     }:
-        raise LiveAttemptError("actual Harbor agent kwargs drift from Runtime authority")
+        raise LiveAttemptError(
+            "actual Harbor agent kwargs drift from Runtime authority",
+            diagnostic_code="harbor-agent-kwargs-drift",
+        )
     if _repeated_values(command, "--ae"):
-        raise LiveAttemptError("actual Harbor argv must not persist private proxy endpoints")
+        raise LiveAttemptError(
+            "actual Harbor argv must not persist private proxy endpoints",
+            diagnostic_code="harbor-argv-proxy-endpoints-present",
+        )
     if tuple(sorted(proxy_environment)) not in (
         (),
         ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"),
     ):
-        raise LiveAttemptError("explicit proxy projection is incomplete")
+        raise LiveAttemptError(
+            "explicit proxy projection is incomplete",
+            diagnostic_code="proxy-projection-incomplete",
+        )
 
 
 def _expected_agent_config(spec: ControlledExperimentSpecV2) -> dict[str, object]:
@@ -1173,7 +1272,10 @@ def _trial_name_hint(job_root: Path, job_name: str) -> str | None:
         return None
     trials = tuple(item for item in job.iterdir() if item.is_dir() and not item.is_symlink())
     if len(trials) > 1:
-        raise LiveAttemptError("Harbor job contains more than one Trial directory")
+        raise LiveAttemptError(
+            "Harbor job contains more than one Trial directory",
+            diagnostic_code="trial-directory-ambiguous",
+        )
     return trials[0].name if trials else None
 
 
@@ -1561,7 +1663,10 @@ class ControlledHarborAttemptExecutor:
     ) -> tuple[str, ...]:
         spec = request.specification
         if spec.limits.cpu_millis < 1000 or spec.limits.cpu_millis % 1000:
-            raise LiveAttemptError("Harbor CPU override cannot exactly represent limits")
+            raise LiveAttemptError(
+                "Harbor CPU override cannot exactly represent limits",
+                diagnostic_code="harbor-cpu-limit-unrepresentable",
+            )
         command = [
             str(self._repository_root / ".venv/bin/harbor"),
             "run",
@@ -1602,14 +1707,20 @@ class ControlledHarborAttemptExecutor:
             (),
             ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"),
         ):
-            raise LiveAttemptError("explicit proxy projection is incomplete")
+            raise LiveAttemptError(
+                "explicit proxy projection is incomplete",
+                diagnostic_code="proxy-projection-incomplete",
+            )
         return tuple(command)
 
     def __call__(self, request: ControlledAttemptRequest) -> ControlledAttempt:
         self._diagnostic_code = None
         task = self._tasks.get(request.slot.case_id)
         if task is None:
-            raise LiveAttemptError("selected Case has no controlled task authority")
+            raise LiveAttemptError(
+                "selected Case has no controlled task authority",
+                diagnostic_code="case-task-missing",
+            )
         _verify_task_binding(request.specification, task)
         temporary = Path(tempfile.mkdtemp(prefix="cernora-m4-attempt-", dir=self._evaluation_root))
         job_name = f"m4-{request.trial_id[:12]}-{request.ordinal}"
@@ -1622,7 +1733,10 @@ class ControlledHarborAttemptExecutor:
             observed_image = self._image_verifier(request.specification, task)
             expected_image = request.specification.container.image.rsplit("@sha256:", 1)[1]
             if observed_image != expected_image:
-                raise LiveAttemptError("observed local task image contradicts authority")
+                raise LiveAttemptError(
+                    "observed local task image contradicts authority",
+                    diagnostic_code="image-observation-drift",
+                )
 
             # Authentication is deliberately read only after the image/task bytes pass.
             auth_markers = _stable_auth_markers(self._auth_file, self._repository_root)
@@ -1643,7 +1757,10 @@ class ControlledHarborAttemptExecutor:
 
                 task_checksum = cast(str, dirhash(task_root, "sha256"))
             except (ImportError, OSError, ValueError) as exc:
-                raise LiveAttemptError("cannot compute the real Harbor task checksum") from exc
+                raise LiveAttemptError(
+                    "cannot compute the real Harbor task checksum",
+                    diagnostic_code="task-checksum-unavailable",
+                ) from exc
             before = self._containers.snapshot()
             trial_name: str | None = None
             cleanup_job = job_root / job_name
@@ -1835,6 +1952,15 @@ class ControlledHarborAttemptExecutor:
                     "lifecycle": None,
                 }
             )
+        except ContractError as exc:
+            # The unconverted pre-process and post-process regions fail closed
+            # without a terminal publication; keep only the fixed, value-free
+            # family code on the executor so a closing incident receipt can
+            # persist it durably without retaining raw evidence.
+            self._diagnostic_code = (
+                getattr(exc, "diagnostic_code", None) or "unclassified-contract-error"
+            )
+            raise
         finally:
             shutil.rmtree(temporary, ignore_errors=True)
 

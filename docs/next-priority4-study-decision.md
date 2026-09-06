@@ -403,3 +403,72 @@ established pattern), not further pilot rounds. All five bundles are archived
 under `preparations/next-priority4-development-pilot-pi-r*` with their frozen
 custodies; no Candidate, held-out, smoke, Study, or 54-Trial authority was
 consumed. The sixth pilot must not reuse any retired plan.
+
+
+## Executor-phase controlled-attempt diagnostic preparation (2026-09-06)
+
+The r3 and r5 incident receipts recorded only `phase=executor` and the broad
+`controlled-attempt-error` category, so the frozen custodies retain no
+discriminator for the closing exception. Offline review bounded the family
+exactly: a `ContractError` escaping `ControlledHarborAttemptExecutor.__call__`
+outside the strict-result conversion region — the pre-process
+authority/auth/argv/image checks, the post-process docker cleanup inside the
+process `finally`, and the private-value scan. The timing of the two freezes
+(≈118 s in, and ≈37.5 min in, i.e. ≈390 s past the 1,860 s envelope kill)
+places both inside the post-process region.
+
+The instrumented repair closes that observability gap while keeping receipts
+value-free:
+
+- every unconverted `LiveAttemptError` raise site now carries one fixed
+  kebab-case `diagnostic_code` (auth-file-*, docker-*, image-*, private-value-*,
+  harbor-argv-*, scan-tree-unreadable, …), and the private-value scan wraps an
+  unreadable closed Harbor tree as `scan-tree-unreadable` instead of letting a
+  plain file-size or symlink `ContractError` escape unclassified;
+- the executor retains the code of a closing contract error
+  (`unclassified-contract-error` fallback) without any raw evidence;
+- development-pilot incident receipts move to `/v2` with a pattern-locked
+  `discriminator` field; legacy `/v1` receipts remain loadable, and the frozen
+  r3/r5 incident receipts themselves replay byte-exactly (full r1–r4 custody
+  replay was already blocked by the era-boundary contract drift before this
+  work);
+- the one-shot runtime-diagnostic control plane persists a value-free
+  diagnostic receipt before freezing on the executor-exception path, and binds
+  the same code into the diagnostic outcome when the Attempt publishes;
+- the diagnostic source pin moved from the never-live synthetic Plan
+  `458777b90…` to the frozen r5 development Plan
+  `8801699dbda55bab8b3edfdc9ec190c62dac667419c93b35465c899a35882771`, binding
+  the real pi-runtime task images so the diagnostic Attempt can verify its
+  image live instead of failing on a synthetic digest.
+
+Offline gates after the change: strict Mypy across 152 source files, Ruff
+check and format, and the full test suite. An independent adversarial review
+of the instrumentation found no P0; its P1 (an operator interrupt could be
+recorded as `unclassified-executor-exception` in the diagnostic plane) and two
+P2 findings (cross-plane fallback-code alignment and this document's replay
+claim) were fixed before the proposal was regenerated. The replacement
+Companion wheel candidate
+`11c4116989d7d19dc419b11e6d0713c31b5e3bc68bc9f7a98ca21534f9fe2c0b` was built
+twice with byte-identical SHA-256 values. The Cernora Core wheel is unchanged.
+
+The closed proposal is
+[`preparations/next-priority4-runtime-executor-diagnostic`](../preparations/next-priority4-runtime-executor-diagnostic):
+
+| Authority | Value |
+|---|---|
+| Plan | `88759723dd8a23cfe2741fd4641aa5aa3cdd261d2495ff8244261af02bf5b857` |
+| Authorization request | `e64ef7a7c2608713c34a94c58a78d05e956294eeec91247dea8e7dde81a99757` |
+| Source development plan | `8801699dbda55bab8b3edfdc9ec190c62dac667419c93b35465c899a35882771` (frozen r5, read-only) |
+| Case | `p4-dev-json-pointer`, real image `95c21efa…ae7959d` |
+| Cernora Core wheel | `0.1.4`, SHA-256 `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `0.4.0`, SHA-256 `11c4116989d7d19dc419b11e6d0713c31b5e3bc68bc9f7a98ca21534f9fe2c0b` |
+
+Authorization, if granted, covers exactly one development-only Trial, one
+Attempt, no retry, concurrency one, a 300-second Agent timeout inside a
+360-second Attempt envelope and a 900-second wall bound, provider scope
+`pi-authenticated-generation-only`, and one diagnostic-only controlled terminal
+artifact. A frozen claim still persists its fixed value-free family code in the
+diagnostic receipt. It authorizes no Candidate construction, held-out access or
+reveal, smoke execution, Study execution, or 54-Trial work, and at
+materialization it is unprepared and unauthorized.
+

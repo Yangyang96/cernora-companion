@@ -212,8 +212,8 @@ class DevelopmentPilotOutcome(StrictV2Contract):
         return canonical_json_bytes(self.model_dump(mode="json"))
 
 
-class DevelopmentPilotIncidentReceipt(StrictV2Contract):
-    """Value-free durable classification for a claimed Attempt that did not publish."""
+class DevelopmentPilotIncidentReceiptV1(StrictV2Contract):
+    """Legacy value-free receipt retained only to replay frozen custodies."""
 
     schema_version: Literal["cernora.reference.development-pilot-incident/v1"]
     incident_id: Digest
@@ -241,6 +241,54 @@ class DevelopmentPilotIncidentReceipt(StrictV2Contract):
         return canonical_json_bytes(self.model_dump(mode="json"))
 
 
+class DevelopmentPilotIncidentReceipt(StrictV2Contract):
+    """Value-free durable classification for a claimed Attempt that did not publish.
+
+    The ``discriminator`` is one fixed kebab-case code identifying the exact
+    exception family that closed the claim. It carries no raw message, traceback,
+    credential, proxy endpoint, or transcript value.
+    """
+
+    schema_version: Literal["cernora.reference.development-pilot-incident/v2"]
+    incident_id: Digest
+    execution_id: Digest
+    plan_id: Digest
+    claim_entry_id: Digest
+    phase: Literal["executor", "attempt-validation", "artifact-publication"]
+    category: Literal[
+        "controlled-attempt-error",
+        "operator-interrupt",
+        "unexpected-executor-error",
+    ]
+    discriminator: Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
+    observed_unix_milliseconds: NonNegativeInt
+
+    @model_validator(mode="after")
+    def canonical_identity(self) -> Self:
+        expected = canonical_content_id(
+            self.model_dump(mode="json"), excluded=frozenset({"incident_id"})
+        )
+        if self.incident_id != expected:
+            raise ValueError("development pilot incident identity mismatch")
+        return self
+
+    def canonical_bytes(self) -> bytes:
+        return canonical_json_bytes(self.model_dump(mode="json"))
+
+
+IncidentReceipt = DevelopmentPilotIncidentReceipt | DevelopmentPilotIncidentReceiptV1
+
+
+def _incident_discriminator(error: BaseException) -> str:
+    """Map one closing exception to its fixed, value-free family code."""
+
+    if isinstance(error, KeyboardInterrupt):
+        return "operator-interrupt"
+    if isinstance(error, ContractError):
+        return getattr(error, "diagnostic_code", None) or "unclassified-contract-error"
+    return "unexpected-executor-error"
+
+
 class DevelopmentPilotStepResult(StrictV2Contract):
     execution_id: Digest
     plan_id: Digest
@@ -261,7 +309,7 @@ class DevelopmentPilotExecutionState:
     started_unix_milliseconds: int | None
     ambiguous_claim: DevelopmentPilotLedgerEntry | None
     adoptable_artifact: tuple[str, VerifiedControlledAttemptArtifact] | None
-    incidents: tuple[DevelopmentPilotIncidentReceipt, ...]
+    incidents: tuple[IncidentReceipt, ...]
     outcome: DevelopmentPilotOutcome | None
 
     @property
@@ -372,19 +420,20 @@ def _publish_incident(
     else:
         category = "unexpected-executor-error"
     payload: dict[str, object] = {
-        "schema_version": "cernora.reference.development-pilot-incident/v1",
+        "schema_version": "cernora.reference.development-pilot-incident/v2",
         "execution_id": record.execution_id,
         "plan_id": record.plan_id,
         "claim_entry_id": claim.entry_id,
         "phase": phase,
         "category": category,
+        "discriminator": _incident_discriminator(error),
         "observed_unix_milliseconds": observed_unix_milliseconds,
     }
     payload["incident_id"] = canonical_content_id(payload, excluded=frozenset())
     receipt = DevelopmentPilotIncidentReceipt.model_validate(payload)
     path = root / "diagnostics" / f"{claim.entry_id}.json"
     if path.exists():
-        existing = _load_json_model(path, DevelopmentPilotIncidentReceipt)
+        existing = _load_incident(path)
         if existing != receipt:
             raise ContractError("development pilot incident receipt changed")
         return
@@ -507,6 +556,25 @@ def _load_json_model(path: Path, model: type[StrictV2Contract]) -> StrictV2Contr
     )
     if raw != expected:
         raise ContractError("development pilot custody JSON is not canonical")
+    return value
+
+
+def _load_incident(path: Path) -> IncidentReceipt:
+    """Load one v2 receipt or one legacy v1 receipt from a frozen custody."""
+
+    raw = read_regular_file_bytes(path)
+    payload = load_json_bytes(raw)
+    if not isinstance(payload, dict):
+        raise ContractError("development pilot incident must be one JSON object")
+    schema_version = payload.get("schema_version")
+    if schema_version == "cernora.reference.development-pilot-incident/v2":
+        model: type[StrictV2Contract] = DevelopmentPilotIncidentReceipt
+    elif schema_version == "cernora.reference.development-pilot-incident/v1":
+        model = DevelopmentPilotIncidentReceiptV1
+    else:
+        raise ContractError("development pilot incident schema version is unknown")
+    value = _load_json_model(path, model)
+    assert isinstance(value, IncidentReceipt)
     return value
 
 
@@ -811,12 +879,11 @@ def inspect_development_pilot_execution(root: Path) -> DevelopmentPilotExecution
             raise ContractError("development pilot completion omits its exact outcome")
     elif outcome_path is not None and not all_closed:
         raise ContractError("development pilot outcome appeared before all Trials closed")
-    incidents: list[DevelopmentPilotIncidentReceipt] = []
+    incidents: list[IncidentReceipt] = []
     if "diagnostics" in entries:
         claim_ids = {item.entry_id for item in ledger if item.event == "attempt-claimed"}
         for name, path in closed_regular_tree(entries["diagnostics"]).items():
-            value = _load_json_model(path, DevelopmentPilotIncidentReceipt)
-            assert isinstance(value, DevelopmentPilotIncidentReceipt)
+            value = _load_incident(path)
             if (
                 name != f"{value.claim_entry_id}.json"
                 or value.claim_entry_id not in claim_ids
@@ -1148,10 +1215,12 @@ __all__ = [
     "DevelopmentPilotExecutionRecord",
     "DevelopmentPilotExecutionState",
     "DevelopmentPilotIncidentReceipt",
+    "DevelopmentPilotIncidentReceiptV1",
     "DevelopmentPilotLedgerEntry",
     "DevelopmentPilotOutcome",
     "DevelopmentPilotStepResult",
     "DevelopmentPilotStopped",
+    "IncidentReceipt",
     "inspect_development_pilot_execution",
     "prepare_development_pilot_execution",
     "step_development_pilot_execution",

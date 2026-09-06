@@ -20,14 +20,11 @@ from cernora_reference_workflow.controlled_execution import (
     ControlledAttempt,
     ControlledAttemptRequest,
 )
-from cernora_reference_workflow.controlled_live_attempt import ControlledHarborAttemptExecutor
-from cernora_reference_workflow.development_agent_pilot import (
-    PILOT_CASE_IDS,
-    DevelopmentAgentPilotPlan,
-    build_development_agent_pilot_plan,
-    load_development_pilot_corpus,
-    materialize_development_pilot_image_set,
+from cernora_reference_workflow.controlled_live_attempt import (
+    ControlledHarborAttemptExecutor,
+    LiveAttemptError,
 )
+from cernora_reference_workflow.development_agent_pilot import DevelopmentAgentPilotPlan
 from cernora_reference_workflow.runtime_diagnostic_pilot import (
     AmbiguousRuntimeDiagnosticAttempt,
     RuntimeDiagnosticPilotPlan,
@@ -42,7 +39,6 @@ from cernora_reference_workflow.runtime_diagnostic_pilot import (
 from cernora_reference_workflow.runtime_diagnostic_pilot import (
     _step_runtime_diagnostic_pilot as step_runtime_diagnostic_pilot,
 )
-from cernora_reference_workflow.study_preparation import ImplementationCandidate
 from tests.unit.test_controlled_execution import lifecycle_attempt
 from tests.unit.test_controlled_live_attempt import (
     AgentTimeoutResultProcess,
@@ -54,44 +50,20 @@ from tests.unit.test_study_preparation import _candidate_wheels
 
 FREE = 20 * 1024**3
 ROOT = Path(__file__).resolve().parents[2]
-CORPUS = ROOT / "examples" / "priority4-development-pilot"
-SOURCE_PI_PLAN_ID = "458777b90d4a71653464438db37acbda2e5dae48842bc057ee74df3b2b18326b"
+SOURCE_PI_PLAN_ID = "8801699dbda55bab8b3edfdc9ec190c62dac667419c93b35465c899a35882771"
+SOURCE_PI_PLAN = ROOT / "preparations" / "next-priority4-development-pilot-pi-r5" / "plan.json"
 
 
 def _source_plan() -> DevelopmentAgentPilotPlan:
-    """Build the deterministically reproducible pi-era source development pilot Plan.
+    """Load the frozen r5 pi-era source development pilot Plan.
 
-    The historical ``preparations/next-priority4-development-pilot-repair`` bundle is
-    Codex-era evidence frozen by the era boundary; its identity cannot be regenerated
-    offline because it binds the original published wheels and Docker-built image
-    digests. The diagnostic authority instead pins this reproducible pi-era Plan built
-    from the same fresh corpus with an exact baseline shape.
+    The diagnostic authority descends from the latest live-frozen development pilot
+    Plan: it binds the real nine-Case corpus, the real pi-runtime task images, and
+    the r5-era implementation candidates. Reading it grants no execution authority;
+    its pilot custody stays permanently frozen under the ambiguity protocol.
     """
 
-    corpus = load_development_pilot_corpus(CORPUS)
-    images = materialize_development_pilot_image_set(
-        build_base_image="cernora-reference/pi-runtime@sha256:" + "a" * 64,
-        images={
-            case_id: f"cernora-reference/p4-pilot-{case_id}@sha256:{index:064x}"
-            for index, case_id in enumerate(PILOT_CASE_IDS, start=1)
-        },
-    )
-    plan = build_development_agent_pilot_plan(
-        corpus=corpus,
-        images=images,
-        implementation_candidates=(
-            ImplementationCandidate(
-                name="cernora", version="0.1.4", kind="wheel", size=1, sha256="b" * 64
-            ),
-            ImplementationCandidate(
-                name="cernora-reference-workflow",
-                version="0.4.0",
-                kind="wheel",
-                size=1,
-                sha256="c" * 64,
-            ),
-        ),
-    )
+    plan = DevelopmentAgentPilotPlan.from_file(SOURCE_PI_PLAN)
     assert plan.plan_id == SOURCE_PI_PLAN_ID
     return plan
 
@@ -313,6 +285,71 @@ def test_exclusive_claim_write_syncs_file_and_parent_directory(
     assert stat.S_ISDIR(synced_modes[1])
 
 
+def test_operator_interrupt_freezes_with_fixed_family_code(tmp_path: Path) -> None:
+    plan, custody = _prepare(tmp_path)
+    prepared = inspect_runtime_diagnostic_pilot(custody)
+
+    class InterruptingExecutor:
+        enforces_hard_deadline = True
+
+        def __call__(self, request: ControlledAttemptRequest) -> ControlledAttempt:
+            del request
+            raise KeyboardInterrupt
+
+    with pytest.raises(AmbiguousRuntimeDiagnosticAttempt, match="without adoptable"):
+        step_runtime_diagnostic_pilot(
+            custody,
+            InterruptingExecutor(),
+            accepted_plan_id=plan.plan_id,
+            accepted_request_id=prepared.request.request_id,
+            wall_clock=lambda: 1001.0,
+            disk_free=lambda _: FREE,
+        )
+
+    state = inspect_runtime_diagnostic_pilot(custody)
+    assert state.status == "ambiguous"
+    assert state.incident is not None
+    assert state.diagnostic is not None
+    assert state.diagnostic.diagnostic_code == "operator-interrupt"
+
+
+def test_controlled_executor_exception_freezes_with_fixed_family_code(
+    tmp_path: Path,
+) -> None:
+    plan, custody = _prepare(tmp_path)
+    prepared = inspect_runtime_diagnostic_pilot(custody)
+
+    class DockerCleanupLossExecutor:
+        enforces_hard_deadline = True
+
+        def __call__(self, request: ControlledAttemptRequest) -> ControlledAttempt:
+            del request
+            raise LiveAttemptError(
+                "exact Goal container survived force removal",
+                diagnostic_code="docker-removal-survived",
+            )
+
+    with pytest.raises(AmbiguousRuntimeDiagnosticAttempt, match="without adoptable"):
+        step_runtime_diagnostic_pilot(
+            custody,
+            DockerCleanupLossExecutor(),
+            accepted_plan_id=plan.plan_id,
+            accepted_request_id=prepared.request.request_id,
+            wall_clock=lambda: 1001.0,
+            disk_free=lambda _: FREE,
+        )
+
+    state = inspect_runtime_diagnostic_pilot(custody)
+    assert state.status == "ambiguous"
+    assert state.incident is not None
+    assert state.diagnostic is not None
+    assert state.diagnostic.diagnostic_code == "docker-removal-survived"
+    serialized = (custody / "diagnostic.json").read_bytes()
+    assert b"docker-removal-survived" in serialized
+    assert b"force removal" not in serialized
+    assert b"force removal" not in (custody / "incident.json").read_bytes()
+
+
 def test_executor_crash_is_value_free_ambiguous_and_never_retried(tmp_path: Path) -> None:
     plan, custody = _prepare(tmp_path)
     prepared = inspect_runtime_diagnostic_pilot(custody)
@@ -342,6 +379,9 @@ def test_executor_crash_is_value_free_ambiguous_and_never_retried(tmp_path: Path
     assert state.incident is not None
     assert state.incident.category == "ambiguous-one-shot-attempt"
     assert b"private provider detail" not in (custody / "incident.json").read_bytes()
+    assert state.diagnostic is not None
+    assert state.diagnostic.diagnostic_code == "unexpected-executor-error"
+    assert b"private provider detail" not in (custody / "diagnostic.json").read_bytes()
     with pytest.raises(AmbiguousRuntimeDiagnosticAttempt, match="cannot be retried"):
         step_runtime_diagnostic_pilot(
             custody,

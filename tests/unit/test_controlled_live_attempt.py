@@ -1385,8 +1385,41 @@ def test_live_executor_keeps_private_output_failure_fail_closed(tmp_path: Path) 
         close_unusable_runtime_evidence=True,
     )
 
-    with pytest.raises(LiveAttemptError, match="private value"):
+    with pytest.raises(LiveAttemptError, match="private value") as raised:
         executor(_request(spec, trial="private-output"))
+
+    assert raised.value.diagnostic_code == "private-value-in-process-output"
+    assert executor.diagnostic_code == "private-value-in-process-output"
+
+
+def test_private_value_scan_fails_closed_with_fixed_code_when_tree_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "job"
+    root.mkdir()
+    oversized = root / "session-transcript.json"
+    oversized.write_bytes(b"x" * (8 * 1024 * 1024 + 1))
+    process = SubprocessResult(
+        status="exited",
+        exit_code=0,
+        stdout=b"",
+        stderr=b"",
+        started_monotonic=0.0,
+        finished_monotonic=1.0,
+        receipt_sha256=sha256_bytes(b"oversized-scan"),
+    )
+
+    with pytest.raises(LiveAttemptError) as raised:
+        live_attempt_module._assert_private_values_absent(
+            root,
+            auth_path=_auth_file(tmp_path),
+            markers=(),
+            proxy_environment={},
+            explicit_proxy_endpoints=(),
+            process=process,
+        )
+
+    assert raised.value.diagnostic_code == "scan-tree-unreadable"
 
 
 def test_unverified_start_failure_does_not_receive_retry(
