@@ -597,3 +597,45 @@ Per the stop policy the execution is permanently ambiguous and its outcome is
 frozen behavioral-failure attempt artifacts remain evidence-only in custody.
 The r7 boundary is a user decision.
 
+
+## The Option A contract repair (2026-09-07, user decision)
+
+Offline analysis reconstructed the r6 scan inputs: the live environment
+carried no proxy variables, so the prohibited set contained only the auth-file
+path strings and the auth secret markers; container-side artifacts cannot
+naturally contain host path strings, so the hit was almost certainly a real
+secret marker inside a job-tree transcript. `TelemetryDisabledPi` uploads the
+auth file to a container-readable path for the whole run, so a curious agent
+or a provider-error diagnostic can echo secret material into transcripts that
+harbor persists into the ephemeral job tree. That tree is destroyed in the
+executor's `finally` before anything is published: the published Attempt
+artifact is a value-free structured model, and the secret never reaches
+durable custody.
+
+The user selected Option A: a private-value hit inside the **temporary** job
+tree no longer freezes the whole pilot under the ambiguity protocol. The scan
+now splits:
+
+- **Fail-closed and unchanged**: private values in Harbor process output
+  (`private-value-in-process-output`), retained `auth.json` artifacts
+  (`auth-artifact-retained`), and unreadable/oversized scan trees
+  (`scan-tree-unreadable`) still raise and freeze.
+- **Classified closure**: a prohibited value inside a job-tree artifact raises
+  one `LiveAttemptError` inside the strict-result conversion region, so
+  `close_unusable_runtime_evidence` publishes a non-retry
+  `runtime_pre_terminal_failure` lifecycle Attempt exactly like the r1-era
+  conversion lane. Its `source_state` — and therefore the published terminal
+  `reason` — carries one fixed value-free composite code
+  `private-value-in-artifact-<marker-kind>-<kebab artifact path>` with the
+  marker kind (`auth-path`, `auth-secret`, `proxy-endpoint`) and the
+  job-relative artifact path; the same code is retained on the executor
+  property for the one-shot diagnostic plane's receipt and outcome.
+
+The evidence semantics are unchanged: such a Trial closes without an
+observation, and a pilot with any non-evaluated Trial still derives
+`inconclusive`. The repair only removes the whole-execution freeze; the
+candidate path still requires nine evaluated Trials. Offline gates: strict
+Mypy across 152 source files, Ruff, format, the full suite run of record, and
+a regression test that plants a secret marker into a fake Harbor job tree and
+asserts the composite-code lifecycle closure plus value-free serialization.
+

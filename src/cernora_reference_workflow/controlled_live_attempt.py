@@ -63,6 +63,7 @@ from cernora_reference_workflow.runtime_policy import (
 
 AGENT_IMPORT = "cernora_reference_workflow.runtime_agent:TelemetryDisabledPi"
 _AUTH_MAX_BYTES = 4 * 1024 * 1024
+_PRIVATE_SCAN_MAX_BYTES = 8 * 1024 * 1024
 _TRANSIENT_PROVIDER_EXCEPTIONS = frozenset({"NonZeroAgentExitCodeError"})
 _EXPECTED_RETRY_EXCEPTIONS = frozenset(
     {
@@ -407,6 +408,41 @@ def _assert_private_values_absent(
     explicit_proxy_endpoints: tuple[str, ...],
     process: SubprocessResult,
 ) -> None:
+    """Strict fail-closed scan for direct callers: every hit raises."""
+
+    prohibited = _assert_private_surface_absent(
+        root,
+        auth_path=auth_path,
+        markers=markers,
+        proxy_environment=proxy_environment,
+        explicit_proxy_endpoints=explicit_proxy_endpoints,
+        process=process,
+    )
+    if not root.is_dir():
+        return
+    try:
+        hit = _private_value_artifact_hit(root, prohibited)
+    except (ContractError, OSError) as exc:
+        raise LiveAttemptError(
+            "private-value scan could not inspect the closed Harbor tree",
+            diagnostic_code="scan-tree-unreadable",
+        ) from exc
+    if hit is not None:
+        raise LiveAttemptError(
+            "private value appeared in a Harbor artifact",
+            diagnostic_code=_private_value_artifact_code(hit[0], hit[1]),
+        )
+
+
+def _prohibited_private_values(
+    *,
+    auth_path: Path,
+    markers: tuple[bytes, ...],
+    proxy_environment: Mapping[str, str],
+    explicit_proxy_endpoints: tuple[str, ...],
+) -> tuple[tuple[bytes, str], ...]:
+    """Prohibited byte values tagged with their fixed, value-free marker kind."""
+
     try:
         resolved_auth_path = auth_path.resolve(strict=True)
     except OSError as exc:
@@ -414,33 +450,62 @@ def _assert_private_values_absent(
             "auth path could not be resolved for private-value scanning",
             diagnostic_code="auth-path-unresolvable",
         ) from exc
-    prohibited = (
-        str(auth_path).encode("utf-8"),
-        str(resolved_auth_path).encode("utf-8"),
-        *markers,
-        *(value.encode("utf-8") for name, value in proxy_environment.items() if name != "NO_PROXY"),
-        *(value.encode("utf-8") for value in explicit_proxy_endpoints),
+    return (
+        (str(auth_path).encode("utf-8"), "auth-path"),
+        (str(resolved_auth_path).encode("utf-8"), "auth-path"),
+        *((marker, "auth-secret") for marker in markers),
+        *(
+            (value.encode("utf-8"), "proxy-endpoint")
+            for name, value in proxy_environment.items()
+            if name != "NO_PROXY"
+        ),
+        *((value.encode("utf-8"), "proxy-endpoint") for value in explicit_proxy_endpoints),
     )
-    if any(marker in process.stdout or marker in process.stderr for marker in prohibited):
+
+
+def _assert_private_surface_absent(
+    root: Path,
+    *,
+    auth_path: Path,
+    markers: tuple[bytes, ...],
+    proxy_environment: Mapping[str, str],
+    explicit_proxy_endpoints: tuple[str, ...],
+    process: SubprocessResult,
+) -> tuple[tuple[bytes, str], ...]:
+    """Fail closed on output leaks, retained auth artifacts, and unreadable trees.
+
+    Artifact-content hits are deliberately excluded: the controlled execution
+    lane classifies them as one non-retry runtime_pre_terminal lifecycle Attempt
+    whose source state carries the fixed family code, so a leaky transcript
+    closes its Trial without freezing the whole pilot. Everything else that can
+    hide or drop private values stays fail-closed and ambiguous.
+    """
+
+    prohibited = _prohibited_private_values(
+        auth_path=auth_path,
+        markers=markers,
+        proxy_environment=proxy_environment,
+        explicit_proxy_endpoints=explicit_proxy_endpoints,
+    )
+    if any(value in process.stdout or value in process.stderr for value, _kind in prohibited):
         raise LiveAttemptError(
             "private value appeared in Harbor process output",
             diagnostic_code="private-value-in-process-output",
         )
     if not root.is_dir():
-        return
+        return prohibited
     try:
-        for path in closed_regular_tree(root).values():
-            if path.name == "auth.json":
-                raise LiveAttemptError(
-                    "Harbor retained a prohibited authentication artifact",
-                    diagnostic_code="auth-artifact-retained",
-                )
-            data = read_regular_file_bytes(path, maximum=8 * 1024 * 1024)
-            if any(marker in data for marker in prohibited):
-                raise LiveAttemptError(
-                    "private value appeared in a Harbor artifact",
-                    diagnostic_code="private-value-in-artifact",
-                )
+        paths = tuple(closed_regular_tree(root).values())
+        if any(path.name == "auth.json" for path in paths):
+            raise LiveAttemptError(
+                "Harbor retained a prohibited authentication artifact",
+                diagnostic_code="auth-artifact-retained",
+            )
+        if any(path.stat().st_size > _PRIVATE_SCAN_MAX_BYTES for path in paths):
+            raise LiveAttemptError(
+                "private-value scan could not inspect the closed Harbor tree",
+                diagnostic_code="scan-tree-unreadable",
+            )
     except LiveAttemptError:
         raise
     except (ContractError, OSError) as exc:
@@ -448,6 +513,36 @@ def _assert_private_values_absent(
             "private-value scan could not inspect the closed Harbor tree",
             diagnostic_code="scan-tree-unreadable",
         ) from exc
+    return prohibited
+
+
+def _private_value_artifact_hit(
+    root: Path,
+    prohibited: tuple[tuple[bytes, str], ...],
+) -> tuple[str, str] | None:
+    """Return the first prohibited artifact hit as (marker kind, relative path)."""
+
+    for relative, path in closed_regular_tree(root).items():
+        data = read_regular_file_bytes(path, maximum=_PRIVATE_SCAN_MAX_BYTES)
+        for value, kind in prohibited:
+            if value in data:
+                return kind, relative
+    return None
+
+
+def _private_value_artifact_code(kind: str, relative: str) -> str:
+    """Compose the value-free family code: family, marker kind, artifact path."""
+
+    parts = ["private-value-in-artifact", kind]
+    parts.extend(
+        piece
+        for piece in (
+            re.sub(r"[^0-9a-z]+", "-", segment.lower()).strip("-")
+            for segment in relative.split("/")
+        )
+        if piece
+    )
+    return "-".join(parts)
 
 
 class DockerContainerController:
@@ -1471,12 +1566,13 @@ def _lifecycle_attempt(
     *,
     category: str,
     retry_eligible: bool,
+    source_state: str | None = None,
 ) -> ControlledAttempt:
     lifecycle = BatchLifecycleRecord(
         schema_version="agent.evaluator.batch-lifecycle/v1",
         category=category,  # type: ignore[arg-type]
         retry_eligible=retry_eligible,
-        source_state=category.replace("_", "-"),
+        source_state=(category.replace("_", "-") if source_state is None else source_state),
         receipt_sha256=process.receipt_sha256,
     )
     source_attempt_id = canonical_content_id(
@@ -1806,7 +1902,7 @@ class ControlledHarborAttemptExecutor:
                             job_name=job_name,
                             trial_name=cleanup_trial_name,
                         )
-            _assert_private_values_absent(
+            prohibited = _assert_private_surface_absent(
                 job_root / job_name,
                 auth_path=self._auth_file,
                 markers=auth_markers,
@@ -1822,6 +1918,18 @@ class ControlledHarborAttemptExecutor:
             ):
                 raise ControlledActiveSafeStop("hard_wall_deadline_elapsed")
             try:
+                job_tree = job_root / job_name
+                if job_tree.is_dir():
+                    artifact_hit = _private_value_artifact_hit(job_tree, prohibited)
+                    if artifact_hit is not None:
+                        # A private value inside the ephemeral job tree never
+                        # reaches durable custody (the tree is removed below);
+                        # close the Trial as one non-retry runtime_pre_terminal
+                        # lifecycle Attempt carrying the fixed composite code.
+                        raise LiveAttemptError(
+                            "private value appeared in a Harbor artifact",
+                            diagnostic_code=_private_value_artifact_code(*artifact_hit),
+                        )
                 try:
                     trial_result = _trial_result(job_root, job_name)
                 except LiveAttemptError as exc:
@@ -1894,15 +2002,18 @@ class ControlledHarborAttemptExecutor:
                 if not self._close_unusable_runtime_evidence:
                     raise
                 self._diagnostic_code = exc.diagnostic_code or "strict-runtime-evidence-rejected"
-                # A closed process whose outputs passed the private-value scan but cannot
-                # satisfy the exact Harbor/result authority is terminal, unusable evidence.
-                # Publishing a non-retry lifecycle Attempt closes the durable claim without
-                # relabeling the event as an Agent observation or weakening strict validation.
+                # A closed process whose outputs passed the fail-closed surface scan but
+                # cannot satisfy the exact Harbor/result authority — or whose ephemeral
+                # job tree contained a private value — is terminal, unusable evidence.
+                # Publishing a non-retry lifecycle Attempt closes the durable claim
+                # without relabeling the event as an Agent observation or weakening
+                # strict validation; the fixed code rides in source_state.
                 return _lifecycle_attempt(
                     request,
                     process,
                     category="runtime_pre_terminal_failure",
                     retry_eligible=False,
+                    source_state=self._diagnostic_code,
                 )
             raw = canonical_json_bytes(repair.model_dump(mode="json"))
             source_attempt_id = canonical_content_id(

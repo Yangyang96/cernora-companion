@@ -1340,6 +1340,56 @@ def test_pilot_policy_closes_unusable_runtime_evidence_without_observation(
     assert executor.diagnostic_code == "preterminal-structure-rejected"
 
 
+def test_private_artifact_hit_closes_lifecycle_with_composite_code(
+    tmp_path: Path,
+) -> None:
+    task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
+    spec = _spec(task)
+    auth = _auth_file(tmp_path)
+
+    class LeakingArtifactProcess(FakeProcess):
+        def __call__(self, *args: object, **kwargs: object) -> SubprocessResult:
+            result = super().__call__(*args, **kwargs)  # type: ignore[arg-type]
+            command = cast(tuple[str, ...], args[0])
+            job_root = Path(command[command.index("-o") + 1])
+            job_name = command[command.index("--job-name") + 1]
+            sessions = job_root / job_name / "trial-1" / "logs" / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions / "s-1.jsonl").write_text("unit-secret-marker", encoding="utf-8")
+            return result
+
+    repository_root = tmp_path / "repo"
+    repository_root.mkdir()
+    evaluation_root = tmp_path / "evaluations"
+    evaluation_root.mkdir()
+    executor = ControlledHarborAttemptExecutor(
+        repository_root=repository_root,
+        tasks=(task,),
+        evaluation_root=evaluation_root,
+        auth_file=auth,
+        proxy_environment=_proxy_environment(),
+        process_runner=LeakingArtifactProcess(task, spec),
+        container_controller=FakeContainers(),
+        cli_validator=lambda _: None,
+        image_verifier=lambda value, _: value.container.image.rsplit("@sha256:", 1)[1],
+        close_unusable_runtime_evidence=True,
+    )
+
+    attempt = executor(_request(spec, trial="private-artifact-leak"))
+
+    code = "private-value-in-artifact-auth-secret-trial-1-logs-sessions-s-1-jsonl"
+    assert attempt.retry_eligible is False
+    assert attempt.lifecycle is not None
+    assert attempt.lifecycle.category == "runtime_pre_terminal_failure"
+    assert attempt.lifecycle.source_state == code
+    assert attempt.runtime_observation is None
+    assert attempt.repair_result is None
+    assert executor.diagnostic_code == code
+    serialized = canonical_json_bytes(attempt.model_dump(mode="json"))
+    assert b"unit-secret-marker" not in serialized
+    assert str(auth).encode("utf-8") not in serialized
+
+
 def test_live_executor_keeps_private_output_failure_fail_closed(tmp_path: Path) -> None:
     task = load_visible_task(Path("examples/m4-visible/dev-interval-merge"))
     spec = _spec(task)
