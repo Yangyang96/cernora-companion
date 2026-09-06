@@ -688,3 +688,35 @@ Per the standing stop rule the pilot series halts here for a user decision.
 The recorded decision axes are unchanged since r2: corpus difficulty,
 timeout ceiling, repeated authorized rounds, or relaxing the evidence bar
 itself.
+
+## Pre-r8 offline evaluation (2026-09-08)
+
+A read-only review of the r4/r6/r7 custodies found no harness defect that
+should be fixed before an eighth round:
+
+- The r7 timeout Trials are clean in-envelope `AgentTimeoutError` closures
+  (attempts of 1,817 s and 1,824 s, zero incidents, zero freezes). The same
+  Cases completed in 169–384 s in r4/r6, and cases that timed out in r4
+  (`p4-dev-semver-precedence`, `p4-dev-slug-collapse`) completed in 69–131 s
+  in r6/r7 — identical plumbing, bimodal session times. This matches the
+  r2-recorded provider mid-generation variance, not a runtime defect.
+  Observed long-mode rate at the 1,800 s ceiling: 2/15 ≈ 13 %, so a fresh
+  round reaches nine evaluated Trials with roughly 30–40 % probability.
+- All seven evaluated r7 Attempts bind exactly their declared failure code,
+  one allowed-path source change, complete observations and evaluation
+  packages, and pass strict custody replay. The private-value family did not
+  recur.
+- Known non-bugs: `__pycache__/*.pyc` occasionally appears in `changed_paths`
+  (in-container import side effect, present in r4/r6/r7, never classified
+  unauthorized); r4's custody cannot fully replay under the current contract
+  (pre-existing era-boundary drift) while its artifacts themselves read
+  exactly; timed-out Attempts carry no runtime observation by design, so
+  transcript-level forensics stay impossible.
+
+One design constraint for r8: the pilot Plan identity is a pure digest of
+(corpus, image set, implementation candidates), so an identical rebuild of
+the r7 bundle would reproduce the already-consumed Plan `b2e99c2d…`. A fresh
+authority therefore needs an identity-distinguishing change — historically a
+Case swap or a wheel change — or an explicit version bump of the Companion
+wheel (0.4.0 → 0.4.1, a pending user decision) with an otherwise unchanged
+byte payload is the least-invasive option.
