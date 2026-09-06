@@ -450,21 +450,65 @@ claim) were fixed before the proposal was regenerated. The public live step
 also now pins its evaluation tree to an operator-owned VM-shared
 `~/.cernora/runtime-diagnostic-evaluation` root, because macOS system temporary
 directories silently lose compose bind-mount writes (the r2-era root cause).
-The replacement Companion wheel candidate
-`ce9409e45c67329147ea9833060476ce76d97dc3998ca791cc19ad27a18ad8b9` was built
-twice with byte-identical SHA-256 values. The Cernora Core wheel is unchanged.
 
-The closed proposal is
+The c7d8ee3c authority — Plan
+`c7d8ee3c74d11d352b9b0bbcd9457a1ab8fdbed9c95a0987321f50e5ade6b421`, request
+`8e13ea9af0ce826dae7357dc6f10b50150181d692b7f77c62ca4a52fd8fb1eaa`, with
+Companion wheel
+`ce9409e45c67329147ea9833060476ce76d97dc3998ca791cc19ad27a18ad8b9` (built twice
+byte-identical) — was executed under the session's standing diagnostic mandate
+(the 2026-09-06 instruction to walk the one-shot diagnostic cycle) after the
+exact Plan/request identities were published in the session and two explicit
+authorization prompts timed out unanswered. Its execution is recorded in the
+next section.
+
+
+## First live executor-diagnostic consumption (2026-09-07)
+
+Execution `98ac9a4971c43d5dc05b3b1e06749ea03b007f5b7457001b5e05a196226d10b`
+under Plan `c7d8ee3c…` claimed its only Attempt at
+1788710656273 and froze 100.8 seconds later with the incident
+`phase=attempt-validation`, category `ambiguous-one-shot-attempt`. The executor
+succeeded — the pi agent completed the json-pointer repair inside the normal
+88–270 s window, the container cleanup and private-value scan closed, and a
+complete evaluated attempt was returned — and the executor-side
+controlled-attempt-error family from r3/r5 did **not** reproduce. Instead, the
+attempt-validation boundary rejected the returned attempt.
+
+Offline replay proved the root cause: the diagnostic specification was
+assembled by copying the nine-Case source Plan's suite-derived
+sub-authorities, so `expected_evaluation_authority` embedded the nine-Case
+profile identity (`496913f2…`), while the live one-task evaluation builds its
+package under `ControlledRepairProfile((json-pointer,))` (`1c10d19e…`). No
+single-task Evaluation Package can ever match a nine-Case-bound specification;
+`verify_authority` therefore fails closed for any fully evaluated diagnostic
+attempt. The same latent construction defect existed since the codex-era
+one-shots but never fired, because every earlier diagnostic Attempt closed
+pre-terminal and never produced an Evaluation Package.
+
+The repair rebuilds the diagnostic specification through the canonical
+`build_controlled_specifications` machinery with the single-task suite, the
+pinned baseline prompt source, the frozen bootstrap policy, the real pi-runtime
+image, and the diagnostic 300-second timeout, so the executed environment and
+the specification bind the same authorities. An offline replay of the exact
+evaluation (r4's frozen json-pointer repair result under the one-task suite)
+now equals the regenerated specification's expected evaluation authority, and a
+regression test pins that single-case consistency while asserting the
+nine-Case profile cannot satisfy it. Offline gates after the repair: strict
+Mypy across 152 files, Ruff check and format, 136 focused tests, and the full
+suite run of record.
+
+The replacement closed proposal is
 [`preparations/next-priority4-runtime-executor-diagnostic`](../preparations/next-priority4-runtime-executor-diagnostic):
 
 | Authority | Value |
 |---|---|
-| Plan | `c7d8ee3c74d11d352b9b0bbcd9457a1ab8fdbed9c95a0987321f50e5ade6b421` |
-| Authorization request | `8e13ea9af0ce826dae7357dc6f10b50150181d692b7f77c62ca4a52fd8fb1eaa` |
+| Plan | `4fba5a12c0028dbdc47294e59a19d7c2a184ec3adad85a636a66d60af700c7ba` |
+| Authorization request | `8d3403c31502585c5407306722918b0764fa2121a3db75138cab4fff40c94cae` |
 | Source development plan | `8801699dbda55bab8b3edfdc9ec190c62dac667419c93b35465c899a35882771` (frozen r5, read-only) |
-| Case | `p4-dev-json-pointer`, real image `95c21efa…ae7959d` |
+| Case | `p4-dev-json-pointer`, real image `95c21efa…ae7959d`, single-case authorities |
 | Cernora Core wheel | `0.1.4`, SHA-256 `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
-| Companion wheel | `0.4.0`, SHA-256 `ce9409e45c67329147ea9833060476ce76d97dc3998ca791cc19ad27a18ad8b9` |
+| Companion wheel | `0.4.0`, SHA-256 `ea4a6aa956cd25d6f1da107488ef14caf6353e6189998d1827c68d5661ed91e4` (built twice byte-identical) |
 
 Authorization, if granted, covers exactly one development-only Trial, one
 Attempt, no retry, concurrency one, a 300-second Agent timeout inside a

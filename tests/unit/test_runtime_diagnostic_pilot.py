@@ -20,10 +20,12 @@ from cernora_reference_workflow.controlled_execution import (
     ControlledAttempt,
     ControlledAttemptRequest,
 )
+from cernora_reference_workflow.controlled_experiment_spec import materialize_authority_source
 from cernora_reference_workflow.controlled_live_attempt import (
     ControlledHarborAttemptExecutor,
     LiveAttemptError,
 )
+from cernora_reference_workflow.controlled_profile import build_controlled_profile_authority
 from cernora_reference_workflow.development_agent_pilot import DevelopmentAgentPilotPlan
 from cernora_reference_workflow.runtime_diagnostic_pilot import (
     AmbiguousRuntimeDiagnosticAttempt,
@@ -76,6 +78,29 @@ def _plan() -> RuntimeDiagnosticPilotPlan:
         source,
         implementation_candidates=candidates,
     )
+
+
+def test_diagnostic_specification_is_single_case_consistent() -> None:
+    """The executed single-task evaluation must bind the spec's authorities.
+
+    The consumed c7d8ee3c authority froze at attempt-validation because its
+    specification copied the nine-Case source Plan's suite-derived profile
+    identity, which no one-task Evaluation Package can ever reproduce. The
+    canonical single-task builder keeps both sides equal.
+    """
+
+    plan = _plan()
+    profile = build_controlled_profile_authority((plan.task,))
+    profile_source = materialize_authority_source(
+        "profile", profile.model_dump(mode="json")
+    ).model_dump(mode="json")
+    embedded = plan.specification.expected_evaluation_authority.profile.model_dump(mode="json")
+    assert embedded["sha256"] == profile_source["source_sha256"]
+    nine_case_profile = build_controlled_profile_authority(tuple(_source_plan().corpus.tasks))
+    nine_case_source = materialize_authority_source(
+        "profile", nine_case_profile.model_dump(mode="json")
+    ).model_dump(mode="json")
+    assert embedded["sha256"] != nine_case_source["source_sha256"]
 
 
 def _prepare(tmp_path: Path) -> tuple[RuntimeDiagnosticPilotPlan, Path]:

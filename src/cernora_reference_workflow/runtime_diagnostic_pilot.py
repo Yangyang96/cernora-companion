@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
+from cernora import BootstrapPlan
 from pydantic import Field, StrictInt, field_validator, model_validator
 
 from cernora_reference_workflow.common import (
@@ -40,14 +41,16 @@ from cernora_reference_workflow.controlled_experiment_spec import (
     ControlledExperimentSpecV2,
     Digest,
     StrictV2Contract,
-    materialize_controlled_experiment_spec,
+    materialize_authority_source,
 )
 from cernora_reference_workflow.controlled_run_plan import ControlledTrialSlotV2
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
 from cernora_reference_workflow.development_agent_pilot import (
+    PILOT_BASELINE_PROMPT_TEXT,
     PILOT_PROVIDER_SCOPE,
     DevelopmentAgentPilotPlan,
 )
+from cernora_reference_workflow.m4_final_plan import build_controlled_specifications
 from cernora_reference_workflow.publication import atomic_publish_directory
 from cernora_reference_workflow.study_preparation import (
     ImplementationCandidate,
@@ -434,11 +437,31 @@ def build_runtime_diagnostic_pilot_plan(
     if source.plan_id != SOURCE_PI_DEVELOPMENT_PLAN_ID:
         raise ContractError("Runtime diagnostic source is not the pinned development Plan")
     indexed_tasks = {item.case.case_id: item for item in source.corpus.tasks}
-    indexed_specs = {item.task.task_id: item for item in source.experiment_specs}
-    spec_payload = indexed_specs[DIAGNOSTIC_CASE_ID].model_dump(mode="json")
-    spec_payload["limits"]["timeout_seconds"] = DIAGNOSTIC_AGENT_TIMEOUT_SECONDS
-    spec_payload.pop("experiment_id")
-    specification = materialize_controlled_experiment_spec(spec_payload)
+    task = indexed_tasks[DIAGNOSTIC_CASE_ID]
+    indexed_images = {item.case_id: item.image for item in source.images.images}
+    # The live diagnostic step executes and evaluates with exactly one task.
+    # The specification must therefore be derived from that single-task suite
+    # through the canonical builder; copying suite-level sub-authorities from
+    # the nine-Case source Plan cannot verify against a one-task Evaluation
+    # Package (the c7d8ee3c authority froze exactly there).
+    baseline = materialize_authority_source(
+        "p4-confirmatory-baseline-prompt-v1", {"text": PILOT_BASELINE_PROMPT_TEXT}
+    )
+    specification = build_controlled_specifications(
+        tasks=(task,),
+        images={task.case.case_id: indexed_images[task.case.case_id]},
+        build_base_image=source.images.build_base_image,
+        configurations=(("baseline", baseline),),
+        bootstrap=BootstrapPlan(
+            method="case-clustered-paired-bootstrap/v1",
+            confidence_basis_points=9500,
+            resamples=10000,
+            percentile="nearest_rank_closed",
+            seed_source="comparison_input_sha256",
+        ),
+        pass_k=None,
+        timeout_seconds=DIAGNOSTIC_AGENT_TIMEOUT_SECONDS,
+    )[0]
     payload: dict[str, object] = {
         "schema_version": "cernora.reference.runtime-diagnostic-pilot-plan/v1",
         "status": "awaiting-user-authorization",
