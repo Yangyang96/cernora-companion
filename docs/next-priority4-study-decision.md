@@ -661,3 +661,30 @@ the published terminal reason instead of freezing the execution; a pilot whose
 Trials all evaluate can still reach `candidate-eligible`. The stop rule above
 still applies: an inconclusive r7 halts for a user decision.
 
+
+## r7 live outcome: execution completed, evidence inconclusive (2026-09-07)
+
+Execution `f5457e24…` closed all nine Trials with exactly nine Attempts,
+zero incidents, and zero freezes — the first fully completed pilot loop of
+the campaign. The Option A contract behaved exactly as designed: no
+executor-phase exception and no private-value hit occurred this round, and
+the r6 freeze slot (`p4-reg-cache-key`) instead evaluated to an authoritative
+behavioral failure. The outcome is
+`605e8e87a68bc7415de23abb00ba15e0d045e5af24b46bb0ec29cf7aab612e7f`, status
+`inconclusive`: slots 1 and 3 (`p4-dev-csv-quoted`,
+`p4-dev-midnight-window`) closed as 1,800-second `timed-out` lifecycle
+Attempts, leaving seven evaluated Trials.
+
+The custody now holds five fresh authoritative behavioral failures
+(`json_pointer_escape_order_v1`, `half_open_range_semantics_v1`,
+`semver_prerelease_order_v1`, `recursive_canonical_key_v1`,
+`nested_delete_prune_v1`) and two passes (slug-collapse, filename-sort).
+Together with the frozen r6 attempt artifacts the campaign possesses
+repeated, independent behavioral-failure evidence — but under the frozen
+evidence bar (nine evaluated Trials for candidate eligibility) the outcome
+remains inconclusive, and no development observation can be minted from it.
+
+Per the standing stop rule the pilot series halts here for a user decision.
+The recorded decision axes are unchanged since r2: corpus difficulty,
+timeout ceiling, repeated authorized rounds, or relaxing the evidence bar
+itself.
