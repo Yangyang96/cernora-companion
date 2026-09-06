@@ -1210,7 +1210,16 @@ def step_runtime_diagnostic_pilot(
         ControlledHarborAttemptExecutor,
     )
 
-    with tempfile.TemporaryDirectory(prefix="cernora-runtime-diagnostic-evaluation-") as temporary:
+    # Harbor's docker compose bind mounts silently lose container-side writes
+    # for evaluation trees on macOS system temporary directories (the default
+    # TMPDIR). Keep the diagnostic evaluation tree under an operator-owned,
+    # worktree-external, VM-shared /Users path instead, exactly as the
+    # development pilot entry point does.
+    evaluation_parent = Path.home() / ".cernora" / "runtime-diagnostic-evaluation"
+    evaluation_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="cernora-runtime-diagnostic-evaluation-", dir=evaluation_parent
+    ) as temporary:
         executor = ControlledHarborAttemptExecutor(
             repository_root=repository,
             tasks=(state.plan.task,),

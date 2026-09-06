@@ -2,8 +2,8 @@
 
 Status: **awaiting explicit user authorization; no execution is authorized**
 
-- Plan ID: `88759723dd8a23cfe2741fd4641aa5aa3cdd261d2495ff8244261af02bf5b857`
-- Request ID: `e64ef7a7c2608713c34a94c58a78d05e956294eeec91247dea8e7dde81a99757`
+- Plan ID: `c7d8ee3c74d11d352b9b0bbcd9457a1ab8fdbed9c95a0987321f50e5ade6b421`
+- Request ID: `8e13ea9af0ce826dae7357dc6f10b50150181d692b7f77c62ca4a52fd8fb1eaa`
 - Case: `p4-dev-json-pointer`
 - Scope: one development-only Trial, exactly one Attempt, no retry
 - Bounds: concurrency 1; Agent 300s; Attempt envelope 360s; total wall 900s

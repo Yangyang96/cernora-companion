@@ -446,9 +446,12 @@ check and format, and the full test suite. An independent adversarial review
 of the instrumentation found no P0; its P1 (an operator interrupt could be
 recorded as `unclassified-executor-exception` in the diagnostic plane) and two
 P2 findings (cross-plane fallback-code alignment and this document's replay
-claim) were fixed before the proposal was regenerated. The replacement
-Companion wheel candidate
-`11c4116989d7d19dc419b11e6d0713c31b5e3bc68bc9f7a98ca21534f9fe2c0b` was built
+claim) were fixed before the proposal was regenerated. The public live step
+also now pins its evaluation tree to an operator-owned VM-shared
+`~/.cernora/runtime-diagnostic-evaluation` root, because macOS system temporary
+directories silently lose compose bind-mount writes (the r2-era root cause).
+The replacement Companion wheel candidate
+`ce9409e45c67329147ea9833060476ce76d97dc3998ca791cc19ad27a18ad8b9` was built
 twice with byte-identical SHA-256 values. The Cernora Core wheel is unchanged.
 
 The closed proposal is
@@ -456,12 +459,12 @@ The closed proposal is
 
 | Authority | Value |
 |---|---|
-| Plan | `88759723dd8a23cfe2741fd4641aa5aa3cdd261d2495ff8244261af02bf5b857` |
-| Authorization request | `e64ef7a7c2608713c34a94c58a78d05e956294eeec91247dea8e7dde81a99757` |
+| Plan | `c7d8ee3c74d11d352b9b0bbcd9457a1ab8fdbed9c95a0987321f50e5ade6b421` |
+| Authorization request | `8e13ea9af0ce826dae7357dc6f10b50150181d692b7f77c62ca4a52fd8fb1eaa` |
 | Source development plan | `8801699dbda55bab8b3edfdc9ec190c62dac667419c93b35465c899a35882771` (frozen r5, read-only) |
 | Case | `p4-dev-json-pointer`, real image `95c21efa…ae7959d` |
 | Cernora Core wheel | `0.1.4`, SHA-256 `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
-| Companion wheel | `0.4.0`, SHA-256 `11c4116989d7d19dc419b11e6d0713c31b5e3bc68bc9f7a98ca21534f9fe2c0b` |
+| Companion wheel | `0.4.0`, SHA-256 `ce9409e45c67329147ea9833060476ce76d97dc3998ca791cc19ad27a18ad8b9` |
 
 Authorization, if granted, covers exactly one development-only Trial, one
 Attempt, no retry, concurrency one, a 300-second Agent timeout inside a
