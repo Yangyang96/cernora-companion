@@ -68,7 +68,7 @@ assert package.summary.comparable
 assert package.summary.conclusion == "uncertain"
 assert package.comparison_input.treatment.changes[0].kind == "prompt_instruction"
 assert importlib.metadata.version("cernora") == "0.1.4"
-assert importlib.metadata.version("cernora-reference-workflow") == "0.4.1"
+assert importlib.metadata.version("cernora-reference-workflow") == "0.4.2"
 assert "site-packages" in str(Path(cernora.__file__).resolve())
 assert "site-packages" in str(Path(cernora_reference_workflow.__file__).resolve())
 

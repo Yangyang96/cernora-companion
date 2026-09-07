@@ -1072,3 +1072,73 @@ a fresh dual-built Companion wheel — plus the still-open
 `study-administration` fields (named owner, live window, authorization
 scope, custody location), each stopping for user input before
 `study prepare`.
+
+## Fifth boundary: materialization implementation and the 0.4.2 plan data plane (2026-09-08)
+
+The survey work package froze the full mechanical path
+(`preparations/p4-study-materialization-plan/dossier.md`, commit `2338e73`):
+the StudyIntent's Case authorities — including the three held-out Cases —
+derive from the post-reveal twelve-Case RunPlan exactly as the m4-era
+`create_m4_final_plans` consumed revealed task authorities, so the operating
+sequence is reveal (boundary R) → images → plan → intent → prepare →
+request-reveal → bind-reveal → stop (boundary L).
+
+Implementation then hit a hard contract wall: `ControlledRunPlanV2` pins
+every non-0.3.0 plan to the exact frozen M4 matrix (nine Cases, 54 Trials,
+108 Attempts, 43,200 s), while `StudyIntent` requires all three splits and
+every development observation's Case/split — the adjudicated twelve-Case
+geometry (and any geometry of ten or more Cases) is inexpressible in the
+0.4.0 data plane. This is precisely the study-line data-plane decision
+deferred by the 0.4.1 bump record. The user's geometry adjudication of the
+fourth boundary forces the change; only its naming remained open.
+
+One publication prompt offered the three options (a new `0.4.2` plan
+boundary Literal together with a Companion 0.4.2 wheel — the recorded
+recommendation; a new Literal with the wheel staying at 0.4.1 by byte
+identity; or a parametric matrix). It timed out unanswered after 60 s — the
+campaign's ninth recorded AskUserQuestion timeout. Per the standing mandate
+the implementation proceeded with the recommendation:
+
+- `ControlledRunPlanV2` accepts a new exact-pinned `companion_version`
+  `"0.4.2"` = the P4 study execution matrix: twelve Cases × two
+  configurations × three repetitions = 72 planned Trials, worst-case 144
+  Attempts, 160,000-second wall, `m4` analysis, Baseline/Candidate
+  configurations. The `0.4.0` M4 matrix branch is byte-identical and stays
+  frozen for replay; `bind_study_run_plan` accepts `{0.4.0, 0.4.2}`;
+  `ExecutionRecord`'s Literal extended accordingly. Reverting to the
+  Option-B naming is a rename-level change if the user prefers it.
+- The Companion bumps 0.4.1 → 0.4.2 exactly as the r8 bump did: pyproject,
+  `__version__`, the uv.lock root entry surgically edited, and both
+  release-surface version gates. No wheel is built in this commit; the
+  boundary-R runbook builds and dual-verifies it and publishes the identity.
+- Three new offline scripts with unit tests (fake seals, the real frozen
+  ③ worksheet artifacts, the real visible corpus, and the real r9 image
+  set): `scripts/create_p4_heldout_reveal.py` (boundary R decrypt → three
+  private task-authority JSONs + a Candidate-bound reveal receipt, refusing
+  to run without `--authorize-reveal`), `scripts/create_p4_study_images.py`
+  (three revealed Case images built twice no-cache over the pinned pi base,
+  reusing the proven m4 build internals, merged with the nine frozen pilot
+  images into one twelve-Case study image set), and
+  `scripts/create_p4_study_materialization.py` (assembles the
+  specifications, 72-Trial RunPlan, split-scoped ComparisonPlan, re-minted
+  continuity-gated Candidate record, HeldoutCommitment over the public seal
+  manifest, ImplementationLock; verifies every binding through
+  `bind_study_run_plan`; optional ceremony runs
+  prepare → request-reveal → bind-reveal and stops at `AwaitingAcceptance`).
+- The ceremony test drives a complete fake-reseal → reveal → assemble →
+  bind-reveal chain through the real state machine, proving the
+  twelve-Case schedule, the 144-Attempt/160,000-second intents, and the
+  continuity gate end-to-end.
+- Environment restoration: the worktree venv had a stale post-r9 wheel
+  installed that predates the continuity gate; it was uninstalled and
+  source-direct resolution restored (the r-series practice of installing
+  the plan-bound wheel applies again at boundary R/L execution time).
+
+Gates for this commit: ruff check and format clean, strict mypy across
+src + scripts (81 files) clean, full test suite green, and the legacy
+0.4.0-matrix and control-plane tests unchanged. The two user boundaries
+stand unchanged: boundary R (the real reveal, with the custodian's key and
+`--authorize-reveal`) and boundary L (the live 72-Trial `start-execution`).
+The boundary-R runbook: reveal → build the three images → build and
+dual-verify the 0.4.2 wheel and install it into the venv → run the
+materialization with the ceremony → stop at `AwaitingAcceptance`.

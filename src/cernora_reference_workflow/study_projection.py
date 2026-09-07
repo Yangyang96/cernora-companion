@@ -91,8 +91,12 @@ def bind_study_run_plan(
 
     if protocol.source_intent_id != intent.intent_id:
         raise ContractError("Study Protocol does not derive from the supplied Intent")
-    if run_plan.companion_version != "0.4.0" or run_plan.analysis.method_version != "m4":
-        raise ContractError("Controlled Study requires the frozen Companion 0.4.0 plan boundary")
+    if run_plan.companion_version not in {"0.4.0", "0.4.2"} or (
+        run_plan.analysis.method_version != "m4"
+    ):
+        raise ContractError(
+            "Controlled Study requires a frozen Companion 0.4.0/0.4.2 plan boundary"
+        )
     if tuple(item.configuration_id for item in run_plan.configurations) != (
         "baseline",
         "candidate",

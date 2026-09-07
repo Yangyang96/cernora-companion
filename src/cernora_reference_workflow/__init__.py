@@ -57,4 +57,4 @@ __all__ = [
     "normalize_execution_pack",
     "summarize_execution_pack",
 ]
-__version__ = "0.4.1"
+__version__ = "0.4.2"

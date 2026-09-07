@@ -66,7 +66,7 @@ class ExecutionRecord(StrictContract):
     run_plan_sha256: Digest
     trial_slots_sha256: Digest
     planned_trial_count: PositiveInt
-    companion_version: Literal["0.2.0", "0.3.0", "0.4.0"]
+    companion_version: Literal["0.2.0", "0.3.0", "0.4.0", "0.4.2"]
     connector: ConnectorIdentity
 
     @model_validator(mode="after")

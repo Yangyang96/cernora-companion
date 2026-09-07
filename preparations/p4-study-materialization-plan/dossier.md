@@ -3,6 +3,20 @@
 Status: **engineering scoping frozen by in-session survey; implementation
 pending; no held-out reveal, no live authority, no provider resource consumed**
 
+## Addendum — the 0.4.2 plan boundary (2026-09-08)
+
+Implementation discovered that the constraint below ("`companion_version`
+literal") is not merely an acceptance check but an exact-matrix pin: the
+0.4.0 data plane admits only the frozen M4 nine-Case matrix, which no
+study satisfying the frozen Candidate record can inhabit (its nine
+observations already span nine Cases across two splits, and the Intent
+requires a third split). The fifth-boundary record in
+`docs/next-priority4-study-decision.md` therefore mints the exact-pinned
+`0.4.2` P4 study matrix — twelve Cases × 2 × 3 = 72 Trials, worst 144
+Attempts, 160,000-second wall — and the study plan below now materializes
+under `companion_version: "0.4.2"` (wheel 0.4.2, `ACCEPTED_COMPANION_VERSION`
+"0.4.2"). Every other item of this worksheet stands unchanged.
+
 This worksheet freezes the mechanical path from the two terminal artifacts —
 the frozen development Candidate
 (`preparations/p4-candidate-development-csv-quoted`, record `1b0a6249…`) and
