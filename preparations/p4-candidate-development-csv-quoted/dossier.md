@@ -22,8 +22,8 @@ not a `StudyIntent`, held-out commitment, reveal, smoke, or execution directive.
 - The csv Case itself: the r9 slot-1 Attempt changed only `src/csv_field.py`, left
   `tests/verify.py` untouched, ran the verifier once (exit 1), and terminated cleanly
   in 237.8 s — a pure knowledge failure of the quoted-field scanning semantics. The
-  same Case failed behaviorally in every consumed round that evaluated it (r3, r4, r6,
-  r9).
+  same Case failed behaviorally in every consumed round that evaluated it (r3, r4,
+  r6, r8, r9).
 
 ## Treatment (axis: prompt-instruction)
 
@@ -35,7 +35,10 @@ Candidate prompt authority: `p4-confirmatory-candidate-prompt-v1`, payload
 `{"selected_failure": {"code": "csv_quoted_field_scanning_v1", "profile_id":
 "cernora-controlled-repair-v1", "profile_version": "1.0.0"}, "text": <treatment text>}`,
 source SHA-256 (equals the record's `treatment_sha256`)
-`118ae58150209154c33853f868321b48fa3d79e98eb26cf7e6149ff65b743d1a`.
+`118ae58150209154c33853f868321b48fa3d79e98eb26cf7e6149ff65b743d1a`. The canonical
+authority bytes are committed alongside this worksheet as `candidate-prompt.json`
+(its `source_sha256` must equal `118ae581…`); it is the byte-level input the study
+re-mint must consume, not this document's renderings.
 
 Treatment text (verbatim, additive single-variable design: the baseline sentence plus
 one exact-semantics sentence):
@@ -77,6 +80,50 @@ the `StudyIntent` must be re-minted from the same byte-identical prompt payloads
 the final Case set, yielding new configuration-authority digests while the
 `treatment_sha256` stays `118ae581…`. The prompt-payload bytes frozen here predate any
 held-out access and prove the patch was chosen without held-out knowledge.
+
+Because the configuration digests are content of the record, the re-minted canonical
+record necessarily carries a **different `development_id`** from
+`1b0a6249…`; only this development record and the treatment payload digest are
+terminal. Continuity between this freeze and the re-mint is enforced mechanically:
+the materialization must assert
+`candidate_continuity_violations(prior, remint) == ()`
+(`cernora_reference_workflow.candidate_development`), which permits only the
+case-set-derived authority digests — and the `development_id` they feed — to differ
+while pinning the hypothesis, the nine observations, the treatment axis, and
+`treatment_sha256`.
+
+## Independent review and remediation (2026-09-07)
+
+An isolated read-only reviewer (not the Candidate's developer) examined this
+worksheet, the record, the r9 custody chain, and the code paths. Verdict:
+**admissible as the development basis for requesting a fresh held-out commitment**;
+no P0 findings. Its findings and their dispositions:
+
+- **P1 (repaired)** the treatment payload existed only as markdown here, so the
+  re-mint had no byte-level input: committed `candidate-prompt.json`.
+- **P2 (repaired)** no mechanical continuity gate existed between this freeze and
+  the study re-mint: added `candidate_continuity_violations` plus
+  `tests/unit/test_candidate_continuity.py`.
+- **P2 (repaired)** the docs did not state that the re-minted record carries a
+  different `development_id`: stated here and in the decision record.
+- **P3 (repaired)** the failure enumeration omitted r8 (five rounds, not four).
+- **P3 (recorded, wording)** the treatment rules cover the six behaviors the frozen
+  verifier asserts plus two RFC-4180-public rules it does not (quotes honored only
+  at field boundaries; embedded newlines). The mid-field-quote quadrant is probed
+  by neither the frozen verifier nor a literal reading of the treatment sentence,
+  while the frozen reference solution rejects it (`ValueError`). Both readings pass
+  the visible verifier; a future held-out verifier could bind either. Known
+  interpretation risk, accepted rather than re-minted.
+- **P3 (recorded, wording)** the hypothesis mechanism's failure-family unification
+  is inference beyond the value-free evidence, and names four of the six non-csv
+  codes. Pre-registered hypothesis text; not operational in the falsifier.
+- **P3 (recorded, reference)** `expected_observation`'s "declared threshold" refers
+  to the standing design declaration (+10 pp paired RSR, `next-priority4-study-decision.md`),
+  frozen at study materialization; the record is not self-contained on its success
+  criterion.
+- **P3 (deferred to ④)** the standing 9 × 2 × 3 / 54-Trial design geometry predates
+  this record and must be re-derived at study materialization (a twelve-Case split
+  implies 72 Trials at k = 3).
 
 ## Authorization record
 

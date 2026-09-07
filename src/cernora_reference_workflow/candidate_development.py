@@ -127,11 +127,38 @@ def freeze_candidate_development(
     return CandidateDevelopmentRecord.model_validate(payload)
 
 
+def candidate_continuity_violations(
+    prior: CandidateDevelopmentRecord,
+    remint: CandidateDevelopmentRecord,
+) -> tuple[str, ...]:
+    """Fail-closed comparison between one frozen record and its case-set re-mint.
+
+    Study materialization must re-mint the canonical Candidate Development record
+    over the final study case set (its configuration authorities are case-set
+    derived), using byte-identical treatment payload bytes. This gate reports every
+    way a re-mint drifted from the frozen development content: only the
+    case-set-dependent Baseline/Candidate configuration authority digests — and
+    therefore the ``development_id`` they feed — are allowed to change.
+    """
+
+    violations: list[str] = []
+    if remint.hypothesis != prior.hypothesis:
+        violations.append("hypothesis drifted from the frozen Candidate")
+    if remint.observations != prior.observations:
+        violations.append("observations drifted from the frozen Candidate")
+    if remint.candidate.treatment_axis != prior.candidate.treatment_axis:
+        violations.append("treatment axis drifted from the frozen Candidate")
+    if remint.candidate.treatment_sha256 != prior.candidate.treatment_sha256:
+        violations.append("treatment digest drifted from the frozen Candidate")
+    return tuple(violations)
+
+
 __all__ = [
     "BaselineAuthority",
     "CandidateDevelopmentRecord",
     "CandidateHypothesis",
     "CandidatePatch",
     "DevelopmentObservation",
+    "candidate_continuity_violations",
     "freeze_candidate_development",
 ]

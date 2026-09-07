@@ -856,10 +856,17 @@ baseline specifications are byte-identical to the Plan's experiment
 specifications.
 
 The treatment is one additive prompt sentence: the baseline prompt text
-followed by the exact RFC 4180 quoted-field scanning rules the frozen
-verifier asserts, binding the selected failure. The chosen design keeps the
+followed by an exact-semantics sentence specifying the RFC 4180 quoted-field
+scanning rules (the six behaviors the frozen verifier asserts, plus the two
+RFC-public rules of boundary-only quote honoring and embedded newlines),
+binding the selected failure. The chosen design keeps the
 baseline sentence so the patch is a single-variable addition matching the
 hypothesis mechanism (no precise scanning semantics in the Baseline prompt).
+The mid-field-quote quadrant is probed by neither the frozen verifier nor a
+literal reading of the treatment sentence, while the frozen reference
+solution rejects it; both readings pass the visible verifier, and the
+divergence, together with the other wording caveats and their dispositions,
+is recorded in the worksheet's independent-review section.
 
 One structural consequence is recorded in the worksheet: a
 `CandidateDevelopmentRecord`'s configuration-authority digests are derived
@@ -870,14 +877,35 @@ therefore freezes the Candidate **content** (hypothesis, treatment payload
 with its case-set-independent digest, and the nine observations) now; the
 canonical record embedded in the future `StudyIntent` must be re-minted from
 the same byte-identical prompt payloads over the final case set, and the
-frozen `treatment_sha256` stays terminal. The prompt-payload bytes predate
+frozen `treatment_sha256` stays terminal — the canonical payload bytes are
+committed as `candidate-prompt.json` in the worksheet. The re-minted record
+necessarily carries a different `development_id` from `1b0a6249…`;
+continuity is enforced by
+`candidate_development.candidate_continuity_violations`, which pins the
+hypothesis, the observations, and the treatment digest while permitting only
+the case-set-derived authority digests (and the `development_id` they feed)
+to differ. The prompt-payload bytes predate
 any held-out access and prove the patch was chosen from development evidence
-alone.
+alone. The standing 9 × 2 × 3 / 54-Trial design geometry predates this
+record; a twelve-Case study split would imply 72 Trials at k = 3, so the
+geometry and budget arithmetic must be re-derived at study materialization.
+
+An isolated read-only independent review (2026-09-07) found the frozen
+record admissible as the development basis for requesting a fresh held-out
+commitment, with no P0 findings. Its one P1 (commit the treatment payload
+bytes as a canonical artifact) and two P2 findings (a mechanical continuity
+gate between this freeze and the study re-mint; disclosing that the
+re-minted record carries a different `development_id`) were repaired
+offline, and its P3 wording findings were repaired or recorded in the
+worksheet's independent-review section. The review independently
+corroborated the observation fidelity, every digest recomputation, the 9/9
+spec reconstruction, and that no live authority, custody, or provider
+resource was consumed.
 
 Authorization record: the hypothesis and patch publications each timed out
 unanswered (this session's sixth and seventh AskUserQuestion timeouts); work
 continued under the session's published mandate chain, with the timeouts
 recorded in the worksheet. Every step is an offline derivation — no live
 authority, custody, or provider resource was consumed, and no held-out
-material was requested or revealed. The independent review of the Candidate
-and the fresh held-out commitment remain un-started user decisions.
+material was requested or revealed. The fresh held-out commitment remains an
+un-started user decision.
