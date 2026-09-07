@@ -1037,3 +1037,38 @@ the still-pending `study-administration`: named owner, live window,
 authorization scope, and custody location) with the Candidate re-mint over
 the final Case set under the `candidate_continuity_violations` gate; and the
 separate live authorization request for the study execution itself.
+
+## Held-out commitment delivered (2026-09-08)
+
+The user engaged an isolated custodian session under
+`preparations/p4-heldout-custodian-brief/brief.md`. Its sealed delivery is
+commit `1a4259f` — exactly `preparations/p4-heldout-commitment/ciphertext.bin`
+(9,346 bytes) and `manifest.json` — with the private archive, authoring
+tree, calibration records, cover script, and reveal key held under
+`~/.cernora/p4-heldout/` outside every Git worktree, unread by the
+development session.
+
+Public offline verification passed: the manifest loads as canonical JSON,
+self-rederives its bindings, and carries identifier
+`9b23e459b7feaa0c4b2a63e64e7f4f6ab083109d37d614d11356a96e0cf990d6` and
+SHA-256
+`9a99c792517883bedff271704e8bef21e37811ed3cb478057d209ecae0476bf4`; it
+binds exactly the three opaque Case commitments `case-16a08bec…`,
+`case-171c1aeb…`, and `case-4ef3a691…`; and the ciphertext's size and digest
+both match the manifest. The custodian's terminal report, supplied verbatim
+by the operator, confirms the manifest identity and digest as bound to
+commit `1a4259f` and reports, per Case in archive order, the booleans
+reference-solution-passed 3/3 and baseline-failed 3/3 (each failure landing
+on its expected mechanism check), with the reveal key at
+`~/.cernora/p4-heldout/reveal.key` and no blockers. Nothing else crossed
+the session boundary: no Case text, no failure codes, no difficulty profile.
+
+The `fresh-heldout-commitment` and `fresh-heldout-custodian` pending
+decisions of the study preparation manifest are now satisfied. The next work
+package is the canonical `StudyIntent` assembly — the twelve-Case authority
+set, the Candidate re-mint under the continuity gate, the frozen 72-Trial /
+144-Attempt / 160,000-second / ≤ $1 bounds, and the implementation lock over
+a fresh dual-built Companion wheel — plus the still-open
+`study-administration` fields (named owner, live window, authorization
+scope, custody location), each stopping for user input before
+`study prepare`.
