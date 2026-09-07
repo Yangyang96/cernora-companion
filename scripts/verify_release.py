@@ -61,8 +61,8 @@ def _main_checkout_root() -> Path:
 
 def _verify_m4_release_surface() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    if project["project"]["version"] != "0.4.0":
-        raise RuntimeError("Priority 4 M4 requires companion version 0.4.0")
+    if project["project"]["version"] != "0.4.1":
+        raise RuntimeError("Priority 4 M4 requires companion version 0.4.1")
     if project["project"].get("scripts", {}).get("experiment") != (
         "cernora_reference_workflow.cli:main"
     ):
@@ -74,8 +74,8 @@ def _verify_m4_release_surface() -> None:
 
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     local = [item for item in lock["package"] if item["name"] == "cernora-reference-workflow"]
-    if len(local) != 1 or local[0]["version"] != "0.4.0":
-        raise RuntimeError("uv.lock does not bind companion version 0.4.0")
+    if len(local) != 1 or local[0]["version"] != "0.4.1":
+        raise RuntimeError("uv.lock does not bind companion version 0.4.1")
     core = [item for item in lock["package"] if item["name"] == "cernora"]
     if len(core) != 1 or core[0]["version"] != "0.1.4":
         raise RuntimeError("uv.lock does not bind Core version 0.1.4")

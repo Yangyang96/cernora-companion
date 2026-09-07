@@ -720,3 +720,29 @@ authority therefore needs an identity-distinguishing change — historically a
 Case swap or a wheel change — or an explicit version bump of the Companion
 wheel (0.4.0 → 0.4.1, a pending user decision) with an otherwise unchanged
 byte payload is the least-invasive option.
+
+## r8 preparation via the 0.4.1 version bump (2026-09-08)
+
+The user approved the pending version decision: the Companion project moves
+`0.4.0` → `0.4.1` (pyproject, package `__version__`, uv.lock root entry, and
+the two release-surface version gates in `scripts/verify_release.py` and
+`scripts/verify_comparison_wheels.py`). No M4/study data-plane Literal or
+builder constant changes: those contracts keep accepting their frozen
+`0.4.0` plan data, and aligning the future Study line's companion version
+remains a separate decision. Offline gates after the bump: strict Mypy, Ruff,
+format, and the full 648-test suite run of record.
+
+The eighth-round bundle is
+[`preparations/next-priority4-development-pilot-pi-r8`](../preparations/next-priority4-development-pilot-pi-r8):
+
+| Authority | Value |
+|---|---|
+| Bundle | `1351bfff5d7691b5f788c3e93200e9d3c26cee21086de5203299fb0185730c11` |
+| Plan | `0d89f21e732ec630b6252536d9bf6481acb6c4d857427eebca8fe0b15004fc5e` |
+| Authorization request | `124b9c1d1f3267978dddfa4a2eba2a93c0b8649ca5e0e5c2f4562134bbdfc4f9` |
+| Cernora Core wheel | `0.1.4`, SHA-256 `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `0.4.1`, SHA-256 `3f2af5d385383f9e6eca2462404111b6a5d9451f99e5077d618e3b7f50fb94e4` (built twice byte-identical) |
+
+Bounds are unchanged from r7. The offline evaluation's estimate stands: the
+round reaches nine evaluated Trials with roughly 30–40 % probability, and the
+inconclusive stop rule still halts the series for a user decision.
