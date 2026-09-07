@@ -803,3 +803,30 @@ r9 Plan is naturally distinct from r8's. The bundle is
 
 Bounds are unchanged from r6/r7/r8. The stop rule is standing: an
 inconclusive r9 halts for a user decision.
+
+## r9 live outcome: candidate-eligible (2026-09-08)
+
+Execution `b3cae2982e4ed822bb75ccb057ab1279f8df78abbed2a712e5c4c223d60c08fc`
+under Plan `d81076fa…` (request `0ac96b0e…`, the bytecode-authority repair
+round, launched after a published authorization prompt timed out, following
+the session's approved fix-then-run chain) completed all nine Trials with
+exactly nine Attempts, zero incidents, and zero freezes in under 25 minutes of
+live time. Outcome `c6427faba087ed7c255a8ef271469233b9a940522f43111d73d0a78b8c4112e6`
+is the campaign's first **`candidate-eligible`** result:
+
+- seven authoritative behavioral failures — `csv_quoted_field_scanning_v1`,
+  `json_pointer_escape_order_v1`, `midnight_window_wrap_v1`,
+  `half_open_range_semantics_v1`, `semver_prerelease_order_v1`,
+  `recursive_canonical_key_v1`, `nested_delete_prune_v1` — each binding
+  exactly its Case's declared authority code;
+- two passes (`p4-dev-slug-collapse`, `p4-reg-filename-sort`), including the
+  slot that r8's bytecode-cache bug misclassified;
+- leading failure code `csv_quoted_field_scanning_v1`; strict offline replay
+  is clean.
+
+The evidence bar is satisfied: a fresh frozen development pilot now derives
+candidate eligibility from real Agent observations. The next work-package
+steps (one causal hypothesis, one prompt-instruction Candidate,
+`CandidateDevelopmentRecord`, independent review, then a fresh held-out
+commitment) are separate authorities and remain un-started pending a user
+decision.
