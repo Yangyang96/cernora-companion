@@ -830,3 +830,54 @@ steps (one causal hypothesis, one prompt-instruction Candidate,
 `CandidateDevelopmentRecord`, independent review, then a fresh held-out
 commitment) are separate authorities and remain un-started pending a user
 decision.
+
+## First development Candidate from the r9 evidence (2026-09-07)
+
+The session mandated the Candidate work package under a publish-then-act
+protocol from the r9 leading failure `csv_quoted_field_scanning_v1`. The
+closed development worksheet is
+[`preparations/p4-candidate-development-csv-quoted`](../preparations/p4-candidate-development-csv-quoted):
+
+| Authority | Value |
+|---|---|
+| Development record | `1b0a62491a8f6e7c1cc85ce300ad3a9fd12940376541581bbb6b7f6fe1d69fcc` (schema `cernora.reference.candidate-development/v1`) |
+| Treatment axis | `prompt-instruction` |
+| Treatment payload digest | `118ae58150209154c33853f868321b48fa3d79e98eb26cf7e6149ff65b743d1a` (candidate prompt source, case-set independent) |
+| Baseline prompt authority | r9-frozen `p4-confirmatory-baseline-prompt-v1`, `acf0b631…` (unchanged) |
+| Baseline configuration (development derivation) | `6a4c06e84e6336318f4f0f043ab6735f4e18008d1bb934c1257d04bad57be944` |
+| Candidate configuration (development derivation) | `2b2fa3b92e5fff75e614caa124b19ac249dd75cbd37c50c9db32d34e6f717442` |
+
+The record's nine observations are byte-copied from the r9 outcome (seven
+authoritative behavioral failures, two passes); a strict reload re-validates
+canonical bytes, observation fidelity, and the hypothesized match
+(`csv_quoted_field_scanning_v1`). The development-derivation spec
+reconstruction was validated against the frozen r9 Plan: all nine rebuilt
+baseline specifications are byte-identical to the Plan's experiment
+specifications.
+
+The treatment is one additive prompt sentence: the baseline prompt text
+followed by the exact RFC 4180 quoted-field scanning rules the frozen
+verifier asserts, binding the selected failure. The chosen design keeps the
+baseline sentence so the patch is a single-variable addition matching the
+hypothesis mechanism (no precise scanning semantics in the Baseline prompt).
+
+One structural consequence is recorded in the worksheet: a
+`CandidateDevelopmentRecord`'s configuration-authority digests are derived
+from the final study `ControlledRunPlanV2` (the start-execution
+`bind_study_run_plan` gate), whose dataset digest covers the full study case
+set — including three held-out Cases that do not exist yet. The worksheet
+therefore freezes the Candidate **content** (hypothesis, treatment payload
+with its case-set-independent digest, and the nine observations) now; the
+canonical record embedded in the future `StudyIntent` must be re-minted from
+the same byte-identical prompt payloads over the final case set, and the
+frozen `treatment_sha256` stays terminal. The prompt-payload bytes predate
+any held-out access and prove the patch was chosen from development evidence
+alone.
+
+Authorization record: the hypothesis and patch publications each timed out
+unanswered (this session's sixth and seventh AskUserQuestion timeouts); work
+continued under the session's published mandate chain, with the timeouts
+recorded in the worksheet. Every step is an offline derivation — no live
+authority, custody, or provider resource was consumed, and no held-out
+material was requested or revealed. The independent review of the Candidate
+and the fresh held-out commitment remain un-started user decisions.
