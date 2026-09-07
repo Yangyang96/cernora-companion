@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Annotated, Literal, Self
 
 from cernora import EvidenceReference, ResultRecord
@@ -18,6 +19,21 @@ RESULT_RECORD_VERSION: Literal["agent.evaluator.result-record/v1"] = (
     "agent.evaluator.result-record/v1"
 )
 REPAIR_RESULT_SCHEMA_VERSION = "cernora.reference.repair-result/v1"
+_BYTECODE_CACHE_DIRECTORY = "__pycache__"
+
+
+def _is_bytecode_cache_artifact(path: str) -> bool:
+    """One deterministic in-container import side effect, never agent authority.
+
+    Importing a repaired module inside the Task container compiles its frozen
+    source into ``__pycache__/<name>.cpython-*.pyc``. That byte-cache file is
+    not authored work: it stays fresh by source mtime, so a stale cache cannot
+    alter verification behavior, and a changed ``.pyc`` always accompanies the
+    deliberately changed ``.py`` it derives from.
+    """
+
+    pure = PurePosixPath(path)
+    return pure.suffix == ".pyc" and _BYTECODE_CACHE_DIRECTORY in pure.parts
 
 
 class RepairCheck(StrictV2Contract):
@@ -105,7 +121,15 @@ class RepairResultRecord(StrictV2Contract):
             and self.exit_code == 0
             and all(item.passed for item in self.checks)
             and self.protected_path_receipt.unchanged
-            and set(self.changed_paths).issubset(self.allowed_paths)
+            and self.authority_changed_paths.issubset(self.allowed_paths)
+        )
+
+    @property
+    def authority_changed_paths(self) -> frozenset[str]:
+        """Changed paths that count for path authority, minus bytecode caches."""
+
+        return frozenset(
+            path for path in self.changed_paths if not _is_bytecode_cache_artifact(path)
         )
 
     @property
@@ -115,7 +139,7 @@ class RepairResultRecord(StrictV2Contract):
         result = [item.failure_code for item in self.checks if not item.passed]
         if not self.protected_path_receipt.unchanged:
             result.append("protected_path_changed_v1")
-        if not set(self.changed_paths).issubset(self.allowed_paths):
+        if not self.authority_changed_paths.issubset(self.allowed_paths):
             result.append("unauthorized_path_changed_v1")
         if self.exit_code not in {None, 0} and not result:
             result.append("test_process_failed_v1")
@@ -177,7 +201,7 @@ class RepairResultRecord(StrictV2Contract):
                     id="authorized_paths_only_v1",
                     version=RESULT_RECORD_VERSION,
                     role="constraint",
-                    value=set(self.changed_paths).issubset(self.allowed_paths),
+                    value=self.authority_changed_paths.issubset(self.allowed_paths),
                     value_type="boolean",
                     validity="valid",
                     failure_reason=None,

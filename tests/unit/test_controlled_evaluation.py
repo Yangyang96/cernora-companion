@@ -82,6 +82,48 @@ def test_non_exited_result_is_unavailable_not_behavioral_failure() -> None:
     assert result.failure_codes == ("evaluation_unavailable_v1",)
 
 
+def test_passing_repair_stays_authorized_with_bytecode_cache_side_effect() -> None:
+    """The r8 slug-collapse freeze: a passing fix plus one imported ``.pyc``.
+
+    Importing the repaired module inside the Task container compiles
+    ``__pycache__/<name>.cpython-*.pyc``; that deterministic artifact must not
+    turn a passing, protected-path-clean repair into an unauthorized change.
+    """
+
+    payload = valid_result_payload()
+    payload["exit_code"] = 0
+    payload["checks"] = [
+        {"check_id": "boundary", "failure_code": "interval_boundary_v1", "passed": True}
+    ]
+    payload["changed_paths"] = [
+        "src/__pycache__/intervals.cpython-312.pyc",
+        "src/intervals.py",
+    ]
+    result = materialize_repair_result(payload)
+    reference = EvidenceReference(
+        evidence_id="evidence-1", locator="artifacts/result.json", sha256="5" * 64
+    )
+
+    assert result.passed
+    assert result.failure_codes == ()
+    records = result.core_result_records(reference)
+    authorized = next(item for item in records if item.id == "authorized_paths_only_v1")
+    assert authorized.value is True
+
+
+def test_real_unauthorized_change_still_fails_authority() -> None:
+    payload = valid_result_payload()
+    payload["exit_code"] = 0
+    payload["checks"] = [
+        {"check_id": "boundary", "failure_code": "interval_boundary_v1", "passed": True}
+    ]
+    payload["changed_paths"] = ["src/intervals.py", "src/other.py"]
+    result = materialize_repair_result(payload)
+
+    assert not result.passed
+    assert result.failure_codes == ("unauthorized_path_changed_v1",)
+
+
 @pytest.mark.parametrize("mutation", ("receipt", "path", "duplicate-code", "identity"))
 def test_repair_result_rejects_contradiction_and_tamper(mutation: str) -> None:
     payload = valid_result_payload()

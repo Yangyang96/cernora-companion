@@ -746,3 +746,60 @@ The eighth-round bundle is
 Bounds are unchanged from r7. The offline evaluation's estimate stands: the
 round reaches nine evaluated Trials with roughly 30–40 % probability, and the
 inconclusive stop rule still halts the series for a user decision.
+
+## r8 live outcome: derivation dead-end, bug located and fixed (2026-09-08)
+
+Execution `59e93969…` under Plan `0d89f21e…` (request `124b9c1d…`, the 0.4.1
+identity round) published all nine Attempts — seven authoritative behavioral
+failures, one slug-collapse pass, and one filename-sort 1,800-second timeout —
+with zero incidents and zero freezes, then its ninth step failed closed at the
+outcome-derivation boundary: the ledger shows sequence 20 as a clean
+`attempt-published`, and no `outcome.json` exists.
+
+Offline replay isolated the defect exactly. The slug-collapse agent solved its
+Case cleanly (exit 0, `tests/verify.py` untouched, only `src/slug_text.py`
+authored) — but importing that module inside the Task container wrote
+`src/__pycache__/slug_text.cpython-312.pyc`, and the record comparison lists
+the artifact in `changed_paths`. Because Case authority allows only
+`src/slug_text.py`, the repair-record predicate appended
+`unauthorized_path_changed_v1`, `passed` became false, and `_derive_outcome`
+raised `ContractError` (the declared code is not among the failure codes). In
+every earlier round this artifact co-occurred with a genuinely failed check,
+and the 7c3186b membership semantics absorbed it; the r8 slug pass was the
+first "pass + bytecode cache" combination, and it fell into the contract's
+unclassified quadrant.
+
+The repair excludes one deterministic, non-agent path from authority
+predicates: any `__pycache__/*.pyc` entry. Bytecode caches are derivable from
+the imported source (Python validates cache freshness against source mtime),
+so they are not authored work and cannot alter verification behavior. The
+`changed_paths` evidence stays raw and honest; only `passed`,
+`failure_codes`, and the `authorized_paths_only_v1` core record now ignore
+bytecode artifacts. A remaining known gap is deliberately untouched: a
+hypothetical attempt that passes its declared check while genuinely changing a
+protected path (tampering with `tests/verify.py`) still dead-ends the same
+derivation boundary; classifying that quadrant needs its own user decision.
+r8's custody is left exactly as frozen evidence — nine published Attempts, no
+outcome — because its Plan binds the pre-fix wheel and the completion must
+not be cross-derived under repaired semantics.
+
+Gates: mypy, Ruff, format, evaluation tests including two new regressions
+(a passing repair with a bytecode side effect stays authorized; a real
+unauthorized change still fails), and the full suite run of record.
+
+## Ninth development pilot preparation (2026-09-08)
+
+The fixed Companion wheel stays at `0.4.1` with a new byte identity, so the
+r9 Plan is naturally distinct from r8's. The bundle is
+[`preparations/next-priority4-development-pilot-pi-r9`](../preparations/next-priority4-development-pilot-pi-r9):
+
+| Authority | Value |
+|---|---|
+| Bundle | `a088a08962fe9ab5d1694127653127e516d7c50eddcca8ee925886cd5af1ed12` |
+| Plan | `d81076facef9b1cdeed2d62c05791df39a7d7c0c196914696c560f3794d57add` |
+| Authorization request | `0ac96b0e04ce8194c799993f709e0217b50532b31e3dbe80d62525124276d122` |
+| Cernora Core wheel | `0.1.4`, SHA-256 `4ef10a5eb2f9961943883576ab81bc97ce32d2f3f8a88cb9679d5c51c81e368d` |
+| Companion wheel | `0.4.1`, SHA-256 `ed2766828e4b8c094ee1cfc1acf4269c12f35b5987fffd259bb19adbd9b82eae` (built twice byte-identical) |
+
+Bounds are unchanged from r6/r7/r8. The stop rule is standing: an
+inconclusive r9 halts for a user decision.
