@@ -909,3 +909,131 @@ recorded in the worksheet. Every step is an offline derivation — no live
 authority, custody, or provider resource was consumed, and no held-out
 material was requested or revealed. The fresh held-out commitment remains an
 un-started user decision.
+
+## Fourth decision boundary: held-out commitment options (2026-09-08)
+
+The development Candidate is frozen and independently reviewed
+(`preparations/p4-candidate-development-csv-quoted`), so the next stop before
+any `StudyIntent` is the held-out commitment line. Four decision points were
+published to the user in session on 2026-09-08; the publication prompt timed
+out unanswered after 60 s (the campaign's eighth recorded AskUserQuestion
+timeout). Per the recorded convention the options and their derivations are
+archived here without minting a decision. The user returned in the same
+session and adjudicated all four points in favor of the recorded
+recommendations ((a) on each) on 2026-09-08, confirming the spec-knob
+alignment default as well. The custodian operating brief is
+[`preparations/p4-heldout-custodian-brief/brief.md`](../preparations/p4-heldout-custodian-brief/brief.md).
+No custodian session has been engaged, no held-out material exists or was
+requested, and no live authority was consumed.
+
+### Decision point 1 — custodian
+
+The commitment must be created independently of the treatment text, and this
+session already knows those bytes, so the development session cannot author
+the held-out Cases. Options:
+
+- (a) an isolated fresh Claude Code session opened by the user in this
+  repository with no campaign context, acting under a custodian brief: author
+  the three Cases, dual-build every image no-cache to its recorded digest,
+  seal calibrations as booleans, write the material into a git-ignored
+  custody directory, and publish only an opaque commitment (Case count,
+  authority digests, calibration seals; no Case text);
+- (b) a Codex session as a structurally different model family performing the
+  same role under the same procedure;
+- (c) the user personally authoring the three Cases under the brief, with the
+  development session performing only scripted, non-reading packaging
+  (hashing, image building, commitment minting).
+
+User selection: (a), adjudicated 2026-09-08 on the recommendation. Auditable evidence in all three modes: the
+authoring session's transcript, or the user's own authorship.
+
+### Decision point 2 — held-out Case composition
+
+- (a) three novel Cases inside the delimited-text quoted-field mechanism
+  family with fresh implementations and quadrants (mid-field quotes, embedded
+  newlines or CR, trailing/empty delimiters — the exact quadrants are the
+  custodian's own choice): maximum power for the pre-registered causal
+  question, and a direct audit of the recorded mid-field-quote interpretation
+  risk;
+- (b) one deep csv Case plus two near-family generalization variants (custom
+  delimiters or escaping families): probes family generalization but dilutes
+  primary power at n = 3;
+- (c) a cross-family mix (csv plus non-scanning families): probes the
+  recorded family-unification inference at the lowest primary power, since the
+  treatment sentence is csv-conditional.
+
+User selection: (a), adjudicated 2026-09-08 on the recommendation.
+
+### Decision point 3 — study geometry
+
+- (a) twelve Cases (nine observed + three held-out) × 2 configurations × 3
+  repetitions = 72 Trials, at most 144 Attempts. The six development Cases
+  contribute in-study descriptive effect-size evidence, the three regression
+  Cases carry the ≥ −10 pp Regression-RSR guardrail live rather than by
+  extrapolation, and the held-out Cases carry the confirmatory primary.
+  Cost $0.36–0.94 (Attempts equal Trials, as in every round so far),
+  realistic wall time 4–9 h;
+- (b) a trimmed six Cases (three regression + three held-out) = 36 Trials:
+  halves the cost and fits the historical wall bound, at the price of losing
+  the in-study descriptive evidence (the frozen record keeps its nine
+  observations offline);
+- (c) six held-out Cases (nine or fifteen Cases total → 54 or 90 Trials):
+  raises the primary case-cluster count to n = 6 for a tighter bootstrap
+  interval, raising authoring, image, and live cost accordingly.
+
+User selection: (a), adjudicated 2026-09-08 on the recommendation.
+
+### Decision point 4 — budget wall bound
+
+- (a) re-derive to 160,000 s: covers the zero-retry worst case
+  (72 × 1,860 s = 133,920 s) with margin, tolerates multi-session execution
+  through the Paused/resume path (SIGINT graceful stop plus resume already
+  live-verified in the pi 12-Trial acceptance), and records the delta over the
+  historical 43,200 s bound honestly in the Intent; money ceiling stays ≤ $1;
+- (b) 72,000 s (20 h): roughly twice the realistic expectation, but a
+  concentrated provider long-mode burst (≈ 13 % of Attempts at 1,800 s) could
+  hit terminate-on-budget mid-matrix and damage confirmatory closure;
+- (c) keep the historical 43,200 s bound: feasible only jointly with the
+  trimmed geometry of point 3 (b).
+
+User selection: (a), adjudicated 2026-09-08 on the recommendation.
+
+### Spec-knob alignment (confirmed by the adjudication)
+
+The study specifications align byte-for-byte with
+the r9 development derivation: the 1,800 s Agent timeout inside its 1,860 s
+envelope, provider scope `pi-authenticated-generation-only`
+(deepseek-v4-flash from `PI_AUTH_JSON_PATH`), concurrency one, the
+byte-frozen prompt payloads (`candidate-prompt.json`), and a fresh dual-built
+Companion wheel of the 0.4.1 lineage bound into the new authority. Deviating
+knobs — a raised timeout ceiling, or a dedicated study-line version bump —
+each require an explicit user instruction recorded here first.
+
+### Custodian brief (operational; engagement pending the user)
+
+The operating brief for the adjudicated isolated-session custodian is
+`preparations/p4-heldout-custodian-brief/brief.md`; its instructions are
+invariant to the mode:
+author three fresh synthetic Python repair Cases inside the public scope
+declaration (delimited-text quoted-field domain) without consulting the
+treatment text, the development observations, or any campaign document
+revealing them; calibrate each Case so its bundled reference solution passes
+its frozen verifier; build every task image twice offline without cache and
+match digests; store all material in a git-ignored custody directory; publish
+only the opaque commitment (Case count, authority digests, and boolean
+calibration seals — no Case text and no difficulty profile); and leave the
+reveal exclusively to the study state machine's `request-reveal` boundary.
+
+### Adjudicated record and remaining stops
+
+All four decision points are minted ((a) on each): an isolated fresh Claude
+session as custodian; three same-family delimited-text quoted-field Cases;
+the twelve-Case (nine observed + three held-out) × 2 × 3 = 72-Trial geometry
+with at most 144 Attempts; and the 160,000 s re-derived wall bound with the
+Paused/resume path and a ≤ $1 money ceiling. The remaining work packages,
+each stopping for its own authority: the user engages the custodian session
+by handing it the brief; assembly of the canonical `StudyIntent` (including
+the still-pending `study-administration`: named owner, live window,
+authorization scope, and custody location) with the Candidate re-mint over
+the final Case set under the `candidate_continuity_violations` gate; and the
+separate live authorization request for the study execution itself.
