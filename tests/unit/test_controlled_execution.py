@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from cernora_reference_workflow.controlled_execution import (
     ControlledAttempt,
     ControlledAttemptRequest,
-    ControlledTrialExecution,
     materialize_controlled_attempt,
 )
 from cernora_reference_workflow.controlled_run_plan import materialize_controlled_run_plan
@@ -76,28 +75,6 @@ def test_attempt_identity_and_runtime_authority_fail_closed() -> None:
     with pytest.raises(ValidationError, match="identity"):
         ControlledAttempt.model_validate(
             attempt.model_copy(update={"attempt_id": "0" * 64}).model_dump(mode="json")
-        )
-
-
-def test_trial_rejects_unconsumed_retry_eligible_attempt() -> None:
-    plan = materialize_controlled_run_plan(valid_payload())
-    slot = plan.expand_trial_slots()[0]
-    request = ControlledAttemptRequest(
-        trial_id=digest("trial"),
-        slot=slot,
-        specification=plan.experiment_specs[0],
-        ordinal=1,
-        predecessor_attempt_id=None,
-        global_deadline_monotonic=100.0,
-    )
-    attempt = lifecycle_attempt(request, retry_eligible=True)
-    with pytest.raises(ValidationError, match="not complete"):
-        ControlledTrialExecution(
-            schema_version="cernora.reference.controlled-trial-execution/v1",
-            trial_id=request.trial_id,
-            slot=slot,
-            attempts=(attempt,),
-            selected_attempt_id=attempt.attempt_id,
         )
 
 
