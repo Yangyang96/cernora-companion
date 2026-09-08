@@ -19,7 +19,10 @@ from pydantic import JsonValue
 
 import cernora_reference_workflow.controlled_live_attempt as live_attempt_module
 from cernora_reference_workflow.common import canonical_json_bytes, sha256_bytes
-from cernora_reference_workflow.controlled_execution import ControlledAttemptRequest
+from cernora_reference_workflow.controlled_execution import (
+    ControlledActiveSafeStop,
+    ControlledAttemptRequest,
+)
 from cernora_reference_workflow.controlled_experiment_spec import (
     ControlledExperimentSpecV2,
     DatasetCaseAuthority,
@@ -47,7 +50,6 @@ from cernora_reference_workflow.controlled_profile import (
     build_controlled_profile_authority,
 )
 from cernora_reference_workflow.controlled_run_plan import ControlledTrialSlotV2
-from cernora_reference_workflow.controlled_runner import ControlledActiveSafeStop
 from cernora_reference_workflow.controlled_runtime import SubprocessResult
 from cernora_reference_workflow.controlled_task import (
     ControlledTaskAuthority,

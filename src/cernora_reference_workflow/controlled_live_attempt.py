@@ -35,16 +35,14 @@ from cernora_reference_workflow.controlled_evaluation import (
     materialize_repair_result,
 )
 from cernora_reference_workflow.controlled_execution import (
+    SAFE_STOP_FREE_BYTES,
+    ControlledActiveSafeStop,
     ControlledAttempt,
     ControlledAttemptRequest,
     materialize_controlled_attempt,
 )
 from cernora_reference_workflow.controlled_experiment_spec import ControlledExperimentSpecV2
 from cernora_reference_workflow.controlled_profile import evaluate_repair_result_package
-from cernora_reference_workflow.controlled_runner import (
-    SAFE_STOP_FREE_BYTES,
-    ControlledActiveSafeStop,
-)
 from cernora_reference_workflow.controlled_runtime import (
     RuntimeAuthorityObservation,
     SubprocessResult,

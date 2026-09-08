@@ -34,6 +34,21 @@ from cernora_reference_workflow.controlled_runtime import RuntimeAuthorityObserv
 from cernora_reference_workflow.lifecycle import TerminalRecord, TerminalState
 from cernora_reference_workflow.publication import atomic_publish_directory
 
+SAFE_STOP_FREE_BYTES = 8 * 1024**3
+
+
+class ControlledActiveSafeStop(RuntimeError):
+    """An active executor stopped safely before producing an Attempt."""
+
+    def __init__(
+        self,
+        reason: Literal["disk_safe_stop_below_8_gib", "hard_wall_deadline_elapsed"],
+    ) -> None:
+        super().__init__(reason)
+        if reason not in {"disk_safe_stop_below_8_gib", "hard_wall_deadline_elapsed"}:
+            raise ValueError("active safe-stop reason is not frozen")
+        self.reason = reason
+
 
 class ControlledAttempt(StrictV2Contract):
     """One immutable Attempt; retries remain inside its Trial."""
