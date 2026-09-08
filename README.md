@@ -48,19 +48,15 @@ Only a complete evaluated matrix publishes an Evidence Pack containing its ledge
 Execution Pack, strict Core Batch, and held-out-primary Comparison. `study rebuild` uses no Runtime
 or credentials: it rederives the Core packages and reproduces the exact closed artifact bytes.
 See `docs/controlled-study.md` for the state, custody, and authority contracts.
-Before any authenticated study, complete `docs/live-controlled-study-dossier.md`; it freezes the
-human review record and live authorization boundary but never replaces the canonical Study
-authorities or grants permission to execute.
+Live execution still requires the caller's explicit authority and the exact canonical Study
+acceptance. The historical dossiers record the completed experiment; they do not grant new
+execution authority or add an onboarding checklist.
 
-The checked-in `preparations/next-priority4-controlled-study` bundle is the machine-verifiable
-starting point for that review. It binds the current offline Core and Companion wheel candidates
-and carries an explicitly non-binding recommendation for a confirmatory held-out analysis and
-9 × 2 × 3 bounds. The study mode, scientific question, fresh Candidate, independent reviewer,
-fresh held-out custodian/commitment, remaining implementation lock, and administrative fields all
-remain caller-owned and pending. It contains no `StudyIntent`, reveal, acceptance, execution
-nonce, RunPlan, ComparisonPlan, or execution directive. Use
-`scripts/create_study_preparation_bundle.py verify` to strictly reload it against the exact wheel
-bytes; this maintenance script is not a fourth `experiment study` operation.
+The checked-in preparation bundles and live study dossiers are historical records of the
+completed P4 experiment. Their retired preparation and M4 final-plan commands require the
+archived pre-cleanup revision. Current study authority is supplied through `StudyIntent`;
+the old worksheet generator is no longer an additional starting requirement. See
+[the second cleanup record](docs/p4-second-cleanup.md) for retained interfaces and migration.
 
 The standalone `verify`, `run`, `resume`, `rebuild`, `summarize`, and `compare` commands below are
 retained only to read or reproduce historical M1–M3 artifacts. They are not the supported path for
@@ -237,7 +233,7 @@ After the successful v1 export exists, derive the labeled fail-closed matrix fro
 frozen source. The output directory must not already exist and remains private under `exports/`:
 
 ```sh
-uv run python scripts/generate_derived_matrix.py \
+uv run python -m scripts.generate_derived_matrix \
   --spec examples/tiny-calculator-v1.json \
   --export exports/<successful-export> \
   --output exports/<successful-export>-derived-matrix

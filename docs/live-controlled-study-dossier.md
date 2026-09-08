@@ -1,5 +1,8 @@
 # Live Controlled Study Dossier
 
+> Historical P4 research record. Retired commands require the archived pre-cleanup revision;
+> see [current cleanup boundaries](p4-second-cleanup.md). This is not a new setup checklist.
+
 Status: **template only — no live study is authorized**
 
 This document is the mandatory pre-execution dossier for the next authenticated Priority 4

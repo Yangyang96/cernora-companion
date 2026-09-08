@@ -111,3 +111,12 @@ Windows, Intel macOS, remote Docker, Kubernetes, hosted live execution, arbitrar
 connectors, automatic Profile discovery, telemetry that cannot be disabled, and broad sandboxing
 claims are outside Priority 3. The workflow must remain private until every release gate is
 accepted.
+
+## Local post-study cleanup
+
+The unpublished P4 working tree retires its old Pilot, worksheet preparation, M4 final-plan
+producer, and parallel execution-result types. Historical reproduction uses the archived exact
+0.4.2 wheel and pre-cleanup source; the display version alone is insufficient. Current Attempt,
+Execution Pack, Study and Core Batch/Comparison bytes are unchanged. Adversarial fixture
+generators now live under `tests/support` and require a source checkout. See
+[the second cleanup record](p4-second-cleanup.md) for the precise boundary.

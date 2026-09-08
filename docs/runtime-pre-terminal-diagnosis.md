@@ -1,5 +1,8 @@
 # Priority 4 Runtime Pre-terminal Diagnosis
 
+> Historical P4 research record. Retired commands require the archived pre-cleanup revision;
+> see [current cleanup boundaries](p4-second-cleanup.md). This is not a new setup checklist.
+
 Status: **root cause located and repaired — the operator proxy environment never reached the
 agent container; the repaired chain produced the first live Agent behavioral failure in an
 out-of-band probe; the fresh one-shot confirmation awaits exact user authorization**

@@ -1,5 +1,8 @@
 # Next Priority 4 Study Decision Proposal
 
+> Historical P4 research record. Retired commands require the archived pre-cleanup revision;
+> see [current cleanup boundaries](p4-second-cleanup.md). This is not a new setup checklist.
+
 Status: **`confirmatory-effect` selected; systemic runtime publication root cause repaired
 offline; live confirmation requires fresh authorization**
 

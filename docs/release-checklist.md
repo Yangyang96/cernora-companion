@@ -200,7 +200,7 @@ Each command uses a unique job name and may not replace an existing attempt or e
 After the successful export is frozen, generate its private deterministic failure matrix:
 
 ```sh
-uv run python scripts/generate_derived_matrix.py \
+uv run python -m scripts.generate_derived_matrix \
   --spec examples/tiny-calculator-v1.json \
   --export exports/<successful-export> \
   --output exports/<successful-export>-derived-matrix

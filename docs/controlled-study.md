@@ -50,22 +50,13 @@ M1–M3 artifacts. New controlled work must not compose those commands into a pa
 3. The prepared state and its ledger root bind the Intent and Protocol before any reveal,
    acceptance, credential use, or Runtime action.
 
-### Pre-authority preparation bundle
+### Historical preparation bundles
 
-When required scientific or custody decisions are not yet available, do not manufacture a
-placeholder `StudyIntent`. The non-authoritative
-[`next Priority 4 preparation bundle`](../preparations/next-priority4-controlled-study/manifest.json)
-provides a strict earlier stop. Its manifest content-identifies the exact Core and Companion wheel
-candidates, review worksheet, every pending user or custodian decision, and an explicitly
-non-binding `confirmatory-effect` design and analysis proposal. The proposal does not pre-empt the
-caller's study-mode or scientific choices. Structural inspection rejects an unknown or changed
-file; strict verification additionally requires and checks both exact wheel artifacts.
-
-The preparation bundle is not a Study state and adds no orchestration transition. It contains no
-`StudyIntent`, `StudyProtocol`, held-out reveal, acceptance, execution nonce,
-`ControlledRunPlanV2`, `ComparisonPlanV1`, or advance directive. Only after a new Candidate record
-and independently created held-out commitment exist may an operator assemble the canonical
-`StudyIntent` and enter the existing `prepare` seam.
+The preparation bundles under `preparations/` preserve the completed P4 review history.
+Their producer and verifier have been retired from the current package; use the exact archived
+revision when inspecting those historical tools. New callers supply the existing `StudyIntent`
+contract directly. This removes the worksheet workflow without weakening frozen authority,
+held-out separation, implementation identity, or acceptance checks.
 
 `ImplementationLock` identifies exact bytes, not display versions, for Companion, Cernora,
 Runtime adapter, Harness, and analysis policy. Any changed artifact digest creates a different
