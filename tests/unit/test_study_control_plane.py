@@ -40,8 +40,8 @@ from cernora_reference_workflow.study_projection import (
     case_authority_sha256,
     configuration_authority_sha256,
 )
+from tests.support.study_cases import _all_task_authorities, _final_plan, _manifest
 from tests.unit.test_controlled_study import implementation_payload
-from tests.unit.test_improvement_loop import _all_task_authorities, _final_plan, _manifest
 from tests.unit.test_study_execution import (
     FakeEvaluatedMatrixAdapter,
     FakeStudyAttemptAdapter,

@@ -1,4 +1,4 @@
-"""Build the exact authority-bound M4 RunPlan and ComparisonPlan."""
+"""Build authority-bound controlled specifications and task image identities."""
 
 from __future__ import annotations
 
@@ -17,11 +17,6 @@ from cernora_reference_workflow.common import (
     read_regular_file_bytes,
     sha256_bytes,
     validate_sha256,
-)
-from cernora_reference_workflow.comparison_plan import (
-    ComparisonPlanV1,
-    materialize_comparison_plan,
-    materialize_treatment_declaration,
 )
 from cernora_reference_workflow.controlled_experiment_spec import (
     ACCEPTED_CORE_0_1_4_WHEEL_SHA256,
@@ -47,12 +42,7 @@ from cernora_reference_workflow.controlled_profile import (
     SCORER_VERSION,
     build_controlled_profile_authority,
 )
-from cernora_reference_workflow.controlled_run_plan import (
-    ControlledRunPlanV2,
-    materialize_controlled_run_plan,
-)
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority
-from cernora_reference_workflow.improvement_loop import CandidateFreeze
 from cernora_reference_workflow.runtime_policy import (
     PI_RUNTIME_ENVIRONMENT,
     PI_RUNTIME_INSTALLATION,
@@ -61,8 +51,6 @@ from cernora_reference_workflow.runtime_policy import (
     RUNTIME_POLICY,
 )
 
-_BASELINE_CONFIGURATION = "baseline"
-_CANDIDATE_CONFIGURATION = "candidate"
 _PLATFORM = "linux/arm64"
 _MODEL = "deepseek/deepseek-v4-flash"
 _REASONING_EFFORT = "medium"
@@ -448,181 +436,3 @@ def build_controlled_specifications(
         for task in ordered_tasks
         for configuration_id, prompt in configurations
     )
-
-
-def build_m4_final_plans(
-    *,
-    tasks: tuple[ControlledTaskAuthority, ...],
-    freeze: CandidateFreeze,
-    image_authorities: M4ImageAuthoritySet,
-) -> tuple[ControlledRunPlanV2, ComparisonPlanV1]:
-    """Construct the frozen 9x2x3 declaration without consulting test helpers."""
-
-    ordered_tasks = tuple(sorted(tasks, key=lambda item: item.case.case_id))
-    case_ids = tuple(item.case.case_id for item in ordered_tasks)
-    split_map = {item.case.case_id: item.split_id for item in ordered_tasks}
-    if len(ordered_tasks) != 9 or len(set(case_ids)) != 9:
-        raise ContractError("M4 final Plan requires exactly nine unique task authorities")
-    split_cases = {
-        split_id: tuple(sorted(case for case, split in split_map.items() if split == split_id))
-        for split_id in set(split_map.values())
-    }
-    if (
-        set(split_cases) != {"development", "regression", "held-out"}
-        or any(len(items) != 3 for items in split_cases.values())
-        or split_cases["development"] != freeze.pilot.development_case_ids
-    ):
-        raise ContractError("M4 final Plan requires exact 3/3/3 authoritative splits")
-    image_by_case = {item.case_id: item.image for item in image_authorities.images}
-    if set(image_by_case) != set(case_ids):
-        raise ContractError("M4 image authorities do not exhaust the task authorities")
-
-    specs = build_controlled_specifications(
-        tasks=ordered_tasks,
-        images=image_by_case,
-        build_base_image=image_authorities.build_base_image,
-        configurations=(
-            (_BASELINE_CONFIGURATION, freeze.baseline_prompt_authority),
-            (_CANDIDATE_CONFIGURATION, freeze.candidate_prompt_authority),
-        ),
-        bootstrap=BootstrapPlan(
-            method="case-clustered-paired-bootstrap/v1",
-            confidence_basis_points=9500,
-            resamples=10000,
-            percentile="nearest_rank_closed",
-            seed_source="comparison_input_sha256",
-        ),
-        pass_k=PassKPlan(k=3, independent_trials=True),
-    )
-    statistics = specs[0].statistical_policy
-    plan = materialize_controlled_run_plan(
-        {
-            "schema_version": "cernora.reference.controlled-run-plan/v2",
-            "companion_version": "0.4.0",
-            "cernora_version": "0.1.4",
-            "connector": {
-                "connector_id": "cernora-reference-harbor-pi",
-                "connector_version": "2",
-                "platform_qualification": "macos-arm64",
-            },
-            "experiment_specs": [item.model_dump(mode="json") for item in specs],
-            "cases": [
-                {
-                    "case_id": task.case.case_id,
-                    "case_version": task.case.case_version,
-                    "task_content_sha256": task.case_sha256,
-                }
-                for task in ordered_tasks
-            ],
-            "configurations": [
-                {"configuration_id": _BASELINE_CONFIGURATION},
-                {"configuration_id": _CANDIDATE_CONFIGURATION},
-            ],
-            "cells": [
-                {
-                    "case_id": item.task.task_id,
-                    "configuration_id": item.configuration_id,
-                    "experiment_id": item.experiment_id,
-                }
-                for item in specs
-            ],
-            "repetitions": 3,
-            "pairing_rule": "case-configuration-repetition",
-            "planned_trial_count": 54,
-            "worst_case_attempt_count": 108,
-            "execution": {
-                "concurrency": 1,
-                "max_attempt_count": 108,
-                "max_total_wall_time_seconds": 43200,
-                "token_budget": {
-                    "status": "unavailable",
-                    "reason": "no-structured-authoritative-source",
-                },
-                "monetary_budget": {
-                    "status": "unavailable",
-                    "reason": "no-structured-authoritative-source",
-                },
-            },
-            "analysis": {
-                "method": "controlled-comparison",
-                "method_version": "m4",
-                "aggregate_quality_conclusion": False,
-            },
-        }
-    )
-    comparison = materialize_comparison_plan(
-        {
-            "schema_version": "cernora.reference.comparison-plan/v1",
-            "source_run_plan_id": plan.run_plan_id,
-            "baseline_configuration_id": _BASELINE_CONFIGURATION,
-            "candidate_configuration_id": _CANDIDATE_CONFIGURATION,
-            "case_splits": [
-                {"case_id": case.case_id, "split_id": split_map[case.case_id]}
-                for case in plan.cases
-            ],
-            "treatment": materialize_treatment_declaration(("prompt_instruction",)).model_dump(
-                mode="json"
-            ),
-            "primary_outcome": {
-                "metric": "reliable_success_rate",
-                "scope": "split",
-                "split_id": "held-out",
-                "direction": "higher_is_better",
-                "practical_threshold_basis_points": 1000,
-            },
-            "guardrails": [
-                {
-                    "guardrail_id": "evaluation-validity",
-                    "hard": True,
-                    "metric": "evaluation_validity_rate",
-                    "scope": "all",
-                    "split_id": None,
-                    "direction": "higher_is_better",
-                    "max_adverse_basis_points": 0,
-                    "profile_id": None,
-                    "profile_version": None,
-                    "failure_code": None,
-                },
-                {
-                    "guardrail_id": "protected-paths",
-                    "hard": True,
-                    "metric": "profile_failure_code_rate",
-                    "scope": "all",
-                    "split_id": None,
-                    "direction": "lower_is_better",
-                    "max_adverse_basis_points": 0,
-                    "profile_id": PROFILE_ID,
-                    "profile_version": PROFILE_VERSION,
-                    "failure_code": "protected_paths_unchanged_v1",
-                },
-                {
-                    "guardrail_id": "regression-rsr",
-                    "hard": True,
-                    "metric": "reliable_success_rate",
-                    "scope": "split",
-                    "split_id": "regression",
-                    "direction": "higher_is_better",
-                    "max_adverse_basis_points": 1000,
-                    "profile_id": None,
-                    "profile_version": None,
-                    "failure_code": None,
-                },
-            ],
-            "bootstrap": statistics.bootstrap.model_dump(mode="json"),
-            "pass_k": statistics.pass_k.model_dump(mode="json") if statistics.pass_k else None,
-            "statistical_policy": statistics.model_dump(mode="json"),
-        }
-    )
-    comparison.validate_run_plan(plan)
-    if len({item.trial_slot_id for item in plan.expand_trial_slots()}) != 54:
-        raise ContractError("M4 final Plan does not expand to 54 unique Trial slots")
-    return plan, comparison
-
-
-__all__ = [
-    "M4ImageAuthoritySet",
-    "M4TaskImageAuthority",
-    "build_controlled_specifications",
-    "build_m4_final_plans",
-    "materialize_m4_image_authority_set",
-]

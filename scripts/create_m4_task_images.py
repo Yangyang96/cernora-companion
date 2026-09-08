@@ -21,8 +21,8 @@ from cernora_reference_workflow.common import (
     read_regular_file_bytes,
     sha256_bytes,
 )
+from cernora_reference_workflow.controlled_spec_builder import materialize_m4_image_authority_set
 from cernora_reference_workflow.controlled_task import ControlledTaskAuthority, load_visible_task
-from cernora_reference_workflow.m4_final_plan import materialize_m4_image_authority_set
 from cernora_reference_workflow.spec_builder import BASE_IMAGE
 
 _PLATFORM = "linux/arm64"

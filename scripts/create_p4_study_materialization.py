@@ -55,6 +55,9 @@ from cernora_reference_workflow.controlled_run_plan import (
     ControlledRunPlanV2,
     materialize_controlled_run_plan,
 )
+from cernora_reference_workflow.controlled_spec_builder import (
+    build_controlled_specifications,
+)
 from cernora_reference_workflow.controlled_study import (
     StudyIntent,
     StudyProtocol,
@@ -78,9 +81,6 @@ from cernora_reference_workflow.controlled_task import (
 from cernora_reference_workflow.heldout_seal import (
     HeldoutManifest,
     HeldoutSealError,
-)
-from cernora_reference_workflow.m4_final_plan import (
-    build_controlled_specifications,
 )
 from cernora_reference_workflow.runtime_policy import (
     PI_VERSION,

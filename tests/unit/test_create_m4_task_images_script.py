@@ -42,10 +42,6 @@ class _Script(Protocol):
     ) -> None: ...
 
 
-class _PlanScript(Protocol):
-    def _heldout_task_paths(self, root: Path) -> tuple[Path, ...]: ...
-
-
 def _script() -> tuple[_Script, ModuleType]:
     path = Path(__file__).resolve().parents[2] / "scripts/create_m4_task_images.py"
     specification = importlib.util.spec_from_file_location("create_m4_task_images", path)
@@ -54,16 +50,6 @@ def _script() -> tuple[_Script, ModuleType]:
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return cast(_Script, module), module
-
-
-def _plan_script() -> _PlanScript:
-    path = Path(__file__).resolve().parents[2] / "scripts/create_m4_final_plans.py"
-    specification = importlib.util.spec_from_file_location("create_m4_final_plans", path)
-    if specification is None or specification.loader is None:
-        raise AssertionError("could not load M4 final-plan script")
-    module = importlib.util.module_from_spec(specification)
-    specification.loader.exec_module(module)
-    return cast(_PlanScript, module)
 
 
 def test_image_context_contains_only_authorized_workspace(tmp_path: Path) -> None:
@@ -146,7 +132,7 @@ def test_image_outputs_detect_any_git_worktree(tmp_path: Path) -> None:
 def test_image_task_loader_requires_exact_authoritative_splits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from tests.unit.test_improvement_loop import VISIBLE_ROOT, _all_task_authorities, _manifest
+    from tests.support.study_cases import VISIBLE_ROOT, _all_task_authorities, _manifest
 
     script, _ = _script()
     heldout = tuple(
@@ -188,7 +174,7 @@ def test_image_task_loader_requires_exact_authoritative_splits(
 
 
 def test_heldout_task_root_is_a_closed_three_file_tree(tmp_path: Path) -> None:
-    from tests.unit.test_improvement_loop import _all_task_authorities, _manifest
+    from tests.support.study_cases import _all_task_authorities, _manifest
 
     script, _ = _script()
     root = tmp_path / "heldout"
@@ -200,9 +186,6 @@ def test_heldout_task_root_is_a_closed_three_file_tree(tmp_path: Path) -> None:
         (root / f"task-{index}.json").write_bytes(task.canonical_bytes())
 
     assert len(script._heldout_task_paths(root)) == 3
-    assert len(_plan_script()._heldout_task_paths(root)) == 3
     (root / "extra").mkdir()
     with pytest.raises(ContractError, match="exactly three"):
         script._heldout_task_paths(root)
-    with pytest.raises(ContractError, match="exactly three"):
-        _plan_script()._heldout_task_paths(root)

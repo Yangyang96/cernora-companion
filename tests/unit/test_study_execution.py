@@ -40,15 +40,15 @@ from cernora_reference_workflow.execution import (
     verify_execution_pack,
 )
 from cernora_reference_workflow.runner import _AttemptRequest, advance_repeat
-from tests.unit.test_controlled_execution import lifecycle_attempt
-from tests.unit.test_controlled_live_attempt import _spec
-from tests.unit.test_controlled_run_plan import valid_payload as valid_run_plan_payload
-from tests.unit.test_improvement_loop import (
+from tests.support.study_cases import (
     _all_task_authorities,
     _comparison,
     _final_plan,
     _manifest,
 )
+from tests.unit.test_controlled_execution import lifecycle_attempt
+from tests.unit.test_controlled_live_attempt import _spec
+from tests.unit.test_controlled_run_plan import valid_payload as valid_run_plan_payload
 from tests.unit.test_study_projection import study_payload_for_m4
 
 
