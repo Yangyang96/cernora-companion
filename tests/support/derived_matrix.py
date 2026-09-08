@@ -17,12 +17,6 @@ from cernora_reference_workflow.common import (
     sha256_file,
     validate_relative_path,
 )
-from cernora_reference_workflow.derived_fixtures import (
-    MutationName,
-    derive_invalid_fixture,
-    plant_fake_secret_and_require_rejection,
-    verify_derived_fixture,
-)
 from cernora_reference_workflow.experiment_spec import (
     Digest,
     ExperimentSpec,
@@ -33,6 +27,12 @@ from cernora_reference_workflow.export import verify_completed_export
 from cernora_reference_workflow.offline import verify_workflow_binding
 from cernora_reference_workflow.publication import atomic_publish_directory
 from cernora_reference_workflow.secrets import SecretScanError, require_secret_free
+from tests.support.derived_fixtures import (
+    MutationName,
+    derive_invalid_fixture,
+    plant_fake_secret_and_require_rejection,
+    verify_derived_fixture,
+)
 
 MUTATIONS: tuple[MutationName, ...] = (
     "missing-required-artifact",

@@ -6,8 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
-from cernora_reference_workflow.derived_matrix import generate_derived_matrix
 from cernora_reference_workflow.experiment_spec import ExperimentSpec
+from tests.support.derived_matrix import generate_derived_matrix
 
 
 def main() -> int:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cernora_reference_workflow.derived_matrix import (
+from tests.support.derived_matrix import (
     DerivedMatrixError,
     generate_derived_matrix,
     verify_derived_matrix,
