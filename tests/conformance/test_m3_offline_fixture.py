@@ -45,3 +45,24 @@ def test_m3_offline_fixture_is_frozen_codex_era_evidence() -> None:
         spec["cernora"]["wheel_sha256"] == _FROZEN_M3_CORE_WHEEL_SHA256
         for spec in frozen_plan["experiment_specs"]
     )
+
+
+def test_current_offline_fixture_binds_the_current_strict_contracts() -> None:
+    from cernora_reference_workflow.comparison_plan import materialize_comparison_plan
+    from cernora_reference_workflow.controlled_run_plan import materialize_controlled_run_plan
+    from tests.unit.test_comparison_input import _lifecycle_batch
+    from tests.unit.test_comparison_plan import valid_payload as comparison_payload
+    from tests.unit.test_controlled_run_plan import valid_payload as run_payload
+
+    fixture = ROOT / "examples/p4-offline"
+    plan = ControlledRunPlanV2.from_file(fixture / "controlled-run-plan.json")
+    comparison = ComparisonPlanV1.from_file(fixture / "comparison-plan.json")
+    batch_bytes = (fixture / "batch-input.json").read_bytes()
+    batch = BatchInput.model_validate_json(batch_bytes)
+    comparison.validate_run_plan(plan)
+    assert batch.run_plan_id == comparison.source_run_plan_id == plan.run_plan_id
+    assert plan == materialize_controlled_run_plan(run_payload())
+    assert comparison == materialize_comparison_plan(comparison_payload(plan))
+    assert batch == _lifecycle_batch(plan)
+    assert batch_bytes == canonical_json_bytes(batch.model_dump(mode="json"))
+    assert all(trial.attempts[0].lifecycle is not None for trial in batch.trials)

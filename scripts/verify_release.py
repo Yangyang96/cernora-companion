@@ -94,9 +94,9 @@ def _verify_m4_release_surface() -> None:
         ROOT / "docs/controlled-comparison.md",
         ROOT / "docs/controlled-study.md",
         ROOT / "docs/repeat-runner.md",
-        ROOT / "examples/m3-offline/batch-input.json",
-        ROOT / "examples/m3-offline/comparison-plan.json",
-        ROOT / "examples/m3-offline/controlled-run-plan.json",
+        ROOT / "examples/p4-offline/batch-input.json",
+        ROOT / "examples/p4-offline/comparison-plan.json",
+        ROOT / "examples/p4-offline/controlled-run-plan.json",
         ROOT / "schemas/comparison-plan-v1.schema.json",
         ROOT / "schemas/controlled-experiment-spec-v2.schema.json",
         ROOT / "schemas/controlled-run-plan-v2.schema.json",
@@ -201,7 +201,7 @@ def _verify_generated_artifacts() -> None:
     for name, model in schema_models.items():
         if (ROOT / "schemas" / name).read_bytes() != schema_bytes(name, model):
             raise RuntimeError(f"checked-in JSON Schema is stale: {name}")
-    fixture = ROOT / "examples/m3-offline"
+    fixture = ROOT / "examples/p4-offline"
     run_plan = ControlledRunPlanV2.from_file(fixture / "controlled-run-plan.json")
     comparison_plan = ComparisonPlanV1.from_file(fixture / "comparison-plan.json")
     comparison_plan.validate_run_plan(run_plan)

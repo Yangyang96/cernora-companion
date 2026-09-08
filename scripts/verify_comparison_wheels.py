@@ -199,7 +199,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--core-wheel", type=Path, required=True)
     parser.add_argument("--companion-wheel", type=Path, required=True)
-    parser.add_argument("--fixture", type=Path, default=ROOT / "examples/m3-offline")
+    parser.add_argument("--fixture", type=Path, default=ROOT / "examples/p4-offline")
     parser.add_argument(
         "--python", action="append", choices=("3.12", "3.13"), dest="python_versions"
     )
