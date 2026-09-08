@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 
@@ -17,6 +17,9 @@ from cernora_reference_workflow.candidate_development import (
 from cernora_reference_workflow.common import canonical_json_bytes, sha256_bytes
 from cernora_reference_workflow.controlled_study import AwaitingAcceptanceOutcome
 from cernora_reference_workflow.heldout_seal import seal_heldout_cases
+
+if TYPE_CHECKING:
+    from create_p4_study_materialization import P4StudyAssembly
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 VISIBLE_ROOT = REPOSITORY / "examples" / "priority4-development-pilot"
@@ -32,9 +35,9 @@ NONCE = bytes(range(12))
 
 
 class _MaterializationScript(Protocol):
-    def assemble_p4_study(self, **kwargs: object) -> object: ...
+    def assemble_p4_study(self, **kwargs: object) -> P4StudyAssembly: ...
 
-    def run_study_ceremony(self, assembly: object, study_root: Path) -> object: ...
+    def run_study_ceremony(self, assembly: P4StudyAssembly, study_root: Path) -> object: ...
 
 
 def _load_script() -> _MaterializationScript:
@@ -44,7 +47,7 @@ def _load_script() -> _MaterializationScript:
     module: ModuleType = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    return module  # type: ignore[return-value]
+    return cast(_MaterializationScript, module)
 
 
 class _RevealScript(Protocol):
@@ -58,7 +61,7 @@ def _load_reveal_script() -> _RevealScript:
     module: ModuleType = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    return module  # type: ignore[return-value]
+    return cast(_RevealScript, module)
 
 
 def _fake_heldout_cases() -> tuple[dict[str, object], ...]:
@@ -184,7 +187,9 @@ def _fake_lock_artifacts() -> dict[str, dict[str, object]]:
     }
 
 
-def _assemble(script: _MaterializationScript, reveal_root: Path, manifest_path: Path) -> object:
+def _assemble(
+    script: _MaterializationScript, reveal_root: Path, manifest_path: Path
+) -> P4StudyAssembly:
     artifacts = _fake_lock_artifacts()
     return script.assemble_p4_study(
         visible_root=VISIBLE_ROOT,

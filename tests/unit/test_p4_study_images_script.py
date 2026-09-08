@@ -4,7 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol
+from typing import Protocol, cast
 
 import pytest
 
@@ -42,7 +42,7 @@ def _load_script() -> _ImagesScript:
         spec.loader.exec_module(module)
     finally:
         sys.path.remove(scripts_directory)
-    return module  # type: ignore[return-value]
+    return cast(_ImagesScript, module)
 
 
 def test_load_pilot_images_reads_the_frozen_r9_set() -> None:
@@ -69,9 +69,7 @@ def _fake_reveal_layout(revealed_root: Path) -> None:
     from tests.unit.test_p4_heldout_reveal_script import _fake_cases
 
     for case in _fake_cases():
-        authority = task_from_revealed_case(
-            HeldoutArchiveCase.model_validate(case)  # type: ignore[arg-type]
-        )
+        authority = task_from_revealed_case(HeldoutArchiveCase.model_validate(case))
         case_id = authority.case.case_id
         (revealed_root / f"{case_id}.json").write_bytes(authority.canonical_bytes())
     (revealed_root / "reveal-receipt.json").write_bytes(b"receipt-placeholder")
