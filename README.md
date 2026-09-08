@@ -1,5 +1,8 @@
 # Cernora Reference Workflow
 
+See [P4 result preservation and first cleanup](docs/p4-first-cleanup.md) for the completed
+72-Trial result, retired research tools, and historical reproduction boundary.
+
 This private-by-default companion repository implements the Cernora Priority 3 reference
 coding-Agent workflow and the Priority 4 Companion Repeat Runner. Version `0.2.0` runs the exact
 approved Harbor and pi versions locally, freezes closed Attempt exports, and performs its

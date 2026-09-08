@@ -21,10 +21,11 @@ inspection. They are not promoted as independent orchestration APIs. Cernora Cor
 Runtime-neutral and continues to own Batch and Comparison semantics. Companion owns scheduling,
 Runtime adaptation, custody, recovery, and Core input assembly.
 
-The current `controlled_runner`, `controlled_execution_store`, and related live-attempt modules
-are migration sources. Their verified receipt handling and failure classifiers may be reused,
-but their parallel state model is not a second supported foundation and must not acquire new
-public behavior.
+The former `controlled_runner`, `controlled_execution_store`, and
+`controlled_batch_summary` migration implementations have been retired. The shared Attempt
+contracts and active-executor safe-stop semantics remain in `controlled_execution`; the current
+`controlled_live_attempt` adapter is retained. Historical Pilot and M4 reproduction uses the
+pinned pre-cleanup source and wheels described in [the cleanup record](p4-first-cleanup.md).
 
 The CLI mirrors that boundary under one command group:
 
