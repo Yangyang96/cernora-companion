@@ -181,10 +181,12 @@ wheel-only acceptance.
 The accepted M2 `scripts/verify_batch_wheels.py` gate and retained Pack remain historical evidence
 for the 0.1.3/0.2.1 pair. M3 does not reinterpret or rerun that acceptance as a 0.1.4/0.3.0 claim.
 
-The historical `scripts/verify_public_wheel.py` and checked-in remote workflow remain the accepted
-`v0.2.0` checks for the public Core `0.1.2` boundary; they are not M3 candidate gates. Remote M3 CI
-activation is deferred until a separately authorized publication step makes Core `0.1.4`
-available without weakening the wheel-only boundary.
+The remote workflow builds Core from the fixed accepted source revision and rejects any wheel
+whose SHA-256 differs from the historical 0.1.4 candidate. It then builds the current Companion
+wheel, runs `scripts/verify_comparison_wheels.py` for each supported Python minor, and runs the
+complete offline source gate. The sibling wheelhouse remains temporary CI state; neither Core
+nor Companion wheels are published by this workflow. `scripts/verify_public_wheel.py` remains
+a historical `v0.2.0` / public Core `0.1.2` check and is not invoked by current CI.
 
 The authenticated tracer remains a separate manual command and is not part of CI:
 

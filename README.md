@@ -162,15 +162,18 @@ uv run mypy
 uv run python scripts/verify_release.py
 uv run python scripts/verify_comparison_wheels.py \
   --core-wheel ../cernora/dist/cernora-0.1.4-py3-none-any.whl \
-  --companion-wheel /absolute/path/to/cernora_reference_workflow-0.4.0-py3-none-any.whl
+  --companion-wheel /absolute/path/to/cernora_reference_workflow-0.4.2-py3-none-any.whl
 ```
 
-The public-wheel verifier and current checked-in workflow remain historical Priority 3/M1
-`cernora==0.1.2` gates at tag `v0.2.0`; they are not M3 release signals. The historical M2 Batch
-wheel verifier remains available for its accepted 0.1.3/0.2.1 pair. M3 installs the separately
-built Core `0.1.4` and Companion `0.4.0` wheels without treating either as public. Local offline
-gates contain no credentials and never invoke the live tracer. Live authenticated execution is a
-separate manual command:
+CI checks out Core revision `7b46258457142cfd32bc8c7ea46bc21740b475de`, builds its wheel
+into the sibling wheelhouse and verifies the accepted SHA-256 before installing dependencies.
+It builds the current Companion wheel and runs the existing offline comparison wheel gate on
+both supported Python minors using `examples/p4-offline`, followed by the full source quality
+gate. The synthetic fixture checks inconclusive lifecycle outcomes; the historical M3 fixture
+remains unchanged. This makes CI independent
+of an operator's local files without changing historical ImplementationLock bytes or publishing
+a package. The historical public-wheel and M2 verifiers remain available for their original
+version pairs. Live authenticated execution remains a separate manual command:
 
 ```sh
 PI_AUTH_JSON_PATH=/absolute/path/to/pi-auth.json \
