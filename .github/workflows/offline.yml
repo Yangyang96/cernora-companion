@@ -48,6 +48,10 @@ jobs:
         run: |
           uv build --wheel --offline --out-dir dist
           uv venv --seed --python ${{ matrix.python-version }} "${RUNNER_TEMP}/wheel-seed"
+          uv export --frozen --no-dev --no-emit-project --no-emit-package cernora \
+            --output-file "${RUNNER_TEMP}/wheel-requirements.txt" > /dev/null
+          uv pip install --python "${RUNNER_TEMP}/wheel-seed/bin/python" \
+            --require-hashes --requirement "${RUNNER_TEMP}/wheel-requirements.txt"
       - name: Verify accepted wheels offline
         run: >-
           uv run python scripts/verify_comparison_wheels.py
