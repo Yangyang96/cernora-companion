@@ -8,6 +8,7 @@ from cernora_reference_workflow.secrets import (
     PROHIBITED_BASENAMES,
     SecretScanError,
     require_secret_free,
+    scan_bytes,
     scan_tree,
 )
 
@@ -66,3 +67,14 @@ def test_credential_configuration_paths_are_rejected(tmp_path: Path, relative: s
     assert [(item.path, item.kind) for item in scan_tree(tmp_path)] == [
         (relative, "prohibited-filename")
     ]
+
+
+def test_task_diagnostic_is_not_an_api_key() -> None:
+    assert scan_bytes("diagnostic.txt", b"task-checksum-unavailable") == ()
+
+
+@pytest.mark.parametrize("prefix", (b"", b"Bearer ", b'"api_key":"', b"key="))
+@pytest.mark.parametrize("kind", (b"sk-", b"sk-proj-"))
+def test_api_key_boundaries_still_reject_credentials(prefix: bytes, kind: bytes) -> None:
+    payload = prefix + kind + b"A" * 32
+    assert [item.kind for item in scan_bytes("diagnostic.txt", payload)] == ["openai-api-key"]

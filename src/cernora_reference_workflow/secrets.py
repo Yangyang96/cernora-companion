@@ -25,7 +25,7 @@ PROHIBITED_BASENAMES = frozenset(
     }
 )
 PATTERNS = (
-    ("openai-api-key", re.compile(rb"sk-(?:proj-)?[A-Za-z0-9_-]{20,}")),
+    ("openai-api-key", re.compile(rb"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}")),
     ("github-token", re.compile(rb"gh[opusr]_[A-Za-z0-9]{20,}")),
     ("gitlab-token", re.compile(rb"glpat-[A-Za-z0-9_-]{20,}")),
     ("npm-token", re.compile(rb"\bnpm_[A-Za-z0-9]{32,}\b")),
