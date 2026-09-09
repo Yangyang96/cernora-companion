@@ -106,26 +106,37 @@ def _load_seal_script() -> tuple[_SealScript, ModuleType]:
     return cast(_SealScript, module), module
 
 
-def _representative_worktrees() -> tuple[Path, ...]:
-    current = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
-        ["git", "worktree", "list", "--porcelain"],
-        cwd=current,
+def _representative_worktrees(tmp_path: Path) -> tuple[Path, ...]:
+    main = tmp_path / "main"
+    linked = tmp_path / "linked"
+    subprocess.run(["git", "init", str(main)], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "test fixture",
+        ],
+        cwd=main,
         check=True,
         capture_output=True,
-        text=True,
     )
-    worktrees = tuple(
-        Path(line.removeprefix("worktree ")).resolve()
-        for line in result.stdout.splitlines()
-        if line.startswith("worktree ")
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(linked)],
+        cwd=main,
+        check=True,
+        capture_output=True,
     )
-    existing = tuple(path for path in worktrees if path.is_dir())
-    main = next(path for path in existing if (path / ".git").is_dir())
-    linked = tuple(path for path in existing if path != main)
-    assert current in linked
-    assert len({main, *linked}) >= 2
-    return (main, *linked)
+    assert (main / ".git").is_dir()
+    assert (linked / ".git").is_file()
+    return main, linked
 
 
 def test_seal_and_reveal_are_canonical_and_deterministic() -> None:
@@ -328,7 +339,7 @@ def test_seal_script_rejects_plaintext_and_key_in_every_git_worktree(
     private_archive = _canonical_dummy_archive(tmp_path / "archive.json")
     environment = {**os.environ, "PYTHONPATH": str(root / "src")}
 
-    for index, worktree in enumerate(_representative_worktrees()):
+    for index, worktree in enumerate(_representative_worktrees(tmp_path)):
         for target_kind in ("archive", "key"):
             blocked = worktree / f".custody-negative-{index}-{target_kind}"
             assert not blocked.exists()
