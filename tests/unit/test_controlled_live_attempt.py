@@ -2170,7 +2170,14 @@ def test_active_disk_safe_stop_cleans_exact_runtime_containers(tmp_path: Path) -
     assert len(containers.cleaned) == 1
 
 
-def test_installed_harbor_help_matches_production_command_surface() -> None:
+@pytest.mark.parametrize("github_actions", [False, True])
+def test_installed_harbor_help_matches_production_command_surface(
+    monkeypatch: pytest.MonkeyPatch, github_actions: bool
+) -> None:
+    if github_actions:
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    else:
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     validate_installed_harbor_cli(Path(sys.executable).with_name("harbor"))
 
 

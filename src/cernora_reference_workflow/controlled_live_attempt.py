@@ -223,7 +223,13 @@ def attributable_container_ids(
 
 def validate_installed_harbor_cli(executable: Path) -> None:
     python = executable.with_name("python")
-    environment = {**os.environ, "COLUMNS": "240", "NO_COLOR": "1"}
+    # CI can force Typer terminal rendering and truncate required option names.
+    environment = {
+        **os.environ,
+        "COLUMNS": "240",
+        "NO_COLOR": "1",
+        "_TYPER_FORCE_DISABLE_TERMINAL": "1",
+    }
     try:
         version = subprocess.run(
             (
