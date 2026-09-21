@@ -15,6 +15,12 @@ Runtime connector or claim network isolation while pi provider egress is enabled
 Companion `0.3.0` and Cernora Core `0.1.4` have not been publicly released. Their M3 artifacts and
 acceptance evidence remain local.
 
+## Experimental Skill capture
+
+`experiment skill` captures a single pi 0.85.1 attempt with explicit or implicit
+Skill loading, frozen read-only snapshots, and authority-bound MetricPlan scoring.
+It requires the newer local Core SDK candidate; see [setup and evidence boundaries](docs/skill-capture.md).
+
 ## Priority 4 Milestone 3 Controlled Comparison
 
 Companion `0.3.0` adds one offline assembly command for a strict Core Batch Summary package and

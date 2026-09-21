@@ -29,6 +29,11 @@ class _UsageError(Exception):
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="experiment")
     commands = parser.add_subparsers(dest="command", required=True)
+    from cernora_reference_workflow.skill_capture.__main__ import configure
+
+    configure(
+        commands.add_parser("skill", help="inspect, capture or evaluate one pi Skill attempt")
+    )
     verify = commands.add_parser("verify", help="strictly verify and print a RunPlan preflight")
     verify.add_argument("plan", type=Path)
 
@@ -106,6 +111,11 @@ def _graceful_stop() -> Iterator[Callable[[], bool]]:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "skill":
+        from cernora_reference_workflow.skill_capture.__main__ import dispatch
+
+        _emit(dispatch(args))
+        return 0
     if args.command == "verify":
         _emit(_preflight(RunPlan.from_file(args.plan)))
         return 0

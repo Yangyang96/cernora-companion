@@ -106,3 +106,11 @@ Windows, Intel macOS, remote Docker, Kubernetes, hosted live execution, arbitrar
 connectors, automatic Profile discovery, telemetry that cannot be disabled, and broad sandboxing
 claims are outside Priority 3. The workflow must remain private until every release gate is
 accepted.
+
+## Experimental Skill path
+
+The opt-in `experiment skill` path uses pi 0.85.1 and the Core MetricPlan SDK
+candidate. See [Skill capture](skill-capture.md); existing coding runtime pins
+are unchanged. The checked-in ComparisonPlan schema now includes the accepted
+Core split-scoped PrimaryOutcome shape; omitted split selection retains its
+existing all-cases meaning. No historical Plan identity is rewritten.

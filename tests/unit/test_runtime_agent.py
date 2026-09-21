@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from cernora_reference_workflow.common import (
@@ -153,7 +155,7 @@ def test_provider_proxy_rejects_unsafe_or_ambiguous_urls(value: str) -> None:
         )
 
 
-def test_pi_trajectory_conversion_maps_usage_and_tool_results(tmp_path):
+def test_pi_trajectory_conversion_maps_usage_and_tool_results(tmp_path: Path) -> None:
     session = tmp_path / "session.jsonl"
     session.write_text(
         "\n".join(
