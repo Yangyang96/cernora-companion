@@ -28,8 +28,7 @@ def extension_digest() -> str:
     return digest(Path(runtime.__file__).with_name("extension.ts").read_bytes())
 
 
-@pytest.fixture
-def plan() -> SkillPlan:
+def make_plan() -> SkillPlan:
     return SkillPlan.model_validate_json(
         json.dumps(
             {
@@ -95,6 +94,11 @@ def plan() -> SkillPlan:
             }
         )
     )
+
+
+@pytest.fixture
+def plan() -> SkillPlan:
+    return make_plan()
 
 
 def native(plan: SkillPlan, variant: str = "pass", implicit: bool = False) -> dict[str, bytes]:

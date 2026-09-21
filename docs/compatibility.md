@@ -114,3 +114,8 @@ candidate. See [Skill capture](skill-capture.md); existing coding runtime pins
 are unchanged. The checked-in ComparisonPlan schema now includes the accepted
 Core split-scoped PrimaryOutcome shape; omitted split selection retains its
 existing all-cases meaning. No historical Plan identity is rewritten.
+
+Skill diagnostics retain the v1 Profile. Frozen Skill comparisons introduce an
+additive v2 projection/Profile bound to both predeclared Plans; they do not rewrite
+v1 evidence. The initial comparison slice is one development Case with no holdout
+or billing-cost claim. See [migration and limits](skill-diagnostics-comparison.md).

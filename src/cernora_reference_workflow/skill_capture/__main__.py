@@ -23,13 +23,43 @@ def configure(parser: argparse.ArgumentParser) -> None:
     evaluate.add_argument("export", type=Path)
     evaluate.add_argument("--plan", type=Path, required=True)
     evaluate.add_argument("--output", type=Path, required=True)
+    diagnostic = commands.add_parser("diagnose")
+    diagnostic.add_argument("export", type=Path)
+    diagnostic.add_argument("--plan", type=Path, required=True)
+    diagnostic.add_argument("--output", type=Path, required=True)
+    freeze = commands.add_parser("freeze-comparison")
+    freeze.add_argument("plan", type=Path)
+    freeze.add_argument("--output", type=Path, required=True)
+    compare = commands.add_parser("compare")
+    compare.add_argument("freeze", type=Path)
+    compare.add_argument("--sources", type=Path, required=True)
+    compare.add_argument("--output", type=Path, required=True)
     tool = commands.add_parser("replay")
     tool.add_argument("plan", type=Path)
     tool.add_argument("argv")
 
 
 def dispatch(args: argparse.Namespace) -> dict[str, Any]:
+    if args.skill_command in {"freeze-comparison", "compare"}:
+        from cernora_reference_workflow.skill_capture.comparison import (
+            SkillComparisonPlan,
+            compare_exports,
+            freeze_comparison,
+        )
+
+        if args.skill_command == "freeze-comparison":
+            frozen = freeze_comparison(SkillComparisonPlan.read(args.plan))
+            with args.output.open("xb") as handle:
+                handle.write(canonical_json_bytes(frozen))
+            return {"freeze": str(args.output), "plan_sha256": frozen["plan_sha256"]}
+        report = compare_exports(args.freeze, args.sources, args.output)
+        return {"conclusion": report["conclusion"], "report": str(args.output / "report.md")}
     plan = SkillPlan.read(args.plan)
+    if args.skill_command == "diagnose":
+        from cernora_reference_workflow.skill_capture.diagnostics import diagnose_export
+
+        report = diagnose_export(plan, args.export, args.output)
+        return {"summary": report["summary"], "report": str(args.output / "diagnostics.md")}
     if args.skill_command == "inspect":
         return {
             "plan_sha256": plan.sha256,

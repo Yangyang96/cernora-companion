@@ -19,6 +19,9 @@ acceptance evidence remain local.
 
 `experiment skill` captures a single pi 0.85.1 attempt with explicit or implicit
 Skill loading, frozen read-only snapshots, and authority-bound MetricPlan scoring.
+Offline diagnostics and a single-Case frozen comparison connect captures to
+Core Batch/Comparison and evidence-linked findings. See
+[diagnostics and comparison](docs/skill-diagnostics-comparison.md).
 It requires the newer local Core SDK candidate; see [setup and evidence boundaries](docs/skill-capture.md).
 
 ## Priority 4 Milestone 3 Controlled Comparison

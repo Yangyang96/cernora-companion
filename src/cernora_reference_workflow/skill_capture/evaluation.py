@@ -303,9 +303,9 @@ class SkillWorkflowProfile:
 
 
 class SkillCaptureAdapter:
-    def __init__(self, plan: SkillPlan) -> None:
+    def __init__(self, plan: SkillPlan, profile: SkillWorkflowProfile | None = None) -> None:
         self.plan = plan
-        self.profile = SkillWorkflowProfile(plan)
+        self.profile = profile or SkillWorkflowProfile(plan)
 
     def adapt(self, completed_export: CompletedExport, output: Path) -> AdaptedBundle:
         plan, native = verify_export(completed_export.root)
@@ -426,10 +426,16 @@ class SkillCaptureAdapter:
         return AdaptedBundle(bundle_path=output / "bundle.json")
 
 
-def evaluate_export(plan: SkillPlan, source: Path, output: Path) -> dict[str, Any]:
+def evaluate_export(
+    plan: SkillPlan,
+    source: Path,
+    output: Path,
+    *,
+    profile: SkillWorkflowProfile | None = None,
+) -> dict[str, Any]:
     if output.exists():
         raise ContractError("evaluation output must be new")
-    adapter = SkillCaptureAdapter(plan)
+    adapter = SkillCaptureAdapter(plan, profile)
     bundle = adapter.adapt(CompletedExport(source), output / "bundle")
     import_evidence_bundle_v2(
         profile=adapter.profile, bundle_path=bundle.bundle_path, output=output / "import"

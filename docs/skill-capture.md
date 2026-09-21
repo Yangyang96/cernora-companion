@@ -80,3 +80,10 @@ reload, and both loading paths through installed pi with synthetic SSE responses
 Those integration checks skip when pi 0.85.1 is absent. They prove plumbing, not
 real model behavior. Live acceptance must be recorded separately for the reviewed
 Skill, snapshot, model, and bounds.
+
+## Diagnostics and comparison
+
+Use `experiment skill diagnose` for evidence-linked observations and
+`freeze-comparison` / `compare` for the experimental one-Case two-arm workflow.
+See [contracts, migration, and limits](skill-diagnostics-comparison.md). These
+commands are offline and never send a new provider request.
