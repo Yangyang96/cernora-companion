@@ -42,13 +42,13 @@ def configure(parser: argparse.ArgumentParser) -> None:
 def dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.skill_command in {"freeze-comparison", "compare"}:
         from cernora_reference_workflow.skill_capture.comparison import (
-            SkillComparisonPlan,
             compare_exports,
             freeze_comparison,
+            parse_plan,
         )
 
         if args.skill_command == "freeze-comparison":
-            frozen = freeze_comparison(SkillComparisonPlan.read(args.plan))
+            frozen = freeze_comparison(parse_plan(load_json_bytes(args.plan.read_bytes())))
             with args.output.open("xb") as handle:
                 handle.write(canonical_json_bytes(frozen))
             return {"freeze": str(args.output), "plan_sha256": frozen["plan_sha256"]}

@@ -128,8 +128,8 @@ def native(plan: SkillPlan, variant: str = "pass", implicit: bool = False) -> di
     events: list[dict[str, Any]] = []
     tools: list[dict[str, Any]] = []
     calls: list[tuple[str, dict[str, Any]]] = [
-        (plan.tool_name, {"argv": ["get", "--id", "leaf", "-o", "json"]}),
-        (plan.tool_name, {"argv": ["get", "--id", "root", "--output", "json"]}),
+        (plan.tool_name, {"argv": ["get", "--id", plan.objects[0].object_id, "-o", "json"]}),
+        (plan.tool_name, {"argv": ["get", "--id", plan.objects[1].object_id, "--output", "json"]}),
     ]
     if implicit:
         calls.insert(0, ("read", {"path": "/skills/lookup/SKILL.md"}))
@@ -270,7 +270,10 @@ def test_replay_discovery_options_and_errors(plan: SkillPlan) -> None:
     assert replay(plan, ["--help"])["exit_code"] == 0
     assert replay(plan, ["get", "--help"])["exit_code"] == 0
     assert replay(plan, ["get", "-o", "json", "--id", "root"])["stdout"] == {"state": "ready"}
-    assert replay(plan, ["get", "--id", "leaf", "-o", "json"])["stdout"]["parent"] == "root"
+    assert (
+        replay(plan, ["get", "--id", plan.objects[0].object_id, "-o", "json"])["stdout"]["parent"]
+        == "root"
+    )
     for args in (
         ["write"],
         ["get", "--id", "absent", "-o", "json"],

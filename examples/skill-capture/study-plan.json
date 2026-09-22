@@ -1,0 +1,291 @@
+{
+  "schema_version": "cernora.reference.skill-comparison-plan/v2",
+  "cases": [
+    {
+      "split": "development",
+      "baseline": {
+        "base_url": "https://api.deepseek.com",
+        "case_id": "catalog-0",
+        "command_path": [
+          "get"
+        ],
+        "dependency": {
+          "first_id": "leaf-0",
+          "next_id": "root-0",
+          "pointer": "/parent"
+        },
+        "extension_sha256": "a4c2664c382bc6248553b7c0fa5e7ebf3b845757729d1e65b1e04000f5071a0d",
+        "facts": [
+          {
+            "expected": "done",
+            "field": "leaf_state",
+            "object_id": "leaf-0",
+            "pointer": "/state"
+          },
+          {
+            "expected": "ready",
+            "field": "parent_state",
+            "object_id": "root-0",
+            "pointer": "/state"
+          }
+        ],
+        "id_option": "--id",
+        "invocation": "explicit",
+        "max_output_tokens": 8192,
+        "max_request_bytes": 262144,
+        "max_requests": 8,
+        "max_tool_calls": 12,
+        "model": "deepseek-v4-flash",
+        "objects": [
+          {
+            "object_id": "leaf-0",
+            "projection_version": "test/v1",
+            "record": {
+              "parent": "root-0",
+              "state": "done"
+            },
+            "source_pointer": "/leaf-0",
+            "source_sha256": "476a0a03566917f4cd89afb817a0b821b1e4938ef54c789881ca6bab97a0e6a3"
+          },
+          {
+            "object_id": "root-0",
+            "projection_version": "test/v1",
+            "record": {
+              "state": "ready"
+            },
+            "source_pointer": "/root-0",
+            "source_sha256": "476a0a03566917f4cd89afb817a0b821b1e4938ef54c789881ca6bab97a0e6a3"
+          }
+        ],
+        "provider": "deepseek",
+        "retries": 0,
+        "runtime_version": "0.85.1",
+        "schema_version": "cernora.reference.skill-plan/v1",
+        "skill_files": {
+          "SKILL.md": "---\nname: lookup\ndescription: Read a catalog.\n---\nUse help and query recorded resources.\n"
+        },
+        "skill_name": "lookup",
+        "skill_version": "1",
+        "system": "Use the relevant Skill for the user task. Cite the observed tool evidence.",
+        "task": "Find the state of leaf-0 and its parent. Return facts named leaf_state and parent_state with evidence_ids.",
+        "thinking": "medium",
+        "timeout_seconds": 180,
+        "tool_name": "catalog"
+      },
+      "candidate": {
+        "base_url": "https://api.deepseek.com",
+        "case_id": "catalog-0",
+        "command_path": [
+          "get"
+        ],
+        "dependency": {
+          "first_id": "leaf-0",
+          "next_id": "root-0",
+          "pointer": "/parent"
+        },
+        "extension_sha256": "a4c2664c382bc6248553b7c0fa5e7ebf3b845757729d1e65b1e04000f5071a0d",
+        "facts": [
+          {
+            "expected": "done",
+            "field": "leaf_state",
+            "object_id": "leaf-0",
+            "pointer": "/state"
+          },
+          {
+            "expected": "ready",
+            "field": "parent_state",
+            "object_id": "root-0",
+            "pointer": "/state"
+          }
+        ],
+        "id_option": "--id",
+        "invocation": "explicit",
+        "max_output_tokens": 8192,
+        "max_request_bytes": 262144,
+        "max_requests": 8,
+        "max_tool_calls": 12,
+        "model": "deepseek-v4-flash",
+        "objects": [
+          {
+            "object_id": "leaf-0",
+            "projection_version": "test/v1",
+            "record": {
+              "parent": "root-0",
+              "state": "done"
+            },
+            "source_pointer": "/leaf-0",
+            "source_sha256": "476a0a03566917f4cd89afb817a0b821b1e4938ef54c789881ca6bab97a0e6a3"
+          },
+          {
+            "object_id": "root-0",
+            "projection_version": "test/v1",
+            "record": {
+              "state": "ready"
+            },
+            "source_pointer": "/root-0",
+            "source_sha256": "476a0a03566917f4cd89afb817a0b821b1e4938ef54c789881ca6bab97a0e6a3"
+          }
+        ],
+        "provider": "deepseek",
+        "retries": 0,
+        "runtime_version": "0.85.1",
+        "schema_version": "cernora.reference.skill-plan/v1",
+        "skill_files": {
+          "SKILL.md": "---\nname: lookup\ndescription: Read a catalog.\n---\nUse help and query recorded resources.\nReturn JSON directly without Markdown code fences.\n"
+        },
+        "skill_name": "lookup",
+        "skill_version": "1",
+        "system": "Use the relevant Skill for the user task. Cite the observed tool evidence.",
+        "task": "Find the state of leaf-0 and its parent. Return facts named leaf_state and parent_state with evidence_ids.",
+        "thinking": "medium",
+        "timeout_seconds": 180,
+        "tool_name": "catalog"
+      }
+    },
+    {
+      "split": "workflow_check",
+      "baseline": {
+        "base_url": "https://api.deepseek.com",
+        "case_id": "catalog-1",
+        "command_path": [
+          "get"
+        ],
+        "dependency": {
+          "first_id": "leaf-1",
+          "next_id": "root-1",
+          "pointer": "/parent"
+        },
+        "extension_sha256": "a4c2664c382bc6248553b7c0fa5e7ebf3b845757729d1e65b1e04000f5071a0d",
+        "facts": [
+          {
+            "expected": "done",
+            "field": "leaf_state",
+            "object_id": "leaf-1",
+            "pointer": "/state"
+          },
+          {
+            "expected": "ready",
+            "field": "parent_state",
+            "object_id": "root-1",
+            "pointer": "/state"
+          }
+        ],
+        "id_option": "--id",
+        "invocation": "explicit",
+        "max_output_tokens": 8192,
+        "max_request_bytes": 262144,
+        "max_requests": 8,
+        "max_tool_calls": 12,
+        "model": "deepseek-v4-flash",
+        "objects": [
+          {
+            "object_id": "leaf-1",
+            "projection_version": "test/v1",
+            "record": {
+              "parent": "root-1",
+              "state": "done"
+            },
+            "source_pointer": "/leaf-1",
+            "source_sha256": "476a0a03566917f4cd89afb817a0b821b1e4938ef54c789881ca6bab97a0e6a3"
+          },
+          {
+            "object_id": "root-1",
+            "projection_version": "test/v1",
+            "record": {
+              "state": "ready"
+            },
+            "source_pointer": "/root-1",
+            "source_sha256": "476a0a03566917f4cd89afb817a0b821b1e4938ef54c789881ca6bab97a0e6a3"
+          }
+        ],
+        "provider": "deepseek",
+        "retries": 0,
+        "runtime_version": "0.85.1",
+        "schema_version": "cernora.reference.skill-plan/v1",
+        "skill_files": {
+          "SKILL.md": "---\nname: lookup\ndescription: Read a catalog.\n---\nUse help and query recorded resources.\n"
+        },
+        "skill_name": "lookup",
+        "skill_version": "1",
+        "system": "Use the relevant Skill for the user task. Cite the observed tool evidence.",
+        "task": "Find the state of leaf-1 and its parent. Return facts named leaf_state and parent_state with evidence_ids.",
+        "thinking": "medium",
+        "timeout_seconds": 180,
+        "tool_name": "catalog"
+      },
+      "candidate": {
+        "base_url": "https://api.deepseek.com",
+        "case_id": "catalog-1",
+        "command_path": [
+          "get"
+        ],
+        "dependency": {
+          "first_id": "leaf-1",
+          "next_id": "root-1",
+          "pointer": "/parent"
+        },
+        "extension_sha256": "a4c2664c382bc6248553b7c0fa5e7ebf3b845757729d1e65b1e04000f5071a0d",
+        "facts": [
+          {
+            "expected": "done",
+            "field": "leaf_state",
+            "object_id": "leaf-1",
+            "pointer": "/state"
+          },
+          {
+            "expected": "ready",
+            "field": "parent_state",
+            "object_id": "root-1",
+            "pointer": "/state"
+          }
+        ],
+        "id_option": "--id",
+        "invocation": "explicit",
+        "max_output_tokens": 8192,
+        "max_request_bytes": 262144,
+        "max_requests": 8,
+        "max_tool_calls": 12,
+        "model": "deepseek-v4-flash",
+        "objects": [
+          {
+            "object_id": "leaf-1",
+            "projection_version": "test/v1",
+            "record": {
+              "parent": "root-1",
+              "state": "done"
+            },
+            "source_pointer": "/leaf-1",
+            "source_sha256": "476a0a03566917f4cd89afb817a0b821b1e4938ef54c789881ca6bab97a0e6a3"
+          },
+          {
+            "object_id": "root-1",
+            "projection_version": "test/v1",
+            "record": {
+              "state": "ready"
+            },
+            "source_pointer": "/root-1",
+            "source_sha256": "476a0a03566917f4cd89afb817a0b821b1e4938ef54c789881ca6bab97a0e6a3"
+          }
+        ],
+        "provider": "deepseek",
+        "retries": 0,
+        "runtime_version": "0.85.1",
+        "schema_version": "cernora.reference.skill-plan/v1",
+        "skill_files": {
+          "SKILL.md": "---\nname: lookup\ndescription: Read a catalog.\n---\nUse help and query recorded resources.\nReturn JSON directly without Markdown code fences.\n"
+        },
+        "skill_name": "lookup",
+        "skill_version": "1",
+        "system": "Use the relevant Skill for the user task. Cite the observed tool evidence.",
+        "task": "Find the state of leaf-1 and its parent. Return facts named leaf_state and parent_state with evidence_ids.",
+        "thinking": "medium",
+        "timeout_seconds": 180,
+        "tool_name": "catalog"
+      }
+    }
+  ],
+  "repetitions": 3,
+  "purpose": "synthetic_validation",
+  "practical_threshold_basis_points": 1000,
+  "primary_split": "workflow_check"
+}

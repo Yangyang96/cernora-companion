@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -10,7 +11,14 @@ from typing import Any, Literal, Self
 from cernora import (
     CaseProfile,
     ComparisonGuardrail,
+    MetricBinding,
+    MetricContext,
+    MetricDefinition,
+    MetricPlan,
     PrimaryOutcome,
+    ResultRecord,
+    ToolCalls,
+    ToolSelection,
     TreatmentChange,
     component_identity,
     embed_evaluation_package,
@@ -38,7 +46,7 @@ from cernora_reference_workflow.skill_capture.contracts import (
     verify_export,
 )
 from cernora_reference_workflow.skill_capture.diagnostics import diagnose_export
-from cernora_reference_workflow.skill_capture.evaluation import SkillWorkflowProfile
+from cernora_reference_workflow.skill_capture.evaluation import SkillWorkflowProfile, SnapshotTask
 
 
 def identity(value: Any) -> str:
@@ -75,6 +83,98 @@ class SkillComparisonPlan(SkillContract):
         return cls.model_validate_json(canonical_json_bytes(load_json_file(path)))
 
 
+class StudyCase(SkillContract):
+    split: Literal["development", "workflow_check"]
+    baseline: SkillPlan
+    candidate: SkillPlan
+
+
+class SkillStudyPlan(SkillContract):
+    schema_version: Literal["cernora.reference.skill-comparison-plan/v2"]
+    cases: tuple[StudyCase, ...] = Field(min_length=2)
+    repetitions: int = Field(ge=1, le=100)
+    purpose: Literal["synthetic_validation", "prospective_experiment"]
+    practical_threshold_basis_points: int = Field(ge=0, le=10000)
+    primary_split: Literal["workflow_check"]
+
+    @model_validator(mode="after")
+    def coherent(self) -> Self:
+        ids = [c.baseline.case_id for c in self.cases]
+        if ids != sorted(set(ids)):
+            raise ValueError("Study Cases must be sorted and unique")
+        if {c.split for c in self.cases} != {"development", "workflow_check"}:
+            raise ValueError("Study needs development and workflow_check groups")
+        seen: set[str] = set()
+        for c in self.cases:
+            if task_contract(c.baseline) != task_contract(c.candidate):
+                raise ValueError("Study arms must preserve task and references")
+            objects = {o.object_id for o in c.baseline.objects}
+            if seen & objects:
+                raise ValueError("related objects cannot cross Case groups")
+            seen.update(objects)
+        for arm in ("baseline", "candidate"):
+            global_values = []
+            for c in self.cases:
+                data = getattr(c, arm).model_dump(mode="json")
+                global_values.append(
+                    {
+                        k: v
+                        for k, v in data.items()
+                        if k not in {"case_id", "task", "objects", "facts", "dependency"}
+                    }
+                )
+            if any(v != global_values[0] for v in global_values):
+                raise ValueError("configuration-global settings drift across Cases")
+        return self
+
+    @property
+    def sha256(self) -> str:
+        return identity(self.model_dump(mode="json"))
+
+
+Plan = SkillComparisonPlan | SkillStudyPlan
+
+
+def pairs(plan: Plan) -> list[tuple[str, SkillPlan, SkillPlan]]:
+    if isinstance(plan, SkillStudyPlan):
+        return [(c.split, c.baseline, c.candidate) for c in plan.cases]
+    return [("development", plan.baseline, plan.candidate)]
+
+
+def parse_plan(value: Any) -> Plan:
+    cls = (
+        SkillStudyPlan
+        if value.get("schema_version") == "cernora.reference.skill-comparison-plan/v2"
+        else SkillComparisonPlan
+    )
+    return cls.model_validate_json(canonical_json_bytes(value))
+
+
+class StudyTask(SnapshotTask):
+    definition = MetricDefinition(
+        metric_id="task_outcome", metric_version="2.0.0", value_type="boolean"
+    )
+
+    def validate_parameters(self, parameters_json: str) -> None:
+        SkillStudyPlan.model_validate_json(parameters_json)
+
+    def evaluate(self, context: MetricContext, parameters_json: str) -> ResultRecord:
+        study = SkillStudyPlan.model_validate_json(parameters_json)
+        selected = study.cases[0].baseline
+        if context.terminal_artifact is not None:
+            raw, _ = context.artifact(context.terminal_artifact)
+            wrapper = json.loads(raw)
+            actual = SkillPlan.model_validate_json(wrapper["native"]["plan.json"])
+            matched = [c.baseline for c in study.cases if actual in (c.baseline, c.candidate)]
+            if len(matched) != 1:
+                raise ContractError("terminal capture outside frozen Study")
+            selected = matched[0]
+        result = super().evaluate(
+            context, canonical_json_bytes(selected.model_dump(mode="json")).decode()
+        )
+        return result
+
+
 class ComparisonProfile(SkillWorkflowProfile):
     """A versioned shared scoring authority, bound to both predeclared captures.
 
@@ -82,28 +182,57 @@ class ComparisonProfile(SkillWorkflowProfile):
     shared roster fixes the authority before any evidence is inspected.
     """
 
-    def __init__(self, comparison: SkillComparisonPlan, selected: SkillPlan) -> None:
-        if selected not in (comparison.baseline, comparison.candidate):
+    def __init__(self, comparison: Plan, selected: SkillPlan) -> None:
+        roster = pairs(comparison)
+        if selected not in [p for _, left, right in roster for p in (left, right)]:
             raise ContractError("capture not in declared comparison")
-        super().__init__(comparison.baseline)
+        super().__init__(roster[0][1])
         self.plan = selected
-        payload = self._authority.model_dump(mode="json")
-        payload["profile_version"] = "2.0.0"
-        payload["cases"][0]["fixture_references"] = [
-            dict(
-                fixture_id="comparison-plan", path="comparison-plan.json", sha256=comparison.sha256
+        self.study = isinstance(comparison, SkillStudyPlan)
+        if self.study:
+            self.metrics = MetricPlan(
+                (
+                    MetricBinding(
+                        ToolSelection(),
+                        "required",
+                        json.dumps({"allowed_tools": [selected.tool_name, "read"]}),
+                    ),
+                    MetricBinding(
+                        StudyTask(),
+                        "required",
+                        canonical_json_bytes(comparison.model_dump(mode="json")).decode(),
+                    ),
+                    MetricBinding(ToolCalls()),
+                )
             )
-        ]
+        payload = self._authority.model_dump(mode="json")
+        payload["profile_version"] = "3.0.0" if self.study else "2.0.0"
+        payload["scorer_policy"]["policy_version"] = self.metrics.scorer_version
+        payload["cases"] = []
+        for _, baseline, _ in roster:
+            case = SkillWorkflowProfile(baseline).authority.cases[0].model_dump(mode="json")
+            case["fixture_references"] = [
+                dict(
+                    fixture_id="comparison-plan",
+                    path="comparison-plan.json",
+                    sha256=comparison.sha256,
+                )
+            ]
+            payload["cases"].append(case)
         self._authority = CaseProfile.model_validate_json(canonical_json_bytes(payload))
 
     @property
     def projection_version(self) -> str:
-        return "cernora.reference.skill-projection/v2"
+        return (
+            "cernora.reference.skill-projection/v3"
+            if self.study
+            else "cernora.reference.skill-projection/v2"
+        )
 
 
 def expected_authority(profile: SkillWorkflowProfile) -> dict[str, Any]:
     p = profile.authority
-    case = p.cases[0]
+    case = next(c for c in p.cases if c.case_id == profile.plan.case_id)
     projection = dict(name="imported_projection", version=profile.projection_version)
     value = materialize_expected_evaluation_authority(
         dict(
@@ -132,11 +261,12 @@ def expected_authority(profile: SkillWorkflowProfile) -> dict[str, Any]:
     return value.model_dump(mode="json")
 
 
-def policies(plan: SkillComparisonPlan) -> dict[str, Any]:
-    return dict(
+def policies(plan: Plan) -> dict[str, Any]:
+    result: dict[str, Any] = dict(
         primary_outcome=PrimaryOutcome(
             metric="reliable_success_rate",
-            scope="all",
+            scope="split" if isinstance(plan, SkillStudyPlan) else "all",
+            split_id=plan.primary_split if isinstance(plan, SkillStudyPlan) else None,
             direction="higher_is_better",
             practical_threshold_basis_points=plan.practical_threshold_basis_points,
         ).model_dump(mode="json"),
@@ -149,7 +279,22 @@ def policies(plan: SkillComparisonPlan) -> dict[str, Any]:
                 direction="higher_is_better",
                 max_adverse_basis_points=0,
             ).model_dump(mode="json")
-        ],
+        ]
+        + (
+            [
+                ComparisonGuardrail(
+                    guardrail_id="development-success",
+                    hard=True,
+                    metric="reliable_success_rate",
+                    scope="split",
+                    split_id="development",
+                    direction="higher_is_better",
+                    max_adverse_basis_points=0,
+                ).model_dump(mode="json")
+            ]
+            if isinstance(plan, SkillStudyPlan)
+            else []
+        ),
         bootstrap=dict(
             method="case-clustered-paired-bootstrap/v1",
             confidence_basis_points=9500,
@@ -160,10 +305,17 @@ def policies(plan: SkillComparisonPlan) -> dict[str, Any]:
         pass_k=None,
     )
 
+    result["guardrails"].sort(key=lambda item: item["guardrail_id"])
+    return result
 
-def authorities(plan: SkillComparisonPlan) -> list[dict[str, Any]]:
+
+def authorities(plan: Plan) -> list[dict[str, Any]]:
     result = []
-    for arm, capture in (("baseline", plan.baseline), ("candidate", plan.candidate)):
+    for arm, capture in [
+        (arm, p)
+        for _, left, right in pairs(plan)
+        for arm, p in (("baseline", left), ("candidate", right))
+    ]:
         profile = ComparisonProfile(plan, capture)
         expected = expected_authority(profile)
         policy = dict(
@@ -188,7 +340,9 @@ def authorities(plan: SkillComparisonPlan) -> list[dict[str, Any]]:
             timeout_sha256=select(("timeout_seconds",)),
             resources_sha256=select(("max_requests", "max_tool_calls", "max_request_bytes")),
             retry_policy_sha256=select(("retries",)),
-            dataset_sha256=identity(task_contract(capture)),
+            dataset_sha256=identity([task_contract(left) for _, left, _ in pairs(plan)])
+            if isinstance(plan, SkillStudyPlan)
+            else identity(task_contract(capture)),
             profile_sha256=expected["profile"]["sha256"],
             evaluation_authority_sha256=expected["authority_sha256"],
             evaluation_policy_sha256=identity(policy),
@@ -208,7 +362,7 @@ def authorities(plan: SkillComparisonPlan) -> list[dict[str, Any]]:
     return result
 
 
-def freeze_comparison(plan: SkillComparisonPlan) -> dict[str, Any]:
+def freeze_comparison(plan: Plan) -> dict[str, Any]:
     authority = authorities(plan)
     changes = []
     for kind in (
@@ -219,7 +373,7 @@ def freeze_comparison(plan: SkillComparisonPlan) -> dict[str, Any]:
         "runtime_version",
     ):
         key = kind + "_sha256"
-        a, b = (v["projection"][key] for v in authority)
+        a, b = (v["projection"][key] for v in authority[:2])
         if a != b:
             changes.append(TreatmentChange(kind=kind, baseline_sha256=a, candidate_sha256=b))
     if not changes:
@@ -229,9 +383,15 @@ def freeze_comparison(plan: SkillComparisonPlan) -> dict[str, Any]:
     treatment = materialize_treatment(changes)
     slots: list[dict[str, Any]] = []
     for repetition in range(1, plan.repetitions + 1):
-        for a in authority:
+        ordered = authority
+        if isinstance(plan, SkillStudyPlan):
+            ordered = []
+            for index in range(0, len(authority), 2):
+                pair = authority[index : index + 2]
+                ordered.extend(pair if (index // 2 + repetition) % 2 else reversed(pair))
+        for a in ordered:
             coordinate = dict(
-                case_id=plan.baseline.case_id,
+                case_id=a["case"]["case_id"],
                 configuration_id=a["configuration_id"],
                 experiment_id=a["experiment_id"],
                 repetition=repetition,
@@ -256,7 +416,7 @@ def freeze_comparison(plan: SkillComparisonPlan) -> dict[str, Any]:
 
 def _compare_exports(freeze_path: Path, sources_path: Path, output: Path) -> dict[str, Any]:
     frozen = load_json_file(freeze_path)
-    plan = SkillComparisonPlan.model_validate_json(canonical_json_bytes(frozen["plan"]))
+    plan = parse_plan(frozen["plan"])
     if canonical_json_bytes(frozen) != canonical_json_bytes(freeze_comparison(plan)):
         raise ContractError("comparison freeze authority mismatch")
     sources = load_json_file(sources_path)
@@ -274,7 +434,10 @@ def _compare_exports(freeze_path: Path, sources_path: Path, output: Path) -> dic
     for slot in frozen["slots"]:
         key = slot["trial_slot_id"]
         root = Path(sources[key])
-        selected = plan.baseline if slot["configuration_id"] == "baseline" else plan.candidate
+        roster = next(
+            (left, right) for _, left, right in pairs(plan) if left.case_id == slot["case_id"]
+        )
+        selected = roster[0] if slot["configuration_id"] == "baseline" else roster[1]
         captured, files = verify_export(root)
         if captured != selected:
             raise ContractError("slot capture Plan mismatch")
@@ -361,7 +524,21 @@ def _compare_exports(freeze_path: Path, sources_path: Path, output: Path) -> dic
     )
     summarize_batch(batch, output / "batch")
     batch_package = reload_batch_summary_package(output / "batch")
-    a, b = frozen["experiment_authorities"]
+    experiment_by_key = {
+        (a["case"]["case_id"], a["configuration_id"]): a for a in frozen["experiment_authorities"]
+    }
+    comparison_cases = []
+    for split, left, _ in pairs(plan):
+        a = experiment_by_key[(left.case_id, "baseline")]
+        b = experiment_by_key[(left.case_id, "candidate")]
+        comparison_cases.append(
+            dict(
+                case=a["case"],
+                split_id=split,
+                baseline_experiment_id=a["experiment_id"],
+                candidate_experiment_id=b["experiment_id"],
+            )
+        )
     comparison = materialize_comparison_input(
         dict(
             schema_version="agent.evaluator.comparison-input/v1",
@@ -369,14 +546,7 @@ def _compare_exports(freeze_path: Path, sources_path: Path, output: Path) -> dic
             baseline=dict(configuration_id="baseline"),
             candidate=dict(configuration_id="candidate"),
             experiment_authorities=frozen["experiment_authorities"],
-            cases=[
-                dict(
-                    case=a["case"],
-                    split_id="development",
-                    baseline_experiment_id=a["experiment_id"],
-                    candidate_experiment_id=b["experiment_id"],
-                )
-            ],
+            cases=comparison_cases,
             treatment=frozen["treatment"],
             **policies(plan),
         )
@@ -391,7 +561,7 @@ def _compare_exports(freeze_path: Path, sources_path: Path, output: Path) -> dic
         batch_summary=batch_package.summary.model_dump(mode="json"),
         trials=diagnostics,
         limitations=[
-            "Single development Case only; no holdout or population claim.",
+            "Configured Case groups only; no independent real-world holdout or population claim.",
             "Freeze before collection; old smoke is not controlled evidence.",
             "Runtime tokens are diagnostic; token breakdown and billing remain unavailable.",
             "Synthetic validation establishes software behavior, not model improvement.",

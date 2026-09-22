@@ -117,5 +117,8 @@ existing all-cases meaning. No historical Plan identity is rewritten.
 
 Skill diagnostics retain the v1 Profile. Frozen Skill comparisons introduce an
 additive v2 projection/Profile bound to both predeclared Plans; they do not rewrite
-v1 evidence. The initial comparison slice is one development Case with no holdout
-or billing-cost claim. See [migration and limits](skill-diagnostics-comparison.md).
+v1 evidence. The original comparison Plan v1 remains a single development Case.
+Additive Plan v2 uses Profile/projection v3 and task metric v2 for multiple disjoint Cases
+with development and workflow-check splits; existing identities are preserved.
+Neither protocol establishes a real-world holdout or billing-cost claim. See
+[migration and limits](skill-diagnostics-comparison.md).

@@ -194,7 +194,9 @@ class SkillWorkflowProfile:
         return "cernora.reference.skill-projection/v1"
 
     def validate_import(self, package: AuthorityBoundImportPackageV2) -> None:
-        if package.profile != self.authority or package.case != self.authority.cases[0]:
+        if package.profile != self.authority or package.case != next(
+            c for c in self.authority.cases if c.case_id == self.plan.case_id
+        ):
             raise ContractError("selected Skill Profile authority mismatch")
         bundle = package.content.bundle
         if bundle.terminal.answer is not None:
@@ -383,7 +385,7 @@ class SkillCaptureAdapter:
                 "failure": None,
             }
         authority = self.profile.authority
-        case = authority.cases[0]
+        case = next(c for c in authority.cases if c.case_id == plan.case_id)
         payload = {
             "schema_version": "agent.evaluator.evidence-bundle/v2",
             "bundle_id": "skill-" + digest(native["events.jsonl"]),

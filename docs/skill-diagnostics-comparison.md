@@ -1,7 +1,7 @@
 # Skill diagnostics and controlled comparison (experimental)
 
 The Skill path now supports offline evidence-linked diagnostics and a frozen
-single-Case, two-configuration comparison. Core owns Batch classification,
+two-configuration comparison across one Case or a frozen multi-Case roster. Core owns Batch classification,
 statistics, Guardrails, and all six comparison conclusions. Companion supplies
 validated captures and links those conclusions to Trial diagnostics.
 
@@ -94,12 +94,49 @@ are still validated against their distinct exact Plans. Existing v1 evaluations
 and identities remain unchanged. V2 evaluation creates new packages and must not
 be substituted for old receipts.
 
-The current vertical slice covers **one development Case** with predeclared
-repetitions. It is not a multi-Case holdout study, automatic promotion system,
-causal diagnosis, or general Runtime connector. Single-Case intervals cannot
-establish population-level improvement. A later experimental stage must add the
-intended dataset/split protocol rather than extrapolate this demonstration.
+## Multi-Case study (additive Plan v2)
+
+Use `examples/skill-capture/study-plan.json` with the same freeze and compare
+commands. This is a **synthetic protocol example**, not a model benchmark.
+Its `schema_version` is `cernora.reference.skill-comparison-plan/v2`.
+The `cases` array contains sorted, unique Case IDs, each with a `split`,
+`baseline`, and `candidate`. Both `development` and `workflow_check`
+must be present. Object IDs cannot overlap between Cases; callers must also
+ensure semantically related variants stay in the same group.
+
+All configuration-wide settings must be identical across Cases within each
+arm. Per-Case task, objects, facts, and dependencies may differ; within a Case,
+both arms retain the exact same task and references. The entire roster binds
+the shared authority, dataset identity, and required task metric before capture.
+The task metric selects the appropriate frozen reference using the exact native
+Plan, and import validates the selected Case rather than the first roster entry.
+
+The primary outcome is reliable success on `workflow_check`. Hard Guardrails
+cover overall evaluation validity and development success, allowing no adverse
+change. The practical threshold is supplied in the Plan. Core performs the
+paired Case-clustered bootstrap; repetitions do not create additional Case
+clusters. Collection order is frozen by repetition and sorted Case, alternating
+the first arm by Case index plus repetition. With an even number of Cases,
+Baseline-first and Candidate-first pairs are balanced. This schedule alone is
+not randomized causal identification.
+
+Study evaluations use Profile/projection v3 and task metric v2. Single-Case
+Plan v1 still uses Profile/projection v2 and the original task metric; standalone
+evaluation remains v1. Old frozen Plans and evaluations retain their identities.
+Study packages are new authorities and cannot replace historical receipts.
+
+Keep exploration outside the comparison matrix. Select a candidate using only
+development evidence, then freeze the roster, references, instructions,
+statistics and order before collecting fresh attempts. Merely naming a split
+`workflow_check` does not prove it was previously unexposed or that it represents
+an independent real-world holdout. Retain the selection and exposure provenance.
+
+Neither mode automatically promotes a candidate. Small synthetic studies cannot
+establish population-level improvement. Token and duration diagnostics do not
+constitute a billing-cost or cost-efficiency Gate.
 
 Offline adversarial tests cover missing loading/usage/completion, tool and fact
 errors, incomplete or duplicated matrices, freeze tampering, deterministic
-rebuild, and all six Core conclusions using labeled synthetic evidence.
+rebuild, all six Core conclusions, split-specific primary outcomes, development
+regression Guardrails, and cross-Case configuration/reference drift using labeled
+synthetic evidence.
